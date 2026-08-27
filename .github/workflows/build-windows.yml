@@ -1,0 +1,62 @@
+# SHEYTAN-Local-Agent — Windows build workflow.
+#
+# Builds the Windows .exe (with icon, version info and the DPI-aware
+# manifest regenerated from source) on every push/tag and attaches the
+# portable package to GitHub releases. The app is SIGNED UNDER THE NAME
+# PARSA TAK via its embedded version resource (CompanyName + signature
+# line); a code-signing certificate can be added as a repository secret
+# later without touching this workflow.
+name: build-windows
+
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+          cache: true
+
+      - name: Regenerate Windows resources (icon + version + manifest)
+        run: go run ./scripts/gen-syso
+
+      - name: Run unit tests
+        run: go test ./internal/... -tags headless
+
+      - name: Build Windows exe
+        run: |
+          go build -ldflags="-s -w -H=windowsgui" -o sheytan-local-agent.exe .
+
+      - name: Verify signature metadata
+        run: |
+          python - <<'EOF'
+          data = open('sheytan-local-agent.exe','rb').read()
+          probe = 'Parsa Tak'.encode('utf-16-le')
+          assert probe in data, 'signature metadata (Parsa Tak) missing from exe'
+          print('signature metadata verified: signed by Parsa Tak')
+          EOF
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sheytan-local-agent-windows
+          path: sheytan-local-agent.exe
+
+      - name: Attach to release (tags only)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: sheytan-local-agent.exe

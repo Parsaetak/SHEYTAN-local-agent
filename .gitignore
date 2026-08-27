@@ -1,0 +1,33 @@
+# SHEYTAN-Local-Agent — build & runtime artifacts
+# Source is Go; everything below is generated at build or run time.
+
+# Build outputs
+dist-stage/
+build/
+*.exe
+*.syso
+*.zip
+
+# Runtime data (portable app creates these next to the exe)
+models/
+workspace/
+charts/
+sessions/
+logs/
+browser-profile/
+sandbox/
+data/
+config.json
+installed.json
+
+# Go tooling
+*.test
+*.out
+coverage.*
+
+# Editors / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db

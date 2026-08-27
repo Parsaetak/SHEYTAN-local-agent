@@ -1,0 +1,507 @@
+// Package logging is SHEYTAN's log catcher. It captures every meaningful
+// runtime event into rotating files under <dataDir>/logs so bugs can be
+// diagnosed and the data reused to drive future updates:
+//
+//	logs/app.log        human-readable app events (rotated, 5 files × 2 MB)
+//	logs/tools.jsonl    one structured record per tool call (args/result/duration)
+//	logs/llm.jsonl      one structured record per LLM call (latency/tokens/finish)
+//	logs/crashes/       one file per recovered panic, with stack trace
+//	logs/screenshots/   browser-tool screenshots
+//
+// A package-level default manager makes it reachable from anywhere
+// (orchestrator, tools, GUI, CLI) without plumbing.
+package logging
+
+import (
+	"archive/zip"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+)
+
+const (
+	appMaxBytes    = 2 * 1024 * 1024 // rotate app.log at 2 MB
+	appKeepFiles   = 5               // keep app.log + app-1..app-4
+	jsonlMaxBytes  = 10 * 1024 * 1024
+	jsonlKeepFiles = 3
+	recentLinesCap = 512
+)
+
+// Manager owns all log sinks for one data directory.
+type Manager struct {
+	dir string
+
+	mu    sync.Mutex
+	appF  *os.File
+	appN  int64
+	toolF *os.File
+	toolN int64
+	llmF  *os.File
+	llmN  int64
+
+	recent []string // ring of recent app log lines for the UI
+}
+
+// ToolCallRecord is one structured tool-call entry (tools.jsonl).
+type ToolCallRecord struct {
+	TS         time.Time `json:"ts"`
+	Tool       string    `json:"tool"`
+	Args       string    `json:"args,omitempty"`
+	Result     string    `json:"result,omitempty"`
+	Error      string    `json:"error,omitempty"`
+	DurationMs int64     `json:"durationMs"`
+	Session    string    `json:"session,omitempty"`
+}
+
+// LLMCallRecord is one structured LLM-call entry (llm.jsonl).
+type LLMCallRecord struct {
+	TS              time.Time `json:"ts"`
+	Provider        string    `json:"provider"`
+	Model           string    `json:"model"`
+	PromptMsgs      int       `json:"promptMsgs"`
+	PromptChars     int       `json:"promptChars"`
+	CompletionChars int       `json:"completionChars"`
+	ToolCalls       int       `json:"toolCalls"`
+	FinishReason    string    `json:"finishReason,omitempty"`
+	DurationMs      int64     `json:"durationMs"`
+	Error           string    `json:"error,omitempty"`
+}
+
+// --- package-level default ---
+
+var (
+	defMu sync.RWMutex
+	def   *Manager
+)
+
+// SetDefault installs the process-wide manager (call once at boot).
+func SetDefault(m *Manager) {
+	defMu.Lock()
+	def = m
+	defMu.Unlock()
+}
+
+// Default returns the process-wide manager. If none was installed it
+// returns a disabled no-op manager — never nil, never panics.
+func Default() *Manager {
+	defMu.RLock()
+	m := def
+	defMu.RUnlock()
+	if m != nil {
+		return m
+	}
+	return noop
+}
+
+// noop is a Manager whose directory is empty; every write is skipped.
+var noop = &Manager{}
+
+// New creates (or opens) the log directory and its sinks.
+func New(dir string) (*Manager, error) {
+	if dir == "" {
+		return noop, nil
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, fmt.Errorf("create log dir: %w", err)
+	}
+	m := &Manager{dir: dir}
+	if err := m.openSinks(); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
+func (m *Manager) openSinks() error {
+	if m.dir == "" {
+		return nil
+	}
+	var err error
+	if m.appF, m.appN, err = openAppend(m.appPath()); err != nil {
+		return err
+	}
+	if m.toolF, m.toolN, err = openAppend(filepath.Join(m.dir, "tools.jsonl")); err != nil {
+		return err
+	}
+	if m.llmF, m.llmN, err = openAppend(filepath.Join(m.dir, "llm.jsonl")); err != nil {
+		return err
+	}
+	return nil
+}
+
+func openAppend(path string) (*os.File, int64, error) {
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return nil, 0, err
+	}
+	st, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, 0, err
+	}
+	return f, st.Size(), nil
+}
+
+func (m *Manager) appPath() string { return filepath.Join(m.dir, "app.log") }
+
+// Dir returns the log directory ("" for the no-op manager).
+func (m *Manager) Dir() string { return m.dir }
+
+// Enabled reports whether this manager actually writes.
+func (m *Manager) Enabled() bool { return m.dir != "" }
+
+// --- app.log ---
+
+func (m *Manager) log(level, category, format string, args ...interface{}) {
+	if !m.Enabled() {
+		return
+	}
+	line := fmt.Sprintf("%s %-5s [%s] %s",
+		time.Now().Format("2006-01-02 15:04:05.000"), level, category,
+		fmt.Sprintf(format, args...))
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.appF == nil {
+		return
+	}
+	if _, err := m.appF.WriteString(line + "\n"); err == nil {
+		m.appN += int64(len(line) + 1)
+	}
+	// recent ring for the UI
+	if len(m.recent) >= recentLinesCap {
+		m.recent = m.recent[1:]
+	}
+	m.recent = append(m.recent, line)
+	if m.appN >= appMaxBytes {
+		m.rotateAppLocked()
+	}
+}
+
+func (m *Manager) rotateAppLocked() {
+	m.appF.Close()
+	// shift app-3.log→app-4.log ... app.log→app-1.log
+	for i := appKeepFiles - 1; i >= 1; i-- {
+		src := m.rotatedPath(i)
+		dst := m.rotatedPath(i + 1)
+		_ = os.Rename(src, dst)
+	}
+	_ = os.Rename(m.appPath(), m.rotatedPath(1))
+	f, n, err := openAppend(m.appPath())
+	if err != nil {
+		m.appF = nil
+		return
+	}
+	m.appF, m.appN = f, n
+}
+
+// rotatedPath returns <dir>/app-<n>.log for rotated generations.
+func (m *Manager) rotatedPath(n int) string {
+	return filepath.Join(m.dir, fmt.Sprintf("app-%d.log", n))
+}
+
+// Debug/Info/Warn/Error log to app.log with a category.
+func (m *Manager) Debug(category, format string, args ...interface{}) {
+	m.log("DEBUG", category, format, args...)
+}
+func (m *Manager) Info(category, format string, args ...interface{}) {
+	m.log("INFO", category, format, args...)
+}
+func (m *Manager) Warn(category, format string, args ...interface{}) {
+	m.log("WARN", category, format, args...)
+}
+func (m *Manager) Error(category, format string, args ...interface{}) {
+	m.log("ERROR", category, format, args...)
+}
+
+// Recent returns up to n most recent app log lines (for the UI Logs tab).
+func (m *Manager) Recent(n int) []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if n <= 0 || n > len(m.recent) {
+		n = len(m.recent)
+	}
+	out := make([]string, n)
+	copy(out, m.recent[len(m.recent)-n:])
+	return out
+}
+
+// --- structured sinks ---
+
+// ToolCall appends one record to tools.jsonl.
+func (m *Manager) ToolCall(rec ToolCallRecord) {
+	if !m.Enabled() {
+		return
+	}
+	rec.Args = clip(rec.Args, 4096)
+	rec.Result = clip(rec.Result, 4096)
+	rec.Error = clip(rec.Error, 1024)
+	m.appendJSONL(&m.toolF, &m.toolN, filepath.Join(m.dir, "tools.jsonl"), jsonlMaxBytes, jsonlKeepFiles, rec)
+}
+
+// LLMCall appends one record to llm.jsonl.
+func (m *Manager) LLMCall(rec LLMCallRecord) {
+	if !m.Enabled() {
+		return
+	}
+	rec.Error = clip(rec.Error, 1024)
+	m.appendJSONL(&m.llmF, &m.llmN, filepath.Join(m.dir, "llm.jsonl"), jsonlMaxBytes, jsonlKeepFiles, rec)
+}
+
+func (m *Manager) appendJSONL(f **os.File, n *int64, path string, max int64, keep int, rec any) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if *f == nil {
+		return
+	}
+	data, err := json.Marshal(rec)
+	if err != nil {
+		return
+	}
+	if _, err := (*f).Write(append(data, '\n')); err == nil {
+		*n += int64(len(data) + 1)
+	}
+	if *n >= max {
+		(*f).Close()
+		for i := keep - 1; i >= 1; i-- {
+			src := fmt.Sprintf("%s.%d", path, i)
+			dst := fmt.Sprintf("%s.%d", path, i+1)
+			_ = os.Rename(src, dst)
+		}
+		_ = os.Rename(path, path+".1")
+		nf, nn, err := openAppend(path)
+		if err != nil {
+			*f = nil
+			return
+		}
+		*f, *n = nf, nn
+	}
+}
+
+// --- crash catcher ---
+
+// crashVersion is set by the boot path so crash files record the app version.
+var crashVersion = "unknown"
+
+// SetVersion records the current app version for crash reports.
+func SetVersion(v string) { crashVersion = v }
+
+// Crash writes a recovered panic (with stack) to logs/crashes/crash-<ts>.log
+// and also records it in app.log. Returns the crash file path.
+func (m *Manager) Crash(r interface{}, stack []byte) string {
+	if !m.Enabled() {
+		return ""
+	}
+	dir := filepath.Join(m.dir, "crashes")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return ""
+	}
+	path := filepath.Join(dir, "crash-"+time.Now().Format("20060102-150405")+".log")
+	body := fmt.Sprintf("time:    %s\nversion: %s\npanic:   %v\n\nstack:\n%s\n",
+		time.Now().Format(time.RFC3339), crashVersion, r, string(stack))
+	_ = os.WriteFile(path, []byte(body), 0o644)
+	m.log("ERROR", "crash", "recovered panic: %v (details: %s)", r, path)
+	return path
+}
+
+// --- diagnostics export ---
+
+// Stats aggregates tools.jsonl + llm.jsonl into counts useful for updates.
+type Stats struct {
+	GeneratedAt   time.Time          `json:"generatedAt"`
+	ToolCalls     int                `json:"toolCalls"`
+	ToolErrors    int                `json:"toolErrors"`
+	AvgDurationMs map[string]float64 `json:"avgDurationMs"`
+	CallsPerTool  map[string]int     `json:"callsPerTool"`
+	ErrorsPerTool map[string]int     `json:"errorsPerTool"`
+	LLMCalls      int                `json:"llmCalls"`
+	LLMErrors     int                `json:"llmErrors"`
+	AvgLLMLatency float64            `json:"avgLLMLatencyMs"`
+	ProviderMix   map[string]int     `json:"providerMix"`
+}
+
+// ComputeStats scans the structured logs and returns aggregated stats.
+func (m *Manager) ComputeStats() Stats {
+	st := Stats{
+		GeneratedAt:   time.Now(),
+		AvgDurationMs: map[string]float64{},
+		CallsPerTool:  map[string]int{},
+		ErrorsPerTool: map[string]int{},
+		ProviderMix:   map[string]int{},
+	}
+	if !m.Enabled() {
+		return st
+	}
+	toolDur := map[string]int64{}
+	if f, err := os.Open(filepath.Join(m.dir, "tools.jsonl")); err == nil {
+		dec := json.NewDecoder(f)
+		for {
+			var rec ToolCallRecord
+			if err := dec.Decode(&rec); err != nil {
+				break
+			}
+			st.ToolCalls++
+			st.CallsPerTool[rec.Tool]++
+			toolDur[rec.Tool] += rec.DurationMs
+			if rec.Error != "" {
+				st.ToolErrors++
+				st.ErrorsPerTool[rec.Tool]++
+			}
+		}
+		f.Close()
+	}
+	for tool, n := range st.CallsPerTool {
+		if d, ok := toolDur[tool]; ok && n > 0 {
+			st.AvgDurationMs[tool] = float64(d) / float64(n)
+		}
+	}
+	var llmDur int64
+	if f, err := os.Open(filepath.Join(m.dir, "llm.jsonl")); err == nil {
+		dec := json.NewDecoder(f)
+		for {
+			var rec LLMCallRecord
+			if err := dec.Decode(&rec); err != nil {
+				break
+			}
+			st.LLMCalls++
+			llmDur += rec.DurationMs
+			st.ProviderMix[rec.Provider]++
+			if rec.Error != "" {
+				st.LLMErrors++
+			}
+		}
+		f.Close()
+	}
+	if st.LLMCalls > 0 {
+		st.AvgLLMLatency = float64(llmDur) / float64(st.LLMCalls)
+	}
+	return st
+}
+
+// Diagnostics bundles logs + stats + config (redacted) into a zip the user
+// can attach to a bug report or update request.
+// extraFiles maps name→path of additional files to include.
+func (m *Manager) Diagnostics(zipPath string, configPath string, extraFiles map[string]string) (string, error) {
+	if !m.Enabled() {
+		return "", fmt.Errorf("logging disabled")
+	}
+	if err := os.MkdirAll(filepath.Dir(zipPath), 0o755); err != nil {
+		return "", err
+	}
+	f, err := os.Create(zipPath)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	zw := zip.NewWriter(f)
+
+	// 1. stats.json
+	if statsData, err := json.MarshalIndent(m.ComputeStats(), "", "  "); err == nil {
+		if w, err := zw.Create("stats.json"); err == nil {
+			_, _ = w.Write(statsData)
+		}
+	}
+
+	// 2. redacted config
+	if configPath != "" {
+		if data, err := os.ReadFile(configPath); err == nil {
+			if w, err := zw.Create("config.redacted.json"); err == nil {
+				_, _ = w.Write([]byte(redact(string(data))))
+			}
+		}
+	}
+
+	// 3. app logs (current + rotated)
+	files := []string{m.appPath()}
+	for i := 1; i <= appKeepFiles-1; i++ {
+		files = append(files, m.rotatedPath(i))
+	}
+	for _, p := range files {
+		if data, err := os.ReadFile(p); err == nil && len(data) > 0 {
+			if w, err := zw.Create(filepath.Base(p)); err == nil {
+				_, _ = w.Write(data)
+			}
+		}
+	}
+
+	// 4. structured logs
+	for _, p := range []string{
+		filepath.Join(m.dir, "tools.jsonl"),
+		filepath.Join(m.dir, "llm.jsonl"),
+	} {
+		if data, err := os.ReadFile(p); err == nil && len(data) > 0 {
+			if w, err := zw.Create(filepath.Base(p)); err == nil {
+				_, _ = w.Write(data)
+			}
+		}
+	}
+
+	// 5. crashes (most recent 10)
+	if crashes, err := filepath.Glob(filepath.Join(m.dir, "crashes", "crash-*.log")); err == nil {
+		sort.Slice(crashes, func(i, j int) bool { return crashes[i] > crashes[j] })
+		if len(crashes) > 10 {
+			crashes = crashes[:10]
+		}
+		for _, p := range crashes {
+			if data, err := os.ReadFile(p); err == nil {
+				if w, err := zw.Create("crashes/" + filepath.Base(p)); err == nil {
+					_, _ = w.Write([]byte(redact(string(data))))
+				}
+			}
+		}
+	}
+
+	// 6. extra files (sysinfo etc.)
+	for name, p := range extraFiles {
+		if data, err := os.ReadFile(p); err == nil {
+			if w, err := zw.Create(name); err == nil {
+				_, _ = w.Write(data)
+			}
+		}
+	}
+
+	if err := zw.Close(); err != nil {
+		return "", err
+	}
+	return zipPath, nil
+}
+
+// redact strips anything that looks like an API key or token.
+func redact(s string) string {
+	lines := strings.Split(s, "\n")
+	for i, l := range lines {
+		low := strings.ToLower(l)
+		if strings.Contains(low, "apikey") || strings.Contains(low, "api_key") ||
+			strings.Contains(low, "token") || strings.Contains(low, "authorization") ||
+			strings.Contains(low, "password") || strings.Contains(low, "secret") {
+			if idx := strings.Index(l, ":"); idx > 0 {
+				lines[i] = l[:idx+1] + " \"[REDACTED]\""
+				continue
+			}
+		}
+		lines[i] = l
+	}
+	return strings.Join(lines, "\n")
+}
+
+func clip(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + fmt.Sprintf("…[+%d chars clipped]", len(s)-n)
+}
+
+// Close flushes and closes every sink.
+func (m *Manager) Close() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, f := range []**os.File{&m.appF, &m.toolF, &m.llmF} {
+		if *f != nil {
+			_ = (*f).Close()
+			*f = nil
+		}
+	}
+}
