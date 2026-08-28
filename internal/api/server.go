@@ -56,6 +56,9 @@ func New(cfg *config.Config) (*Server, error) {
         orch.Register(tools.CodeExec{})
         orch.Register(tools.WebSearch{})
         orch.Register(tools.Git{})
+        // v1.0.9: headless serve previously shipped WITHOUT the data tool —
+        // the GUI and the serve mode must expose the same agent surface.
+        orch.Register(tools.NewDataTool(cfg))
         // v1.0.2: persistent recall over past conversations.
         engine := recall.New(cfg.DataDir)
         if cfg.RecallEnabled {

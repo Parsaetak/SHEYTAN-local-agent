@@ -11,11 +11,12 @@ import (
         "runtime"
         "strconv"
         "strings"
+        "time"
 )
 
 const (
         AppName    = "SHEYTAN-Local-Agent"
-        AppVersion = "1.0.8"
+        AppVersion = "1.0.9"
 )
 
 // Provider kinds: "local" (bundled llama.cpp) or "remote" (any
@@ -243,6 +244,18 @@ type Config struct {
         // briefing injected at the top of every new chapter. Default 700;
         // clamped 200-2000.
         ContinuumFrameworkTokens int `json:"continuumFrameworkTokens" yaml:"continuumFrameworkTokens"`
+
+        // v1.0.9 — TURBINE streaming & frame pacing.
+
+        // SmoothStream: when true (default) streaming tokens are rendered
+        // through the frame-paced pump — UI mutations coalesce to at most
+        // one batch per display frame (TargetFPS), so text streams at the
+        // monitor's cadence instead of flooding the widget tree.
+        SmoothStream bool `json:"smoothStream" yaml:"smoothStream"`
+        // TargetFPS: the frame rate the UI pacer aims for when coalescing
+        // stream updates (default 120; clamped 30-240). 120 delivers one
+        // update every ~8.3ms — as smooth as a 120 Hz display can show.
+        TargetFPS int `json:"targetFps" yaml:"targetFps"`
 }
 
 // AppRoot resolves the portable application root: the directory that
@@ -346,10 +359,14 @@ func Default() *Config {
                 MultiAgentDepth: 3,
 
                 // v1.0.7 defaults
-                ContinuumEnabled:        true,
-                ContinuumThresholdPct:   75,
-                ContinuumCarryMessages:  4,
+                ContinuumEnabled:         true,
+                ContinuumThresholdPct:    75,
+                ContinuumCarryMessages:   4,
                 ContinuumFrameworkTokens: 700,
+
+                // v1.0.9 defaults
+                SmoothStream: true,
+                TargetFPS:    120,
         }
 }
 
@@ -811,4 +828,36 @@ func (c *Config) EffectiveMaxLogMB() int {
                 return 0
         }
         return c.MaxLogMB
+}
+
+// EffectiveTargetFPS returns the UI frame-pacing target (default 120,
+// clamped 30-240). Values below 30 feel choppy; above 240 the coalescing
+// overhead outweighs any perceptible smoothness.
+func (c *Config) EffectiveTargetFPS() int {
+        fps := c.TargetFPS
+        if fps == 0 {
+                fps = 120
+        }
+        if fps < 30 {
+                fps = 30
+        }
+        if fps > 240 {
+                fps = 240
+        }
+        return fps
+}
+
+// EffectiveStreamEmitInterval returns how often the orchestrator forwards
+// a streaming snapshot while tokens arrive. It is derived from the frame
+// target (one emit per frame) but never faster than 8ms — that is the
+// 120 Hz cadence and the sweet spot for the UI pacer.
+func (c *Config) EffectiveStreamEmitInterval() time.Duration {
+        interval := time.Second / time.Duration(c.EffectiveTargetFPS())
+        if interval < 8*time.Millisecond {
+                interval = 8 * time.Millisecond
+        }
+        if interval > 80*time.Millisecond {
+                interval = 80 * time.Millisecond
+        }
+        return interval
 }

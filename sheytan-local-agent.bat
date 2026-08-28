@@ -1,5 +1,5 @@
 @echo off
-REM SHEYTAN(TM)-Local-Agent v1.0.8 launcher
+REM SHEYTAN(TM)-Local-Agent v1.0.9 launcher
 REM
 REM Double-click to launch the native desktop GUI.
 REM (c) 2024-2026 Parsaetak. All rights reserved.
@@ -20,6 +20,11 @@ REM v1.0.8: AURORA — attachment crash fixed (native Win32 picker + panic
 REM guards), the unified pill composer, Aurora gradient buttons, modern
 REM icons, signed under the name "Parsa Tak", and faster on Windows
 REM (GC tuned for streaming, direct syscalls, icon caches).
+REM v1.0.9: TURBINE — smooth 120fps streaming (frame-paced pump with a
+REM live tok/s readout), the complete file studio (combine, search,
+REM replace, chunked reads), and a faster data engine: zero-copy CSV
+REM parsing, parse-once numeric caches and new analysis actions
+REM (regression, outliers, pivot, moving average and more).
 
 setlocal
 

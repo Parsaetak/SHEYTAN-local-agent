@@ -613,6 +613,12 @@ func isRetryableStatus(err error) bool {
         return strings.Contains(msg, "HTTP 429") || strings.Contains(msg, "HTTP 5")
 }
 
+// SSE wire tokens (v1.0.9 byte-level pump).
+var (
+        sseDataPrefix = []byte("data:")
+        sseDoneToken  = []byte("[DONE]")
+)
+
 func (c *Client) streamOnce(ctx context.Context, req *ChatRequest, body []byte, onEvent func(StreamEvent) error) error {
         httpReq, err := http.NewRequestWithContext(ctx, "POST",
                 c.baseURL()+"/chat/completions", bytes.NewReader(body))
@@ -659,6 +665,12 @@ func (c *Client) streamOnce(ctx context.Context, req *ChatRequest, body []byte, 
                 return onEvent(ev)
         }
 
+        // v1.0.9 (TURBINE): the SSE pump scans BYTES — scanner.Bytes() with
+        // prefix/trim handled at the byte level, so a data line only becomes a
+        // string when it is actually a JSON chunk worth decoding. The old loop
+        // allocated two strings per SSE line (scanner.Text() + TrimPrefix) even
+        // for comment/keep-alive lines, which on a fast stream meant thousands
+        // of short-lived allocations per reply (GC pressure = dropped frames).
         scanner := bufio.NewScanner(resp.Body)
         scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
         asm := newAssembler()
@@ -679,15 +691,15 @@ func (c *Client) streamOnce(ctx context.Context, req *ChatRequest, body []byte, 
         }()
 
         for scanner.Scan() {
-                line := scanner.Text()
-                if !strings.HasPrefix(line, "data:") {
+                line := scanner.Bytes()
+                if !bytes.HasPrefix(line, sseDataPrefix) {
                         continue
                 }
-                data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-                if data == "" {
+                data := bytes.TrimSpace(line[len(sseDataPrefix):])
+                if len(data) == 0 {
                         continue
                 }
-                if data == "[DONE]" {
+                if bytes.Equal(data, sseDoneToken) {
                         break
                 }
                 var chunk struct {
@@ -712,7 +724,7 @@ func (c *Client) streamOnce(ctx context.Context, req *ChatRequest, body []byte, 
                                 TotalTokens      int `json:"total_tokens"`
                         } `json:"usage"`
                 }
-                if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+                if err := json.Unmarshal(data, &chunk); err != nil {
                         continue
                 }
                 ev := StreamEvent{Usage: chunk.Usage}

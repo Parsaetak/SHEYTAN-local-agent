@@ -1,31 +1,33 @@
 #!/usr/bin/env bash
-# Build + package SHEYTAN-Local-Agent v1.0.8 (Windows-only native desktop GUI)
+# Build + package SHEYTAN-Local-Agent v1.0.9 (Windows-only native desktop GUI)
 #
 # DUAL OUTPUT (v1.0.8):
-#   1. /home/z/my-project/download/sheytan-local-agent-1.0.8.zip
+#   1. /home/z/my-project/download/sheytan-local-agent-1.0.9.zip
 #      The ready-to-run portable app: exe (icon + Parsa Tak-signed version
 #      info + DPI manifest), bundled llama.cpp engine, docs, worklog.
 #
-#   2. /home/z/my-project/download/sheytan-local-agent-1.0.8-github.zip
+#   2. /home/z/my-project/download/sheytan-local-agent-1.0.9-github.zip
 #      The GitHub-ready SOURCE tree: every line of code, no .exe, no engine
 #      binaries, no generated .syso — plus .gitignore and a CI workflow so
 #      `git init && push` produces a building repository whose Actions
 #      rebuild the exe automatically.
 #
-# v1.0.8 (AURORA) highlights baked into this build:
-#   - Attachment-crash fix: native Win32 file picker (comdlg32 syscall) +
-#     app-wide panic guards — the app can no longer close on attach.
-#   - Aurora Luxe UI: gradient CTA pills / quiet ghost pills replace every
-#     stock button; ChatGPT-style unified pill composer; modernized icons.
-#   - Low-level speed: GC tuned for streaming renders, icon caches,
-#     direct syscalls instead of framework walkers.
-#   - The application is SIGNED UNDER THE NAME PARSA TAK (exe CompanyName,
-#     About dialog, SIGNATURE file in both zips).
+# v1.0.9 (TURBINE) highlights baked into this build:
+#   - Smooth 120fps streaming: the frame-paced pump coalesces UI updates to
+#     the display cadence, with a live tok/s readout while tokens stream.
+#   - The file studio: combine / chunked read / search / replace / tree /
+#     info / append / copy / move / mkdir — all chunk-streamed internally.
+#   - The data engine rewrite: zero-copy CSV parsing, parse-once numeric
+#     caches, LRU dataset cache, O(n) history windowing, byte-level SSE
+#     pump, plus seven new data-analysis actions.
+#   - Reconstructed internal/sessions + internal/sandbox packages.
+#   - The application remains SIGNED UNDER THE NAME PARSA TAK (exe
+#     CompanyName, About dialog, SIGNATURE file in both zips).
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-VERSION="1.0.8"
+VERSION="1.0.9"
 APP_NAME="sheytan-local-agent"
 STAGE_DIR="dist-stage/$APP_NAME"
 GH_STAGE_DIR="dist-stage/$APP_NAME-github"
@@ -54,7 +56,7 @@ go run scripts/gen-signature.go "$VERSION"
 # Run stress tests first — don't ship if any test fails (Linux build, no CGO)
 echo ">> Building Linux stress-test binary..."
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /tmp/sheytan-stress .
-echo ">> Running stress suite (150 tests)..."
+echo ">> Running stress suite (162 tests)..."
 if ! SHEYTAN_DATA_DIR=/tmp/sheytan-stress-root /tmp/sheytan-stress stress 2>&1 | tail -3 | grep -q "0 fail"; then
   echo "!! Stress tests failed; aborting."
   exit 1
@@ -79,8 +81,8 @@ fi
 echo ">> GUI screenshots rendered OK (see internal/ui/shots/)."
 
 # Now switch to Windows cross-compile mode
-export CC=x86_64-w64-mingw32-gcc-win32
-export CXX=x86_64-w64-mingw32-g++-win32
+export CC=x86_64-w64-mingw32-gcc
+export CXX=x86_64-w64-mingw32-g++
 export CGO_ENABLED=1
 export GOOS=windows
 export GOARCH=amd64
@@ -107,15 +109,15 @@ fi
 if ! python3 -c "
 data = open('$STAGE_DIR/$APP_NAME.exe','rb').read()
 assert 'Parsa Tak'.encode('utf-16-le') in data, 'signature missing'
-assert '1.0.8'.encode('utf-16-le') in data, 'version missing'
+assert '1.0.9'.encode('utf-16-le') in data, 'version missing'
 "; then
   echo "!! exe signature/version metadata verification failed"
   exit 1
 fi
-echo ">> exe verified: brand + Parsa Tak signature + v1.0.8 present."
+echo ">> exe verified: brand + Parsa Tak signature + v1.0.9 present."
 
 echo ">> Vet (windows)..."
-go vet ./internal/ui/ ./internal/tools/ ./internal/config/ ./internal/native/ > /dev/null
+go vet ./internal/ui/ ./internal/tools/ ./internal/config/ ./internal/native/ ./internal/sessions/ ./internal/sandbox/ > /dev/null
 
 # Copy launcher + docs + license + AI instruction file + worklog + signature
 cp sheytan-local-agent.bat "$STAGE_DIR/"

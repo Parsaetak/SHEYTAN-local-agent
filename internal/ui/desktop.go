@@ -160,6 +160,10 @@ type desktopApp struct {
         turnRunning bool            // a turn is in flight (blocks manual rollover)
         lastUsage   continuum.Usage // last observed usage (turn result or session scan)
 
+        // v1.0.9 (TURBINE): frame-paced streaming — tokens coalesce into one
+        // UI batch per display frame (default 120 fps).
+        stream *streamPacer
+
         // Memory view
         memEntries []memory.Entry
         memBox     *fyne.Container
@@ -1770,6 +1774,22 @@ func (d *desktopApp) showSettings() {
 
         ctxBtn := ghostButton("Context & memory…", "layers", d.showContextDialog)
 
+        // v1.0.9 (TURBINE): streaming smoothness — the frame-paced pump.
+        smoothCheck := widget.NewCheck("Smooth streaming — render at the display's frame rate", func(on bool) {
+                d.cfg.SmoothStream = on
+                _ = config.Save(d.cfg.ConfigPath(), d.cfg)
+        })
+        smoothCheck.SetChecked(d.cfg.SmoothStream)
+        fps := widget.NewRadioGroup([]string{"60", "90", "120", "144", "240"}, func(s string) {
+                if n, err := fmt.Sscanf(s, "%d", &d.cfg.TargetFPS); err == nil && n == 1 {
+                        _ = config.Save(d.cfg.ConfigPath(), d.cfg)
+                }
+        })
+        fps.Horizontal = true
+        fps.Selected = fmt.Sprintf("%d", d.cfg.EffectiveTargetFPS())
+        fpsNote := widget.NewLabel("Target frame rate for stream coalescing (120 fps = one update every 8.3ms)")
+        fpsNote.Importance = widget.LowImportance
+
         providerBtn := ghostButton("LLM provider…", "provider", d.showProviderDialog)
         engineBtn := ghostButton("System info…", "system", d.showSysinfo)
         aboutBtn := ghostButton("About "+brand.Trademark, "info", d.showAbout)
@@ -1777,6 +1797,7 @@ func (d *desktopApp) showSettings() {
 
         form := widget.NewForm(
                 widget.NewFormItem("Experience", proCheck),
+                widget.NewFormItem("Streaming", container.NewVBox(smoothCheck, fps, fpsNote)),
                 widget.NewFormItem("Engine updates", container.NewVBox(schedule, lastLbl, checkNow)),
                 widget.NewFormItem("Continuum", container.NewVBox(
                         continuumCheck,

@@ -1,4 +1,4 @@
-# SHEYTAN™ Local-Agent v1.0.8
+# SHEYTAN™ Local-Agent v1.0.9
 
 > Native Windows desktop AI agent. Go binary + Fyne UI. **SHEYTAN™ is a
 > trademark of Parsaetak · © 2024–2026 Parsaetak. All rights reserved.
@@ -12,6 +12,88 @@
 > 👍/👎 feedback steering, local GGUF inference — or any remote
 > OpenAI-compatible endpoint. **Everything lives inside the app folder —
 > fully portable.**
+
+## What's new in v1.0.9 — TURBINE: smooth 120fps streaming, the file studio, and a rewritten data engine
+
+### ⚡ Smooth 120fps streaming — the frame-paced pump
+
+Streaming used to poke the widget tree once per coalesced snapshot (about
+12 updates a second). v1.0.9 rebuilds the whole streaming path around a
+**frame-paced pump** (`internal/ui/pacer.go`): the agent forwards snapshots
+at your target frame rate (default **120 FPS** — one update every ~8.3 ms),
+and the pacer coalesces them into **at most ONE UI batch per display
+frame** — labels, status, refresh and scroll in a single pass, and zero UI
+work on frames where nothing changed. Long replies now render at the
+monitor's cadence instead of flooding the widget tree, and the status line
+shows a **live tokens/sec readout while the text pours in** (the speed HUD
+no longer waits until the reply ends). New Settings → **Streaming** section:
+toggle smooth streaming and pick the target (60 / 90 / 120 / 144 / 240).
+
+### 🗂 The file studio — create, read, write, combine, and everything between
+
+The `files` tool grew from read/write/list/delete into a complete studio:
+
+- **`combine`** — merge many files into one, ordered, through a chunked
+  1 MB stream (constant memory — a multi-GB merge never stalls the app),
+  with an optional separator between files.
+- **`read` with chunk windows** — `offsetLine` + `maxLines` paginate huge
+  files (byte-capped per call), so the agent reads a 100k-line log in
+  slices instead of flooding its context.
+- **`search`** — regex content search across a file or a folder tree with
+  line numbers and a hard hit cap.
+- **`replace`** — literal or regex, dry-run counts matches first, the real
+  write goes through a temp file + atomic rename.
+- **`append`, `copy`, `move`, `mkdir`, `tree`, `info`** — the full daily
+  set, all chunk-streamed internally.
+
+### 📊 The data engine, rewritten — parse once, analyze many
+
+- **Zero-copy CSV engine** — RFC-4180 fields are subslices of the source
+  (the old parser routed every byte of every cell through a
+  strings.Builder); CRLF is handled during the scan (no more full-file
+  `\r\n` rewrite copy); rows are presized from a newline census.
+- **Parse-once numeric caches** — every numeric column parses at most once
+  per dataset; stats, correlation, regression, group-by, histograms and
+  outlier scans now read the cached floats. Chained analysis on one file
+  is dramatically faster.
+- **LRU dataset cache** — the hottest datasets stay resident (recency +
+  byte budget) instead of the old wipe-everything-at-16-entries map.
+- **Seven new analysis actions** — `regression` (least squares + R²/RMSE +
+  prediction), `valueCounts` (frequency tables), `pivot` (2-D group-by
+  grids), `dedupe` (with optional cleaned-file write-out), `sample`
+  (head/tail/random), `outliers` (IQR + z-score fences), `movingavg`
+  (windowed smoothing with series write-out).
+
+### 🧹 Under the hood — every hot path re-audited
+
+- **History windowing is O(n)** — the compactor used to re-prepend the
+  whole kept slice per message (O(n²)); a 400-message turn paid ~80k
+  struct copies per iteration. It is now one backward pass and exactly
+  one slice copy (verified with a 20k-message stress scenario).
+- **The SSE pump scans bytes** — no per-line string allocations while
+  tokens stream (comments and keep-alives cost nothing).
+- **Streaming coalescing tracks the frame target** — emit interval
+  derives from the FPS setting (8 ms at 120).
+- **Headless `serve` gains the dataAnalysis tool** — the API server now
+  exposes the same agent surface as the GUI.
+- **Reconstructed packages** — v1.0.9 re-adds `internal/sessions` and
+  `internal/sandbox` (the meta-indexed session store and the Windows
+  Job-Object sandbox) with the exact contracts the app expects, verified
+  by 12 new stress scenarios.
+- **+12 stress scenarios (162 total)** covering CSV parity against hostile
+  inputs, parse-number fast paths, files-v2 round trips, every new
+  analysis action, the numeric cache, O(n) windowing on 20k messages,
+  byte-level SSE decoding (content + reasoning + streamed tool-call
+  fragments), the session store and sandbox contracts, and the v9 AI
+  context. New headless pacer tests cover coalescing, tail delivery and
+  live tok/s.
+
+### 📦 Two zips, as always
+
+1. **`sheytan-local-agent-1.0.9.zip`** — the ready-to-run portable app
+   (exe + bundled llama.cpp engine + docs + worklog).
+2. **`sheytan-local-agent-1.0.9-github.zip`** — the complete source tree,
+   no binaries, with `.gitignore` and a GitHub Actions workflow.
 
 ## What's new in v1.0.8 — AURORA: the attachment fix, the z.ai/Codex-grade UI, and Parsa Tak's signature
 

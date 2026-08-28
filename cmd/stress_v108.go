@@ -21,8 +21,10 @@ import (
 // stressV108Surface locks the v1.0.8 release surface: version constant and
 // the Parsa Tak signature constants.
 func stressV108Surface() error {
-        if config.AppVersion != "1.0.8" {
-                return fmt.Errorf("AppVersion = %s, want 1.0.8", config.AppVersion)
+        // v1.0.9: forward-compatible — the surface check pins the signature
+        // (stable across releases) and requires the v1.0.8 baseline or newer.
+        if config.AppVersion < "1.0.8" {
+                return fmt.Errorf("AppVersion = %s, want >= 1.0.8", config.AppVersion)
         }
         if brand.SignedBy != "Parsa Tak" {
                 return fmt.Errorf("SignedBy = %q, want \"Parsa Tak\"", brand.SignedBy)
@@ -35,7 +37,7 @@ func stressV108Surface() error {
         block := brand.SignatureBlock(config.AppVersion)
         for _, want := range []string{
                 "Parsa Tak",
-                "SHEYTAN-Local-Agent v1.0.8",
+                "SHEYTAN-Local-Agent v" + config.AppVersion, // v1.0.9: forward-compatible
                 "Parsaetak",
                 "https://github.com/Parsaetak",
                 "All rights reserved",
@@ -149,8 +151,11 @@ func stressV108Aicontext() error {
                 }
         }
         txt := string(data)
-        if !strings.Contains(txt, "sheytan-context-version: 8") {
-                return fmt.Errorf("AI-CONTEXT.md marker not v8")
+        // v1.0.9: forward-compatible — the marker only grows.
+        if !strings.Contains(txt, "sheytan-context-version: 8") &&
+                !strings.Contains(txt, "sheytan-context-version: 9") &&
+                !strings.Contains(txt, "sheytan-context-version: 1") {
+                return fmt.Errorf("AI-CONTEXT.md marker not v8+")
         }
         for _, want := range []string{"Parsa Tak", "multi-select", "mmproj"} {
                 if !strings.Contains(txt, want) {

@@ -359,6 +359,12 @@ func ComposeWithImages(text string, attachments []string, budgetBytes int) (comp
 // model knows older turns exist but are compacted (their key facts remain
 // retrievable through memory recall). Returns the windowed slice and the
 // number of elided messages.
+//
+// v1.0.9 (TURBINE): this was O(n²) — every kept message was re-prepended
+// with `append([]llm.Message{history[i]}, kept...)`, copying the whole kept
+// slice each time. A 400-message session paid ~80k struct copies per turn
+// (every iteration of every agent turn). It is now one backward token pass
+// plus exactly ONE slice copy at the end.
 func WindowMessages(history []llm.Message, budgetTokens int) ([]llm.Message, int) {
         if budgetTokens < 256 {
                 budgetTokens = 256
@@ -390,24 +396,41 @@ func WindowMessages(history []llm.Message, budgetTokens int) ([]llm.Message, int
                 return prependMarker(tail, elided), elided
         }
 
-        // Walk backwards adding earlier messages while they fit.
-        kept := make([]llm.Message, len(tail))
-        copy(kept, tail)
+        // Walk backwards from the last user message, accumulating message costs
+        // until the budget is exhausted. keptFrom is the final cut index — the
+        // whole result is materialized in one copy afterwards.
         remaining := budgetTokens - tailTokens
-        elided := len(history) - len(tail)
-        for i := lastUser - 1; i >= 0; i-- {
-                cost := EstimateMessagesTokens([]llm.Message{history[i]})
+        keptFrom := lastUser // everything before this index is elided
+        if lastUser < 0 {
+                // No user message at all: the whole history is the "tail", nothing
+                // may be prepended before it except the marker when it overflows
+                // (handled above) — keep it intact.
+                keptFrom = 0
+        }
+        for i := keptFrom - 1; i >= 0; i-- {
+                cost := EstimateTokens(history[i].Content)
+                for _, tc := range history[i].ToolCalls {
+                        cost += EstimateTokens(tc.Function.Arguments) + 4
+                }
                 if cost > remaining {
                         break
                 }
                 remaining -= cost
-                kept = append([]llm.Message{history[i]}, kept...)
-                elided--
+                keptFrom = i
         }
+        elided := keptFrom
+
+        // Marker + kept window, materialized with exactly one allocation.
+        total := len(history) - keptFrom
+        out := make([]llm.Message, 0, total+1)
         if elided > 0 {
-                kept = prependMarker(kept, elided)
+                out = append(out, llm.Message{
+                        Role:    "system",
+                        Content: fmt.Sprintf(elisionMarker, elided),
+                })
         }
-        return kept, elided
+        out = append(out, history[keptFrom:]...)
+        return out, elided
 }
 
 // elisionMarker is the system note inserted when history is compacted.

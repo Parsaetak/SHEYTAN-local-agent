@@ -1107,7 +1107,25 @@ func (d *desktopApp) clearActivities() {
 // can be called from any goroutine — every widget mutation is routed through
 // fyne.Do. In minimal mode only the one-line summary updates; the full
 // stream renders when Pro mode is on.
+//
+// v1.0.9 (TURBINE): streaming snapshots (response/reasoning) no longer
+// touch the widget tree directly — they are absorbed by the frame-paced
+// pacer, which coalesces them into at most ONE UI batch per display frame
+// (default 120 fps). Milestone activities (tool calls, errors, done) still
+// apply immediately.
 func (d *desktopApp) appendActivity(a agent.Activity) {
+        if d.cfg.SmoothStream && (a.Type == "response" || a.Type == "reasoning") {
+                if d.stream == nil {
+                        d.stream = newStreamPacer(d.cfg.EffectiveTargetFPS(), func(resp, reason string, tps float64) {
+                                runOnMain(func() { d.flushStreamFrame(resp, reason, tps) })
+                        })
+                }
+                d.stream.Pump(a)
+                // Status-line text also rides the pacer (one SetText per frame,
+                // not one per snapshot) — the flame/dots indicators keep the
+                // "alive" feel meanwhile.
+                return
+        }
         runOnMain(func() {
                 d.activities = append(d.activities, a)
                 caption := a.Caption
@@ -1157,6 +1175,43 @@ func (d *desktopApp) appendActivity(a agent.Activity) {
         })
 }
 
+// flushStreamFrame applies ONE coalesced streaming frame to the UI. Called
+// on the UI thread by the pacer. Empty channels are skipped so a frame with
+// only reasoning movement does not rewrite the response label (and vice
+// versa).
+func (d *desktopApp) flushStreamFrame(resp, reason string, tps float64) {
+        // The status line: live tokens/sec while the text pours in — the
+        // speed HUD users previously only saw after the turn now reads
+        // live, exactly where the activity caption lives.
+        if tps > 0 {
+                d.activityLbl.SetText(fmt.Sprintf("Streaming… %.0f tok/s", tps))
+        }
+        if !d.cfg.ProMode {
+                return
+        }
+        d.activitySection.Show()
+        if reason != "" {
+                if d.liveReasoningLbl == nil {
+                        row, lbl := newLiveReasoningRow(reason)
+                        d.liveReasoningLbl = lbl
+                        d.activityBox.Add(row)
+                } else {
+                        d.liveReasoningLbl.SetText(clipStrMemory(reason, 120))
+                }
+        }
+        if resp != "" {
+                if d.liveResponseLbl == nil {
+                        row, lbl := newLiveResponseRow(resp)
+                        d.liveResponseLbl = lbl
+                        d.activityBox.Add(row)
+                } else {
+                        d.liveResponseLbl.SetText(clipStrMemory(resp, 120))
+                }
+        }
+        d.activityBox.Refresh()
+        d.activityScroll.ScrollToBottom()
+}
+
 // firstLine returns the first line of s (clipped to n bytes).
 func firstLine(s string, n int) string {
         if i := strings.IndexByte(s, '\n'); i >= 0 {
@@ -1179,6 +1234,11 @@ func (d *desktopApp) setRunning(running bool, caption string) {
 func (d *desktopApp) setRunningMain(running bool, caption string) {
         d.turnRunning = running
         if running {
+                // v1.0.9: a fresh turn starts a clean streaming frame session.
+                if d.stream != nil {
+                        d.stream.Stop()
+                        d.stream = nil
+                }
                 if d.sendCirc != nil {
                         d.sendCirc.SetEnabled(false)
                 }
@@ -1198,6 +1258,12 @@ func (d *desktopApp) setRunningMain(running bool, caption string) {
                 // refreshed once all indicators are visible.
                 d.refreshBottom()
         } else {
+                // v1.0.9: the turn is over — park the frame pacer after a final
+                // flush so no tail text is lost.
+                if d.stream != nil {
+                        d.stream.Stop()
+                        d.stream = nil
+                }
                 if d.sendCirc != nil {
                         d.sendCirc.SetEnabled(true)
                 }

@@ -65,12 +65,13 @@ type Recaller interface {
         RelevantBlock(query string, k, maxTokens int) string
 }
 
-// responseEmitInterval throttles streaming "response"/"reasoning"
-// activities. v1.0.0 emitted one activity per token delta: every callback
-// copied the ENTIRE accumulated text (O(n²) for an n-token reply) and every
-// consumer — GUI refresh, session persistence, WS fan-out — paid for it.
-// Coalescing at the source fixes every surface at once while keeping the
-// stream smooth (~12 updates/s).
+// responseEmitInterval is the LEGACY streaming coalesce cadence (~12
+// updates/s). v1.0.9 (TURBINE) derives the live cadence from the config:
+// cfg.EffectiveStreamEmitInterval() targets ONE emit per display frame
+// (default 120 FPS → ~8ms), and the UI-side frame pacer coalesces those
+// into at most one widget batch per frame — the stream now renders at the
+// monitor's cadence instead of flooding the widget tree. When SmoothStream
+// is disabled the legacy constant applies.
 const responseEmitInterval = 80 * time.Millisecond
 
 // recallBlockTokenBudget bounds the auto-recalled past-context block.
@@ -301,12 +302,17 @@ func (o *Orchestrator) RunDetailed(ctx context.Context, messages []llm.Message, 
                 // content at emit time (re-parsing the accumulated raw text is
                 // cheap next to the O(n²) it replaced).
                 var lastEmit time.Time
+                // v1.0.9: frame-targeted emit cadence (SmoothStream → ~8ms).
+                emitEvery := responseEmitInterval
+                if o.cfg.SmoothStream {
+                        emitEvery = o.cfg.EffectiveStreamEmitInterval()
+                }
                 emitProgress := func(force bool) {
                         reasoning, content := SplitThink(raw.String())
                         if reasoning == "" && content == "" && native.Len() == 0 {
                                 return
                         }
-                        if !force && time.Since(lastEmit) < responseEmitInterval {
+                        if !force && time.Since(lastEmit) < emitEvery {
                                 return
                         }
                         lastEmit = time.Now()
