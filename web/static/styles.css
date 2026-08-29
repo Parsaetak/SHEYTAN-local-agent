@@ -933,3 +933,26 @@ html, body {
   .messages { padding: 12px 8px; }
   .input-area { padding: 8px 8px 10px; }
 }
+
+/* ---------- v1.0.10 (PRISM): render perf + motion polish ---------- */
+
+/* Long chat histories: skip layout work for offscreen messages — the
+   browser only measures bubbles as they approach the viewport. */
+.messages .msg {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 88px;
+}
+
+/* Smooth follow during streaming; the engine still snaps to bottom on
+   new turns (JS drives scrollTop) so nothing fights the user's scroll. */
+.messages { scroll-behavior: smooth; }
+
+/* Respect users who disable animations (OS-level preference). */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

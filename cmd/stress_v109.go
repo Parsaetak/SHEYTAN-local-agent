@@ -23,9 +23,10 @@ import (
 // --- v1.0.9 (TURBINE) stress scenarios ---
 
 // stressV109Surface: version + the two new streaming config fields.
+// v1.0.10: forward-compatible — pins the v1.0.9 baseline or newer.
 func stressV109Surface() error {
-        if config.AppVersion != "1.0.9" {
-                return fmt.Errorf("AppVersion = %q, want 1.0.9", config.AppVersion)
+        if !versionAtLeast(config.AppVersion, "1.0.9") {
+                return fmt.Errorf("AppVersion = %q, want >= 1.0.9", config.AppVersion)
         }
         cfg := config.Default()
         if !cfg.SmoothStream {
@@ -576,8 +577,9 @@ func stressV109SandboxContract() error {
 // stressV109AicontextV9: the AI briefing teaches files v2, the new analysis
 // actions and smooth streaming.
 func stressV109AicontextV9() error {
-        if aicontext.ContextVersion != 9 {
-                return fmt.Errorf("ContextVersion = %d, want 9", aicontext.ContextVersion)
+        // v1.0.10: forward-compatible (context files only ever grow).
+        if aicontext.ContextVersion < 9 {
+                return fmt.Errorf("ContextVersion = %d, want >= 9", aicontext.ContextVersion)
         }
         body := aicontext.SystemMessage(config.Default())
         for _, want := range []string{"combine", "valueCounts", "outliers", "movingavg", "offsetLine", "regression"} {

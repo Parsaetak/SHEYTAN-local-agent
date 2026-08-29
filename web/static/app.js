@@ -117,7 +117,9 @@
     }
     $("emptyState").style.display = "none";
     $("sessionTitle").textContent = s.title || "New session";
-    const msgCount = s.messages ? s.messages.length : 0;
+    // v1.0.10: stub sessions carry msgCount from the meta index — the
+    // count renders correctly even before the full history loads.
+    const msgCount = s.msgCount || (s.messages ? s.messages.length : 0);
     const last = s.messages && s.messages.length > 0 ? s.messages[s.messages.length - 1] : null;
     const lastKind = last ? last.role : "";
     $("chatMeta").textContent = `${msgCount} msg${msgCount === 1 ? "" : "s"} · ${s.model || state.config?.model || "default"}`;
@@ -128,8 +130,11 @@
     const container = $("messages");
     // Remove existing msgs but keep empty state
     container.querySelectorAll(".msg").forEach((m) => m.remove());
-    messages.forEach((m) => container.appendChild(renderMessage(m)));
-    container.scrollTop = container.scrollHeight;
+    // v1.0.10: batch insertion via fragment — one reflow instead of N.
+    const frag = document.createDocumentFragment();
+    messages.forEach((m) => frag.appendChild(renderMessage(m)));
+    container.appendChild(frag);
+    requestAnimationFrame(() => { container.scrollTop = container.scrollHeight; });
   }
 
   function renderMessage(m) {

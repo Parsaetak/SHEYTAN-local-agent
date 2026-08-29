@@ -32,7 +32,7 @@ import (
 func stressV104Defaults() error {
 	// v1.0.5 moved the version forward — the contract here is "at least
 	// 1.0.4"; the exact current version is locked by config_v105_defaults.
-	if config.AppVersion < "1.0.4" {
+	if !versionAtLeast(config.AppVersion, "1.0.4") {
 		return fmt.Errorf("AppVersion = %q, want >= 1.0.4", config.AppVersion)
 	}
 	cfg := config.Default()

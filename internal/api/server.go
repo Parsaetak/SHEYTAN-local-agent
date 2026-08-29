@@ -59,6 +59,12 @@ func New(cfg *config.Config) (*Server, error) {
         // v1.0.9: headless serve previously shipped WITHOUT the data tool —
         // the GUI and the serve mode must expose the same agent surface.
         orch.Register(tools.NewDataTool(cfg))
+        // v1.0.10 (PRISM): the new tools register in serve mode too — GUI and
+        // web stay feature-identical.
+        orch.Register(tools.JSONTool{})
+        orch.Register(tools.ArchiveTool{})
+        orch.Register(tools.NewFetchTool())
+        orch.Register(tools.DiffTool{})
         // v1.0.2: persistent recall over past conversations.
         engine := recall.New(cfg.DataDir)
         if cfg.RecallEnabled {

@@ -37,7 +37,7 @@ const FileName = "AI-CONTEXT.md"
 // ContextVersion is the instruction-file version. Bump it whenever the
 // embedded AI-CONTEXT.md changes in a release; existing installs with an
 // older marker get the fresh file on next boot.
-const ContextVersion = 9
+const ContextVersion = 10
 
 //go:embed AI-CONTEXT.md
 var embedded string
@@ -144,6 +144,7 @@ func ResetProbeCache() {
 var toolNames = []string{
         "files", "shell", "codeExec", "dataAnalysis", "webSearch", "browser",
         "git", "memory", "screenshot", "linux",
+        "json", "archive", "fetch", "diff",
 }
 
 // Briefing builds the LIVE ENVIRONMENT block for the active config. It is

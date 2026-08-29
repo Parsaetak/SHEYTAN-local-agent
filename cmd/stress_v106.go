@@ -37,7 +37,7 @@ import (
 func stressV106Defaults() error {
 	// v1.0.7: forward-compatible — v106 locks the >= 1.0.6 surface; the
 	// current exact-version assertion lives in the latest release's tests.
-	if config.AppVersion < "1.0.6" {
+	if !versionAtLeast(config.AppVersion, "1.0.6") {
 		return fmt.Errorf("AppVersion = %q, want >= 1.0.6", config.AppVersion)
 	}
 	cfg := config.Default()

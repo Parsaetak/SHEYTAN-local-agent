@@ -56,7 +56,7 @@ func stressV107Defaults() error {
 	if got := cfg.EffectiveContinuumFrameworkTokens(); got != 200 {
 		return fmt.Errorf("framework clamp = %d, want 200", got)
 	}
-	if config.AppVersion < "1.0.8" {
+	if !versionAtLeast(config.AppVersion, "1.0.8") {
 		return fmt.Errorf("AppVersion = %s, want >= 1.0.8", config.AppVersion)
 	}
 	return nil

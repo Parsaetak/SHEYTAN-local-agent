@@ -73,13 +73,25 @@ type Engine struct {
         // Kept separate from the append-only capsule index so a verdict can
         // arrive AFTER the capsule was written (it always does) without
         // rewriting index lines. fbPath is <DataDir>/recall/feedback.jsonl.
-        fbPath    string
-        feedback  map[string]int
-        fbLoaded  bool
+        fbPath   string
+        feedback map[string]int
+        fbLoaded bool
 
         mu       sync.Mutex
         capsules []Capsule
         loaded   bool
+
+        // v1.0.10 corpus cache: BM25 needs document frequencies, average
+        // length and per-capsule term frequencies. Before v1.0.10 every
+        // Search() re-tokenized EVERY capsule and rebuilt every tf map — the
+        // whole corpus, once per user turn. Now term slices are computed once
+        // per capsule (lazily, cached in the parallel slice) and the corpus
+        // aggregates are cached until an IndexTurn/Clear changes them.
+        terms   [][]string // parallel to capsules (nil = not tokenized yet)
+        statsOK bool       // df/avgLen/N caches valid
+        cachedN int
+        cachedAvgLen float64
+        cachedDf     map[string]int
 }
 
 // New creates (or opens) the recall engine under dataDir.
@@ -267,6 +279,7 @@ func (e *Engine) IndexTurn(sessionID, title, query, answer string, tools []strin
                 return err
         }
         e.capsules = append(e.capsules, c)
+        e.invalidateStatsLocked()
         return nil
 }
 
@@ -276,6 +289,60 @@ func (e *Engine) Count() int {
         defer e.mu.Unlock()
         e.loadLocked()
         return len(e.capsules)
+}
+
+// termsFor returns the cached tokenization of capsule i (computing it
+// once on first use).
+func (e *Engine) termsFor(i int) []string {
+        if i < len(e.terms) && e.terms[i] != nil {
+                return e.terms[i]
+        }
+        c := e.capsules[i]
+        t := Tokenize(c.Query + " " + c.Answer + " " + c.Title)
+        for len(e.terms) < len(e.capsules) {
+                e.terms = append(e.terms, nil)
+        }
+        e.terms[i] = t
+        return t
+}
+
+// invalidateStatsLocked drops the corpus aggregates after an index change.
+func (e *Engine) invalidateStatsLocked() {
+        e.statsOK = false
+        e.cachedDf = nil
+}
+
+// statsLocked returns (N, avgLen, df) with caching. avgLen counts RAW
+// terms (duplicates included) — matching the pre-cache semantics exactly.
+func (e *Engine) statsLocked() (int, float64, map[string]int) {
+        N := len(e.capsules)
+        if e.statsOK && e.cachedN == N {
+                return N, e.cachedAvgLen, e.cachedDf
+        }
+        avgLen := 0.0
+        df := map[string]int{}
+        for i := range e.capsules {
+                terms := e.termsFor(i)
+                tf := make(map[string]int, len(terms))
+                for _, t := range terms {
+                        tf[t]++
+                }
+                avgLen += float64(len(terms))
+                for t := range tf {
+                        df[t]++
+                }
+        }
+        if N > 0 {
+                avgLen /= float64(N)
+        }
+        if avgLen == 0 {
+                avgLen = 1
+        }
+        e.statsOK = true
+        e.cachedN = N
+        e.cachedAvgLen = avgLen
+        e.cachedDf = df
+        return N, avgLen, df
 }
 
 // Search returns the k most relevant capsules for query (BM25 + recency
@@ -292,31 +359,10 @@ func (e *Engine) Search(query string, k int) []Capsule {
         now := time.Now()
         qTerms := Tokenize(query)
 
-        // Corpus statistics over capsules.
-        N := len(e.capsules)
+        // Corpus statistics over capsules (v1.0.10: cached across searches).
+        N, avgLen, df := e.statsLocked()
         if N == 0 {
                 return nil
-        }
-        avgLen := 0.0
-        docs := make([]map[string]int, N)
-        for i, c := range e.capsules {
-                terms := Tokenize(c.Query + " " + c.Answer + " " + c.Title)
-                tf := map[string]int{}
-                for _, t := range terms {
-                        tf[t]++
-                }
-                docs[i] = tf
-                avgLen += float64(len(terms))
-        }
-        avgLen /= float64(N)
-        if avgLen == 0 {
-                avgLen = 1
-        }
-        df := map[string]int{}
-        for _, tf := range docs {
-                for t := range tf {
-                        df[t]++
-                }
         }
 
         type scored struct {
@@ -327,7 +373,11 @@ func (e *Engine) Search(query string, k int) []Capsule {
         for i, c := range e.capsules {
                 var score float64
                 if len(qTerms) > 0 {
-                        tf := docs[i]
+                        terms := e.termsFor(i)
+                        tf := make(map[string]int, len(terms))
+                        for _, t := range terms {
+                                tf[t]++
+                        }
                         dl := float64(len(tf))
                         for _, t := range qTerms {
                                 f, ok := tf[t]
@@ -492,6 +542,8 @@ func (e *Engine) Clear() error {
         e.mu.Lock()
         defer e.mu.Unlock()
         e.capsules = nil
+        e.terms = nil
+        e.invalidateStatsLocked()
         e.loaded = true
         _ = os.Remove(filepath.Join(e.dir, "backfilled"))
         return os.WriteFile(e.path, []byte{}, 0o644)

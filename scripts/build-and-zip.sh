@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Build + package SHEYTAN-Local-Agent v1.0.9 (Windows-only native desktop GUI)
+# Build + package SHEYTAN-Local-Agent v1.0.10 (Windows-only native desktop GUI)
 #
 # DUAL OUTPUT (v1.0.8):
-#   1. /home/z/my-project/download/sheytan-local-agent-1.0.9.zip
+#   1. /home/z/my-project/download/sheytan-local-agent-1.0.10.zip
 #      The ready-to-run portable app: exe (icon + Parsa Tak-signed version
 #      info + DPI manifest), bundled llama.cpp engine, docs, worklog.
 #
-#   2. /home/z/my-project/download/sheytan-local-agent-1.0.9-github.zip
+#   2. /home/z/my-project/download/sheytan-local-agent-1.0.10-github.zip
 #      The GitHub-ready SOURCE tree: every line of code, no .exe, no engine
 #      binaries, no generated .syso — plus .gitignore and a CI workflow so
 #      `git init && push` produces a building repository whose Actions
@@ -27,7 +27,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-VERSION="1.0.9"
+VERSION="1.0.10"
 APP_NAME="sheytan-local-agent"
 STAGE_DIR="dist-stage/$APP_NAME"
 GH_STAGE_DIR="dist-stage/$APP_NAME-github"
@@ -35,11 +35,18 @@ DIST_DIR="/home/z/my-project/download"
 ENGINE_SRC="/home/z/my-project/engine-dl/vulkan"
 ENGINE_TAG="b10642"
 
-# Toolchain paths
-export GOROOT=/home/z/go-root/go
-export PATH=$GOROOT/bin:/home/z/mingw32/extracted/usr/bin:$PATH
+# Toolchain paths (v1.0.10 session — see /home/z/my-project/env.sh)
+export GOROOT=/home/z/.local/go
+export PATH=$GOROOT/bin:/home/z/mingw-root/usr/bin:$PATH
 export GOPATH=/home/z/go
 export GOFLAGS=-mod=mod
+export GOPROXY=https://goproxy.cn,https://proxy.golang.org,direct
+
+# Linux GUI cgo headers (fyne/glfw) from extracted dev debs
+export XORG_ROOT=/home/z/xorg-root
+export CPATH=$XORG_ROOT/usr/include
+export PKG_CONFIG_PATH=$XORG_ROOT/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/lib/x86_64-linux-gnu/pkgconfig
+export CGO_LDFLAGS="-L$XORG_ROOT/usr/lib/x86_64-linux-gnu -L/usr/lib/x86_64-linux-gnu"
 
 # Clean + recreate stage
 rm -rf "$STAGE_DIR" "$GH_STAGE_DIR"
@@ -73,19 +80,21 @@ fi
 echo ">> All unit tests pass."
 
 echo ">> Rendering GUI screenshots (headless verification)..."
-if ! CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go test -tags headless ./internal/ui > /tmp/shot.log 2>&1; then
+if ! CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go test -tags headless ./internal/ui > /tmp/shot.log 2>&1; then
   cat /tmp/shot.log
   echo "!! Headless UI suite failed; aborting."
   exit 1
 fi
 echo ">> GUI screenshots rendered OK (see internal/ui/shots/)."
 
-# Now switch to Windows cross-compile mode
-export CC=x86_64-w64-mingw32-gcc
-export CXX=x86_64-w64-mingw32-g++
+# Now switch to Windows cross-compile mode (mingw from extracted debs)
+export CC="x86_64-w64-mingw32-gcc --sysroot=/home/z/mingw-root"
+export CXX="x86_64-w64-mingw32-g++ --sysroot=/home/z/mingw-root"
 export CGO_ENABLED=1
 export GOOS=windows
 export GOARCH=amd64
+export CPATH=
+export CGO_LDFLAGS=
 
 # Regenerate the Windows resource object — the app icon (brand flame,
 # multi-size), version info (SIGNED BY PARSAT TAK as CompanyName + the
@@ -109,12 +118,12 @@ fi
 if ! python3 -c "
 data = open('$STAGE_DIR/$APP_NAME.exe','rb').read()
 assert 'Parsa Tak'.encode('utf-16-le') in data, 'signature missing'
-assert '1.0.9'.encode('utf-16-le') in data, 'version missing'
+assert '1.0.10'.encode('utf-16-le') in data, 'version missing'
 "; then
   echo "!! exe signature/version metadata verification failed"
   exit 1
 fi
-echo ">> exe verified: brand + Parsa Tak signature + v1.0.9 present."
+echo ">> exe verified: brand + Parsa Tak signature + v1.0.10 present."
 
 echo ">> Vet (windows)..."
 go vet ./internal/ui/ ./internal/tools/ ./internal/config/ ./internal/native/ ./internal/sessions/ ./internal/sandbox/ > /dev/null
@@ -178,7 +187,9 @@ echo ""
 echo ">> ZIP 1 (full app): $ZIP"
 ls -lh "$ZIP"
 
-# --- ZIP 2: GitHub-ready source (no .exe, no engine, no generated syso) ---
+# --- v1.0.10 GATE: the GitHub zip must COMPILE on its own ---
+# (v1.0.9 shipped without internal/sessions + internal/sandbox — the CI
+# error the user hit. This gate makes that failure impossible to repeat.)
 echo ">> Staging GitHub source tree..."
 mkdir -p "$GH_STAGE_DIR"
 rsync -a --delete \
@@ -195,6 +206,23 @@ rsync -a --delete \
 # Source zips carry docs + signature too.
 cp SIGNATURE "$GH_STAGE_DIR/SIGNATURE" 2>/dev/null || true
 cp /home/z/my-project/worklog.md "$GH_STAGE_DIR/worklog.md"
+
+echo ">> GATE: compiling the GitHub source tree (Linux, full GUI build with cgo)..."
+# The gate must mirror a real user/CI build: EVERY package, including the
+# Fyne GUI (which needs cgo + the X11/GL headers). The mingw cross-compile
+# env is overridden back to the native Linux toolchain for this step.
+if ! ( cd "$GH_STAGE_DIR" && \
+    GOOS=linux GOARCH=amd64 CGO_ENABLED=1 \
+    CC=gcc CXX=g++ \
+    CPATH="$XORG_ROOT/usr/include" \
+    PKG_CONFIG_PATH="$XORG_ROOT/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/lib/x86_64-linux-gnu/pkgconfig" \
+    CGO_LDFLAGS="-L$XORG_ROOT/usr/lib/x86_64-linux-gnu -L/usr/lib/x86_64-linux-gnu" \
+    go build ./... 2> /tmp/gh-compile.log ); then
+  cat /tmp/gh-compile.log
+  echo "!! The GitHub source tree does not compile — refusing to ship."
+  exit 1
+fi
+echo ">> GATE passed: the source tree builds clean (all packages, GUI included)."
 
 GH_ZIP="$DIST_DIR/$APP_NAME-$VERSION-github.zip"
 rm -f "$GH_ZIP"

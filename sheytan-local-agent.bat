@@ -1,5 +1,5 @@
 @echo off
-REM SHEYTAN(TM)-Local-Agent v1.0.9 launcher
+REM SHEYTAN(TM)-Local-Agent v1.0.10 launcher
 REM
 REM Double-click to launch the native desktop GUI.
 REM (c) 2024-2026 Parsaetak. All rights reserved.
@@ -25,6 +25,12 @@ REM live tok/s readout), the complete file studio (combine, search,
 REM replace, chunked reads), and a faster data engine: zero-copy CSV
 REM parsing, parse-once numeric caches and new analysis actions
 REM (regression, outliers, pivot, moving average and more).
+REM v1.0.10: PRISM — the build error that broke v1.0.9 on GitHub is fixed
+REM (internal/sessions + internal/sandbox now ship in the source tree),
+REM four new agent tools (json query/transform, archive zip/tar, fetch
+REM URL reader, diff verifier), the activity feed moved to an append-only
+REM sidecar (serve mode no longer rewrites whole session files per tool
+REM event) and the recall engine caches its BM25 corpus stats.
 
 setlocal
 

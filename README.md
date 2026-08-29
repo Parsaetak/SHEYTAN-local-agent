@@ -1,4 +1,4 @@
-# SHEYTAN™ Local-Agent v1.0.9
+# SHEYTAN™ Local-Agent v1.0.10
 
 > Native Windows desktop AI agent. Go binary + Fyne UI. **SHEYTAN™ is a
 > trademark of Parsaetak · © 2024–2026 Parsaetak. All rights reserved.
@@ -13,7 +13,75 @@
 > OpenAI-compatible endpoint. **Everything lives inside the app folder —
 > fully portable.**
 
+## What's new in v1.0.10 — PRISM: the build fix, four new tools, and leaner session I/O
+
+### 🔧 The v1.0.9 GitHub build error — fixed at the root
+
+The v1.0.9 tag failed CI with `no required module provides package
+github.com/sheytan/local-agent/internal/sessions` (and the same for
+`internal/sandbox`): both packages existed in the dev tree but were never
+committed. v1.0.10 ships both in the repository, and the build script now
+compiles the GitHub-zip source tree itself before packaging, so a
+source-incomplete release can never ship again.
+
+### 🧰 Four new agent tools
+
+- **`json`** — query & transform JSON/JSONL: dot/bracket path extraction
+  with `[*]` array wildcards (`items[*].price`), JSONL row filtering
+  (`where` with eq/ne/contains/gt/lt/…), object stats (key frequency,
+  value types, depth), recursive key inventory, pretty-print and
+  flatten-to-dot-keys. Every action is size-capped and line-oriented.
+- **`archive`** — zip/tar/gzip without the shell: create, list, extract.
+  All copies are chunk-streamed (1 MB buffers), extraction is
+  zip-slip-guarded (`../` entries are rejected), with entry-count and
+  total-size caps.
+- **`fetch`** — one bounded GET returning readable text: scripts/styles
+  stripped, entities decoded, paragraph structure preserved, byte-capped
+  (512 KB default, 4 MB max) — the fast middle ground between webSearch
+  snippets and the full browser. `mode:"raw"` returns the untouched body.
+- **`diff`** — line-level verification (Myers O(ND)): changed regions with
+  `-`/`+` lines, context control, similarity summary, and a bounded
+  fallback when files differ beyond the edit-distance cap. The agent can
+  now PROVE it changed exactly one line.
+
+All four register in the GUI and serve mode alike (same agent surface),
+and AI-CONTEXT v10 teaches every model when to reach for them
+(webSearch → fetch → files → dataAnalysis is now a first-class recipe).
+
+### ⚡ Leaner session I/O + recall corpus cache
+
+- **The activity feed moved to an append-only sidecar**
+  (`sessions/<id>.activities.jsonl`). v1.0.9 appended every milestone
+  tool event by rewriting the ENTIRE session JSON — on a long session
+  that was the single most expensive write in serve mode. One append now
+  costs one small write, O(1) in session size; old inline activities
+  migrate on first read; Delete cleans the sidecar too.
+- **The recall engine caches its BM25 corpus statistics** (document
+  frequencies, average length, per-capsule term vectors) instead of
+  re-tokenizing every capsule on every user turn; the cache invalidates
+  the moment a new capsule is indexed. Same results, a fraction of the
+  per-turn cost.
+- **Numeric version assertions**: the stress suite's release checks now
+  compare versions numerically — the lexicographic `"1.0.10" < "1.0.9"`
+  bug that would have broken every future release-surface test is gone.
+
+### 🎨 Web UI (serve mode) polish
+
+Session message counts render from the meta-index stubs (no full load),
+message rendering batches through a document fragment (one reflow
+instead of N), long histories skip offscreen layout work
+(`content-visibility`), scrolling is smooth, and users who disable
+animations get them honored (`prefers-reduced-motion`).
+
+### 📦 Two zips, as always
+
+1. **`sheytan-local-agent-1.0.10.zip`** — the ready-to-run portable app
+   (exe + bundled llama.cpp engine + docs + worklog).
+2. **`sheytan-local-agent-1.0.10-github.zip`** — the complete source tree,
+   no binaries, with `.gitignore` and a GitHub Actions workflow.
+
 ## What's new in v1.0.9 — TURBINE: smooth 120fps streaming, the file studio, and a rewritten data engine
+
 
 ### ⚡ Smooth 120fps streaming — the frame-paced pump
 
@@ -90,9 +158,9 @@ The `files` tool grew from read/write/list/delete into a complete studio:
 
 ### 📦 Two zips, as always
 
-1. **`sheytan-local-agent-1.0.9.zip`** — the ready-to-run portable app
+1. **`sheytan-local-agent-1.0.10.zip`** — the ready-to-run portable app
    (exe + bundled llama.cpp engine + docs + worklog).
-2. **`sheytan-local-agent-1.0.9-github.zip`** — the complete source tree,
+2. **`sheytan-local-agent-1.0.10-github.zip`** — the complete source tree,
    no binaries, with `.gitignore` and a GitHub Actions workflow.
 
 ## What's new in v1.0.8 — AURORA: the attachment fix, the z.ai/Codex-grade UI, and Parsa Tak's signature

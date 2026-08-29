@@ -20,7 +20,7 @@ import (
 // the EngineCompat ladder field. (Version assertions are forward-compatible:
 // later releases keep passing.)
 func stressV105Defaults() error {
-	if config.AppVersion < "1.0.5" {
+	if !versionAtLeast(config.AppVersion, "1.0.5") {
 		return fmt.Errorf("AppVersion = %q, want >= 1.0.5", config.AppVersion)
 	}
 	cfg := config.Default()

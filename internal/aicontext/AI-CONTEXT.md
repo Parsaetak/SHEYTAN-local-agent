@@ -1,4 +1,4 @@
-<!-- sheytan-context-version: 9 -->
+<!-- sheytan-context-version: 10 -->
 <!-- This file is SHEYTAN's AI instruction file. It is prepended to the system
      prompt of every model plugged into the app. You may edit it freely — your
      edits are kept until an app upgrade ships a newer instruction version
@@ -271,6 +271,37 @@ rev, ps, uname, env, export, history, stat, neofetch + pipes. The working
 directory persists between calls. `~` is the app root; nothing outside it
 exists for this tool. No real processes are spawned — it is deterministic
 and safe. Prefer it over `shell` for file inspection and text wrangling.
+
+### json — query & transform JSON/JSONL (v1.0.10)
+`{"action":"query","path":"data.json","query":"items[*].name"}` — dot/bracket
+path extraction with `[*]` array wildcards. `where` filters JSONL rows:
+`{"action":"where","path":"events.jsonl","field":"level","op":"eq","value":"error"}`
+(ops: eq/ne/contains/gt/lt/gte/lte; add `"dest":"errors.jsonl"` to save matches).
+`stats` profiles objects (count, key frequency, value types, depth); `keys`
+lists recursive key paths; `pretty` reformats; `flatten` converts nested
+objects to dot-keyed flat ones (great handoff to dataAnalysis). Prefer it
+over codeExec for JSON surgery — it is instant and never breaks on imports.
+
+### archive — zip/tar without the shell (v1.0.10)
+`{"action":"zip","sources":["workspace/report","charts"],"path":"bundle.zip"}`
+bundles files/dirs (recursive, chunk-streamed). `unzip` extracts (dest
+optional; traversal-safe). `tar`/`untar` handle .tar/.tar.gz/.tgz. `list`
+inventories an archive without extracting. Use it to deliver artifacts or
+open data drops — no external tools needed.
+
+### fetch — read a URL fast (v1.0.10)
+`{"url":"https://example.com/article"}` — one bounded GET returning readable
+text (HTML stripped to content, entities decoded). `"mode":"raw"` returns
+the untouched body; `maxBytes` caps it (default 512 KB). Much faster than
+the browser for reading. Chain: webSearch (find) → fetch (read) → files
+(save) → dataAnalysis (analyze).
+
+### diff — verify what changed (v1.0.10)
+`{"path":"config-old.json","path2":"config-new.json"}` — line-level diff
+(Myers) with `-`/`+` regions and a similarity summary; `context` controls
+unchanged lines shown around each change. Use it to verify your own edits
+("I changed one line — diff proves it") or compare two versions the user
+names.
 
 ### Persistent recall (automatic)
 

@@ -23,7 +23,7 @@ import (
 func stressV108Surface() error {
         // v1.0.9: forward-compatible — the surface check pins the signature
         // (stable across releases) and requires the v1.0.8 baseline or newer.
-        if config.AppVersion < "1.0.8" {
+        if !versionAtLeast(config.AppVersion, "1.0.8") {
                 return fmt.Errorf("AppVersion = %s, want >= 1.0.8", config.AppVersion)
         }
         if brand.SignedBy != "Parsa Tak" {

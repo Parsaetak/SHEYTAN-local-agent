@@ -224,6 +224,18 @@ func runStressSuite(cfg *config.Config) int {
                 {"v109_sessions_store", func() error { return stressV109SessionsStore() }},
                 {"v109_sandbox_contract", func() error { return stressV109SandboxContract() }},
                 {"v109_aicontext_v9", func() error { return stressV109AicontextV9() }},
+                // NEW tests in v1.0.10 (the PRISM release: json/archive/
+                // fetch/diff tools, activity sidecar, BM25 corpus cache,
+                // numeric version assertions)
+                {"v110_release_surface", func() error { return stressV110Surface() }},
+                {"v110_json_query", func() error { return stressV110JSONQuery() }},
+                {"v110_json_where_stats", func() error { return stressV110JSONWhereStats() }},
+                {"v110_archive_roundtrip", func() error { return stressV110ArchiveRoundtrip() }},
+                {"v110_fetch_text", func() error { return stressV110FetchText() }},
+                {"v110_diff_lines", func() error { return stressV110DiffLines() }},
+                {"v110_sessions_sidecar", func() error { return stressV110SessionsSidecar() }},
+                {"v110_recall_cache", func() error { return stressV110RecallCache() }},
+                {"v110_aicontext_v10", func() error { return stressV110AicontextV10() }},
         }
 
         pass, fail := 0, 0

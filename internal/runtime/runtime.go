@@ -66,6 +66,12 @@ func NewStack(cfg *config.Config) *Stack {
         orch.Register(tools.NewBrowserTool(cfg)) // browser automation
         orch.Register(tools.NewDataTool(cfg))    // data analysis + charts
 
+        // v1.0.10 (PRISM): structured data, archives, URLs, verification.
+        orch.Register(tools.JSONTool{})          // JSON/JSONL query + transform
+        orch.Register(tools.ArchiveTool{})        // zip/tar create + extract
+        orch.Register(tools.NewFetchTool())       // bounded URL reader (text/raw)
+        orch.Register(tools.DiffTool{})           // line-level verification
+
         // v1.0.6: vision + terminal
         llamaSrv := llm.NewLlamaServer(cfg)
         orch.Register(tools.Screenshot{})
