@@ -495,18 +495,6 @@ func clip(s string, n int) string {
 }
 
 // Close flushes and closes every sink.
-func (m *Manager) Close() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for _, f := range []**os.File{&m.appF, &m.toolF, &m.llmF} {
-		if *f != nil {
-			_ = (*f).Close()
-			*f = nil
-		}
-	}
-}
-
-// Close releases all file handles owned by the manager.
 // It is safe to call more than once.
 func (m *Manager) Close() error {
     if m == nil || m == noop {
