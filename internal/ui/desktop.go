@@ -1299,52 +1299,99 @@ func (d *desktopApp) toggleThinking() {
 // showToolsPopup opens the tool-selection popover anchored at the composer
 // tools control: per-tool toggles plus quick presets.
 func (d *desktopApp) showToolsPopup() {
-        names := make([]string, 0, len(d.orch.Tools()))
-        for name := range d.orch.Tools() {
-                names = append(names, name)
-        }
-        sort.Strings(names)
+	tools := d.orch.Tools()
+	names := make([]string, 0, len(tools))
+	for name := range tools {
+		names = append(names, name)
+	}
+	sort.Strings(names)
 
-        box := container.NewVBox()
-        title := canvas.NewText("Tools the agent may use", ColTextMuted)
-        title.TextSize = 12
-        title.TextStyle.Bold = true
-        box.Add(container.NewPadded(title))
+	var pop *widget.PopUp
 
-        checks := container.NewVBox()
-        var pop *widget.PopUp
-        for _, name := range names {
-                toolName := name
-                chk := widget.NewCheck(toolName, func(on bool) {
-                        d.setToolEnabled(toolName, on)
-                })
-                chk.SetChecked(d.cfg.ToolEnabled(toolName))
-                checks.Add(container.NewPadded(chk))
-        }
-        box.Add(checks)
+	title := canvas.NewText("TOOLS", ColTextMuted)
+	title.TextSize = 11
+	title.TextStyle.Bold = true
 
-        allBtn := primaryButton("All", "check", func() {
-                d.setAllTools(true)
-                if pop != nil {
-                        pop.Hide()
-                }
-        })
-        localBtn := ghostButton("Local only", "sandbox", func() {
-                d.setToolPreset([]string{"files", "shell", "codeExec", "dataAnalysis", "git", "memory"})
-                if pop != nil {
-                        pop.Hide()
-                }
-        })
-        noneBtn := ghostButton("None", "close", func() {
-                d.setAllTools(false)
-                if pop != nil {
-                        pop.Hide()
-                }
-        })
-        box.Add(container.NewPadded(container.NewHBox(allBtn, localBtn, noneBtn)))
+	subtitle := canvas.NewText(
+		fmt.Sprintf("%d available tools", len(names)),
+		ColTextMuted,
+	)
+	subtitle.TextSize = 11
 
-        pop = widget.NewPopUp(box, d.win.Canvas())
-        pop.ShowAtPosition(fyne.NewPos(16, d.win.Content().Size().Height-260))
+	header := container.NewVBox(
+		container.NewPadded(title),
+		container.NewPadded(subtitle),
+	)
+
+	list := container.NewVBox()
+	list.Add(header)
+	list.Add(canvas.NewRectangle(ColBorderSoft))
+
+	for _, name := range names {
+		toolName := name
+		chk := widget.NewCheck(toolName, func(on bool) {
+			d.setToolEnabled(toolName, on)
+		})
+		chk.SetChecked(d.cfg.ToolEnabled(toolName))
+
+		list.Add(container.NewPadded(chk))
+	}
+
+	scroll := container.NewVScroll(list)
+	scroll.SetMinSize(fyne.NewSize(360, 360))
+
+	allBtn := ghostButton("All", "check", func() {
+		d.setAllTools(true)
+		if pop != nil {
+			pop.Hide()
+		}
+	})
+
+	localBtn := ghostButton("Local", "sandbox", func() {
+		d.setToolPreset([]string{
+			"files",
+			"shell",
+			"codeExec",
+			"dataAnalysis",
+			"git",
+			"memory",
+		})
+		if pop != nil {
+			pop.Hide()
+		}
+	})
+
+	noneBtn := ghostButton("None", "close", func() {
+		d.setAllTools(false)
+		if pop != nil {
+			pop.Hide()
+		}
+	})
+
+	actions := container.NewHBox(
+		container.NewPadded(allBtn),
+		container.NewPadded(localBtn),
+		container.NewPadded(noneBtn),
+	)
+
+	box := container.NewBorder(
+		container.NewPadded(header),
+		container.NewPadded(actions),
+		nil,
+		nil,
+		scroll,
+	)
+
+	pop = widget.NewPopUp(box, d.win.Canvas())
+
+	canvasSize := d.win.Canvas().Size()
+	x := float32(16)
+	y := canvasSize.Height - 430
+	if y < 16 {
+		y = 16
+	}
+
+	pop.ShowAtPosition(fyne.NewPos(x, y))
 }
 
 // setToolEnabled flips one tool and persists.
