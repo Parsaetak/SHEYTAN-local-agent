@@ -33,6 +33,9 @@ func newPickerTestApp(t *testing.T) *desktopApp {
     cfg.ModelsDir = filepath.Join(dir, "models")
     cfg.SessionsDir = filepath.Join(dir, "sessions")
     _ = cfg.EnsureDirs()
+	// Headless UI tests must not start the asynchronous recall backfill,
+// because it can write into TempDir after the test has returned.
+cfg.RecallEnabled = false
 
     mgr, err := logging.New(cfg.LogsDir())
     if err == nil {
