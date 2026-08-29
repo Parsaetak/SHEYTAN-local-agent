@@ -33,10 +33,18 @@ func newPickerTestApp(t *testing.T) *desktopApp {
 	_ = cfg.EnsureDirs()
 
 	mgr, err := logging.New(cfg.LogsDir())
-	if err == nil {
-		logging.SetDefault(mgr)
-		logging.SetVersion(config.AppVersion)
-	}
+if err == nil {
+    logging.SetDefault(mgr)
+    logging.SetVersion(config.AppVersion)
+
+    // Windows keeps exclusive file handles open until explicitly closed.
+    // Register cleanup before returning so TempDir cleanup happens only
+    // after app.log/tools.jsonl/llm.jsonl are released.
+    t.Cleanup(func() {
+        _ = mgr.Close()
+        logging.SetDefault(nil)
+    })
+}
 	stack := agentrt.NewStack(cfg)
 	d := &desktopApp{
 		cfg:    cfg,
