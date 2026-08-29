@@ -63,21 +63,29 @@ cfg.RecallEnabled = false
     d.fader = newCrossFader()
 
     t.Cleanup(func() {
-        if d.win != nil {
-            d.win.Close()
-        }
+    if d.win != nil {
+        d.win.Close()
+        d.win = nil
+    }
 
-        if d.stack != nil {
-            d.stack.Close()
-        }
+    // Remove the temporary app data before TempDir's own cleanup.
+    // Some headless Fyne/runtime components can leave empty directories
+    // behind after the test window closes.
+    _ = os.RemoveAll(filepath.Join(dir, "sandbox"))
+    _ = os.RemoveAll(filepath.Join(dir, "models"))
+    _ = os.RemoveAll(filepath.Join(dir, "sessions"))
 
-        if err := mgr.Close(); err != nil {
-            t.Logf("close logger: %v", err)
-        }
+    if d.stack != nil {
+        d.stack.Close()
+    }
 
-        logging.SetDefault(nil)
-        a.Quit()
-    })
+    if err := mgr.Close(); err != nil {
+        t.Logf("close logger: %v", err)
+    }
+
+    logging.SetDefault(nil)
+    a.Quit()
+})
 
     return d
 }
