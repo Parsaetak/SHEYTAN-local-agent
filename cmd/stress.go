@@ -236,6 +236,12 @@ func runStressSuite(cfg *config.Config) int {
                 {"v110_sessions_sidecar", func() error { return stressV110SessionsSidecar() }},
                 {"v110_recall_cache", func() error { return stressV110RecallCache() }},
                 {"v110_aicontext_v10", func() error { return stressV110AicontextV10() }},
+                // NEW tests in v1.0.11 (the GRANITE release: anchored
+                // .gitignore + release gate, collision-proof memory IDs,
+                // Windows-safe log rotation, pinned CI toolchain)
+                {"v111_release_surface", func() error { return stressV111ReleaseSurface() }},
+                {"v111_memory_unique_ids", func() error { return stressV111MemoryUniqueIDs() }},
+                {"v111_trimlogs_rotate", func() error { return stressV111TrimLogsRotate() }},
         }
 
         pass, fail := 0, 0

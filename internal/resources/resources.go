@@ -197,16 +197,13 @@ func rotateTail(path string, keep int64) (int64, error) {
         if fi.Size() <= keep {
                 return 0, nil
         }
-        f, err := os.Open(path)
+        // Read the tail and CLOSE the source before any rename. On Windows
+        // the old v1.0.10 code held `f` open across os.Rename(tmp, path):
+        // Windows refuses to replace a file that still has an open handle,
+        // the rename failed, TrimLogs silently ate the error and no bytes
+        // were ever freed (the exact CI failure on windows-latest).
+        tail, err := readTail(path, keep)
         if err != nil {
-                return 0, err
-        }
-        defer f.Close()
-        if _, err := f.Seek(-keep, io.SeekEnd); err != nil {
-                return 0, err
-        }
-        tail := make([]byte, keep)
-        if _, err := io.ReadFull(f, tail); err != nil {
                 return 0, err
         }
         tmp := path + ".rot"
@@ -218,6 +215,24 @@ func rotateTail(path string, keep int64) (int64, error) {
                 return 0, err
         }
         return fi.Size() - keep, nil
+}
+
+// readTail returns the last `keep` bytes of `path`. The file is fully closed
+// before the function returns, so a caller may replace the file immediately.
+func readTail(path string, keep int64) ([]byte, error) {
+        f, err := os.Open(path)
+        if err != nil {
+                return nil, err
+        }
+        defer f.Close()
+        if _, err := f.Seek(-keep, io.SeekEnd); err != nil {
+                return nil, err
+        }
+        tail := make([]byte, keep)
+        if _, err := io.ReadFull(f, tail); err != nil {
+                return nil, err
+        }
+        return tail, nil
 }
 
 // ClearDir removes every child of dir (the folder itself survives). Returns

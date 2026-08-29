@@ -26,8 +26,10 @@ import (
 // stressV110Surface: version + signature + context version + the tool
 // registry carrying the four new tools.
 func stressV110Surface() error {
-        if config.AppVersion != "1.0.10" {
-                return fmt.Errorf("AppVersion = %q, want 1.0.10", config.AppVersion)
+        // v1.0.11: forward-compatible pin (the v1.0.11 surface test owns
+        // the exact-version assertion now).
+        if !versionAtLeast(config.AppVersion, "1.0.10") {
+                return fmt.Errorf("AppVersion = %q, want >= 1.0.10", config.AppVersion)
         }
         if brand.SignedBy != "Parsa Tak" {
                 return fmt.Errorf("SignedBy = %q, want \"Parsa Tak\"", brand.SignedBy)

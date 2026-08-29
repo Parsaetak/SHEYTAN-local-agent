@@ -1,4 +1,4 @@
-# SHEYTAN™ Local-Agent v1.0.10
+# SHEYTAN™ Local-Agent v1.0.11
 
 > Native Windows desktop AI agent. Go binary + Fyne UI. **SHEYTAN™ is a
 > trademark of Parsaetak · © 2024–2026 Parsaetak. All rights reserved.
@@ -13,6 +13,74 @@
 > OpenAI-compatible endpoint. **Everything lives inside the app folder —
 > fully portable.**
 
+## What's new in v1.0.11 — GRANITE: the release that actually builds on GitHub
+
+### 🔬 The real v1.0.10 root cause — found and killed
+
+v1.0.10 shipped claiming `internal/sessions` and `internal/sandbox` were in
+the repository. They were not — and the reason was never a missed file.
+The repo's `.gitignore` listed the app's *runtime data folders*
+(`sessions/`, `sandbox/`, `data/`, `logs/`, …) **unanchored**, so those
+patterns also matched `internal/sessions/` and `internal/sandbox/` at any
+depth. Git silently refused to track the two packages on every
+`git add` — they existed on disk (which is why local builds passed) but
+never entered a commit (which is why GitHub CI failed with `no required
+module provides package …`). v1.0.11:
+
+- **Anchors every runtime-folder pattern to the repo root** (`/sessions/`,
+  `/sandbox/`, …) so they can only ever match the data folders created
+  next to the exe, never source.
+- **Adds `internal/releasegate`** — a unit-test gate that walks the real
+  source tree and asks `git check-ignore` whether ANY source file is
+  invisible to git. It runs in CI as part of `go test ./internal/...`, so
+  a re-broken `.gitignore` fails the build *before* a broken release can
+  be pushed — in CI the test tree IS the pushed commit.
+- **Commits both packages in the same change** (verified: `git ls-files
+  internal/sessions internal/sandbox` is no longer empty).
+
+### 🐛 The two Windows test failures — fixed at the source
+
+- **Memory IDs could collide on Windows.** `uniqueID()` built IDs from a
+  timestamp plus only the last six digits of the nanosecond clock — two
+  rapid `Append()` calls inside one clock tick produced the SAME id, and
+  one `DeleteByID()` then removed both entries. IDs are now
+  timestamp + per-process atomic counter + 4 crypto-random bytes:
+  collision-safe across clock granularity AND process restarts, still
+  chronologically sortable. Pinned by `TestUniqueIDNeverCollides` (200
+  rapid appends → 200 distinct IDs → one delete removes exactly one) and
+  stress scenario `v111_memory_unique_ids` (300 appends).
+- **`TrimLogs` freed zero bytes on Windows.** `rotateTail()` renamed the
+  rotated file over the original while still holding an open handle to
+  it — Windows refuses to replace an open file, the error was swallowed,
+  and log trimming silently did nothing. The tail is now read and the
+  handle fully closed before the rename. Pinned by
+  `TestTrimLogsRotatesTail` and stress `v111_trimlogs_rotate`
+  (bytes freed > 0, ends on a line boundary, no `.rot` leftovers).
+
+### 🔧 CI workflow hygiene
+
+- **Toolchain pinned** to `go-version: '1.26'` (the go.mod line) instead
+  of floating on `stable`, which had silently moved CI to Go 1.27.
+- **Branch triggers repaired**: a YAML typo (`branches: ain, master]`)
+  meant branch pushes never triggered builds — only tags did. Now
+  `[main, master]`, and tags accept both `v*` and `1.*` styles.
+- **Actions upgraded to the Node-24 runtimes**: `checkout@v5`,
+  `setup-go@v6`, `upload-artifact@v5` (clears the Node 20 deprecation
+  warnings), plus a `go vet` step alongside the test step.
+
+All of the above is asserted by stress scenario `v111_release_surface`
+(exact version, anchored patterns, pinned toolchain, repaired triggers) —
+run `sheytan-local-agent stress` and watch it hold the line.
+
+### 📦 Two zips, as always
+
+1. **`sheytan-local-agent-1.0.11.zip`** — the ready-to-run portable app
+   (exe + bundled llama.cpp engine + docs + worklog).
+2. **`sheytan-local-agent-1.0.11-github.zip`** — the complete source tree,
+   no binaries, with `.gitignore` and a GitHub Actions workflow — **and a
+   compile gate that builds the staged source tree itself** before the zip
+   is sealed.
+
 ## What's new in v1.0.10 — PRISM: the build fix, four new tools, and leaner session I/O
 
 ### 🔧 The v1.0.9 GitHub build error — fixed at the root
@@ -20,9 +88,10 @@
 The v1.0.9 tag failed CI with `no required module provides package
 github.com/sheytan/local-agent/internal/sessions` (and the same for
 `internal/sandbox`): both packages existed in the dev tree but were never
-committed. v1.0.10 ships both in the repository, and the build script now
-compiles the GitHub-zip source tree itself before packaging, so a
-source-incomplete release can never ship again.
+committed. v1.0.10 intended to ship both, but an unanchored `.gitignore`
+pattern (see the v1.0.11 notes above) kept silently swallowing them from
+every commit — the actual fix landed in v1.0.11, together with a release
+gate that makes this class of failure impossible to ship again.
 
 ### 🧰 Four new agent tools
 

@@ -16,7 +16,7 @@ import (
 
 const (
         AppName    = "SHEYTAN-Local-Agent"
-        AppVersion = "1.0.10"
+        AppVersion = "1.0.11"
 )
 
 // Provider kinds: "local" (bundled llama.cpp) or "remote" (any

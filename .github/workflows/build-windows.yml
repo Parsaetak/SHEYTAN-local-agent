@@ -6,12 +6,19 @@
 # PARSA TAK via its embedded version resource (CompanyName + signature
 # line); a code-signing certificate can be added as a repository secret
 # later without touching this workflow.
+#
+# v1.0.11: the toolchain is PINNED to the go.mod minor line (1.26) instead
+# of floating on 'stable' — a floating toolchain silently moved CI to
+# Go 1.27 while go.mod declared 1.26. Action versions were bumped to the
+# Node 24 runtimes (checkout@v5, setup-go@v6, upload-artifact@v5) to clear
+# the Node 20 deprecation warnings. The branches list was also repaired:
+# a YAML typo ('ain, master]') meant branch pushes never triggered builds.
 name: build-windows
 
 on:
   push:
     branches: [main, master]
-    tags: ['v*']
+    tags: ['v*', '1.*']
   pull_request:
     branches: [main, master]
   workflow_dispatch:
@@ -23,11 +30,11 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
-          go-version: 'stable'
+          go-version: '1.26' # pinned to the go.mod line — never float on 'stable'
           cache: true
 
       - name: Regenerate Windows resources (icon + version + manifest)
@@ -35,6 +42,9 @@ jobs:
 
       - name: Run unit tests
         run: go test ./internal/... -tags headless
+
+      - name: Vet
+        run: go vet ./internal/...
 
       - name: Build Windows exe
         run: |
@@ -50,7 +60,7 @@ jobs:
           EOF
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: sheytan-local-agent-windows
           path: sheytan-local-agent.exe

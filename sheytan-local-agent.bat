@@ -1,5 +1,5 @@
 @echo off
-REM SHEYTAN(TM)-Local-Agent v1.0.10 launcher
+REM SHEYTAN(TM)-Local-Agent v1.0.11 launcher
 REM
 REM Double-click to launch the native desktop GUI.
 REM (c) 2024-2026 Parsaetak. All rights reserved.
@@ -31,6 +31,14 @@ REM four new agent tools (json query/transform, archive zip/tar, fetch
 REM URL reader, diff verifier), the activity feed moved to an append-only
 REM sidecar (serve mode no longer rewrites whole session files per tool
 REM event) and the recall engine caches its BM25 corpus stats.
+REM v1.0.11: GRANITE — the release that actually builds on GitHub. Root
+REM cause of the v1.0.9/v1.0.10 CI failures found: an UNANCHORED .gitignore
+REM pattern silently swallowed internal/sessions + internal/sandbox from
+REM every commit (patterns are now root-anchored + a release-gate test
+REM guards it in CI). Memory IDs are collision-proof on Windows clock
+REM granularity, TrimLogs no longer renames over an open file (it freed
+REM zero bytes on Windows), and CI pins Go 1.26 with repaired branch
+REM triggers and Node-24 actions.
 
 setlocal
 
