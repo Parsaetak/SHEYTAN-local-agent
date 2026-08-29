@@ -21,47 +21,62 @@ import (
 )
 
 func newPickerTestApp(t *testing.T) *desktopApp {
-	t.Helper()
-	a := test.NewApp()
-	a.Settings().SetTheme(Theme())
+    t.Helper()
 
-	dir := t.TempDir()
-	cfg := config.Default()
-	cfg.DataDir = dir
-	cfg.ModelsDir = filepath.Join(dir, "models")
-	cfg.SessionsDir = filepath.Join(dir, "sessions")
-	_ = cfg.EnsureDirs()
+    a := test.NewApp()
+    a.Settings().SetTheme(Theme())
 
-	mgr, err := logging.New(cfg.LogsDir())
-if err == nil {
-    logging.SetDefault(mgr)
-    logging.SetVersion(config.AppVersion)
+    dir := t.TempDir()
 
-    // Windows keeps exclusive file handles open until explicitly closed.
-    // Register cleanup before returning so TempDir cleanup happens only
-    // after app.log/tools.jsonl/llm.jsonl are released.
+    cfg := config.Default()
+    cfg.DataDir = dir
+    cfg.ModelsDir = filepath.Join(dir, "models")
+    cfg.SessionsDir = filepath.Join(dir, "sessions")
+    _ = cfg.EnsureDirs()
+
+    mgr, err := logging.New(cfg.LogsDir())
+    if err == nil {
+        logging.SetDefault(mgr)
+        logging.SetVersion(config.AppVersion)
+    }
+
+    stack := agentrt.NewStack(cfg)
+
+    d := &desktopApp{
+        cfg:    cfg,
+        fyne:   a,
+        store:  sessions.New(cfg.SessionsDir),
+        client: stack.Client,
+        orch:   stack.Orch,
+        multi:  stack.Multi,
+        mem:    stack.Mem,
+        llama:  stack.Llama,
+        sb:     stack.Sandbox,
+        stack:  stack,
+    }
+
+    d.navRows = map[string]*navRow{}
+    d.views = map[string]fyne.CanvasObject{}
+    d.fader = newCrossFader()
+
     t.Cleanup(func() {
-        _ = mgr.Close()
+        if d.win != nil {
+            d.win.Close()
+        }
+
+        if d.stack != nil {
+            d.stack.Close()
+        }
+
+        if err := mgr.Close(); err != nil {
+            t.Logf("close logger: %v", err)
+        }
+
         logging.SetDefault(nil)
+        a.Quit()
     })
-}
-	stack := agentrt.NewStack(cfg)
-	d := &desktopApp{
-		cfg:    cfg,
-		fyne:   a,
-		store:  sessions.New(cfg.SessionsDir),
-		client: stack.Client,
-		orch:   stack.Orch,
-		multi:  stack.Multi,
-		mem:    stack.Mem,
-		llama:  stack.Llama,
-		sb:     stack.Sandbox,
-		stack:  stack,
-	}
-	d.navRows = map[string]*navRow{}
-	d.views = map[string]fyne.CanvasObject{}
-	d.fader = newCrossFader()
-	return d
+
+    return d
 }
 
 // TestModelPickerAppliesModel proves the fixed interaction: tapping a model
