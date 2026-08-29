@@ -241,7 +241,7 @@ Karaj,Laptop,10,880,8800
 	}
 	d.appendMessage("user", long)
 	d.appendMessage("assistant", "**Understood.** The long message above is fully contained in its own bubble — the next messages never overlap it.")
-	d.appendActivity(agent.Activity{Type: "tool_start", Caption: "Calling tool: dataAnalysis({\"action\":\"query\",\"select\":[\"region\",\"product\",\"units\",\"price\",\"revenue\"],\"where\":\"revenue>5000\",\"orderBy\":\"revenue desc\"}) — extremely long activity caption to prove truncation works", Timestamp: nowAt(6)})
+	d.appendActivity(agent.Activity{Type: "tool_start", Caption: "Calling tool: dataAnalysis({\"action\":\"query\",\"select\":[\"region\",\"product\",\"units\",\"price\",\"revenue\"],\"where\":\"revenue>5000\",\"orderBy\":\"revenue desc\"}) - extremely long activity caption to prove truncation works", Timestamp: nowAt(6)})
 	d.msgInput.SetText(strings.Repeat("A wall of pasted text that used to inflate the input panel until it covered the message list.\n", 30))
 	capture(t, c, "09-longmsg")
 
