@@ -197,7 +197,7 @@ Karaj,Laptop,10,880,8800
 
 	// 5. Running state (flame + dots + abort).
 	d.showView("chat")
-	d.setRunning(true, "Calling tool: dataAnalysis({\"action\":\"stats\"…})")
+	d.setRunning(true, "Calling tool: dataAnalysis({\"action\":\"stats\"}...)")
 	capture(t, c, "05-running")
 	d.setRunning(false, "")
 
