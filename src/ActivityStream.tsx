@@ -1,4 +1,5 @@
 import {
+	memo,
 	useEffect,
 	useMemo,
 	useRef,
@@ -33,6 +34,52 @@ function formatActivity(
 	return activity.type;
 }
 
+const ActivityItem = memo(
+	function ActivityItem({
+		item,
+	}: {
+		item: ActivityEvent;
+	}) {
+		return (
+			<article
+				className="activity-item"
+				key={item.id}
+			>
+				<div className="activity-marker">
+					<span />
+				</div>
+
+				<div className="activity-content">
+					<div className="activity-meta">
+						<span>
+							{item.type}
+						</span>
+
+						<time>
+							{new Date(
+								item.timestamp,
+							).toLocaleTimeString(
+								[],
+								{
+									hour: "2-digit",
+									minute: "2-digit",
+									second: "2-digit",
+								},
+							)}
+						</time>
+					</div>
+
+					<p>
+						{formatActivity(
+							item,
+						)}
+					</p>
+				</div>
+			</article>
+		);
+	},
+);
+
 function ActivityStream() {
 	const activity = useRuntimeStore(
 		(state) => state.activity,
@@ -49,6 +96,9 @@ function ActivityStream() {
 			null,
 		);
 
+	const scrollFrameRef =
+		useRef<number | null>(null);
+
 	const visibleActivity = useMemo(
 		() =>
 			activity.length >
@@ -61,12 +111,41 @@ function ActivityStream() {
 	);
 
 	useEffect(() => {
-		activityEndRef.current?.scrollIntoView(
-			{
-				behavior: "smooth",
-				block: "nearest",
-			},
-		);
+		if (
+			scrollFrameRef.current !==
+			null
+		) {
+			cancelAnimationFrame(
+				scrollFrameRef.current,
+			);
+		}
+
+		scrollFrameRef.current =
+			requestAnimationFrame(() => {
+				scrollFrameRef.current =
+					null;
+
+				activityEndRef.current?.scrollIntoView(
+					{
+						behavior: "auto",
+						block: "nearest",
+					},
+				);
+			});
+
+		return () => {
+			if (
+				scrollFrameRef.current !==
+				null
+			) {
+				cancelAnimationFrame(
+					scrollFrameRef.current,
+				);
+
+				scrollFrameRef.current =
+					null;
+			}
+		};
 	}, [activity]);
 
 	return (
@@ -122,45 +201,10 @@ function ActivityStream() {
 				) : (
 					visibleActivity.map(
 						(item) => (
-							<article
-								className="activity-item"
-								key={
-									item.id
-								}
-							>
-								<div className="activity-marker">
-									<span />
-								</div>
-
-								<div className="activity-content">
-									<div className="activity-meta">
-										<span>
-											{
-												item.type
-											}
-										</span>
-
-										<time>
-											{new Date(
-												item.timestamp,
-											).toLocaleTimeString(
-												[],
-												{
-													hour: "2-digit",
-													minute: "2-digit",
-													second: "2-digit",
-												},
-											)}
-										</time>
-									</div>
-
-									<p>
-										{formatActivity(
-											item,
-										)}
-									</p>
-								</div>
-							</article>
+							<ActivityItem
+								key={item.id}
+								item={item}
+							/>
 						),
 					)
 				)}
