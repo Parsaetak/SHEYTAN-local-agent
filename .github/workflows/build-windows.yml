@@ -51,8 +51,10 @@ jobs:
       - name: Frontend lint
         run: npm run lint
 
-      - name: Frontend format check
-        run: npm run format:check
+      - name: Frontend format
+        run: |
+          npm run format
+          npm run format:check
 
       - name: Build frontend and synchronize embedded assets
         run: npm run build
@@ -61,7 +63,8 @@ jobs:
         run: |
           test -f web/static/index.html
           test -d web/static/assets
-          echo "Embedded frontend assets verified."
+          grep -q 'type="module"' web/static/index.html
+          echo "Embedded Node/Vite frontend verified."
 
       - name: Regenerate Windows resources
         run: go run ./scripts/gen-syso
