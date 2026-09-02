@@ -1,7 +1,7 @@
- // Package runtime wires the full SHEYTAN agent stack: LLM client,
- // orchestrator with every built-in tool, memory, multi-agent layer, research,
- // and the llama.cpp subprocess manager. Both the desktop GUI and the headless
- // `ask` CLI build on this so they stay feature-identical.
+// Package runtime wires the full SHEYTAN agent stack: LLM client,
+// orchestrator with every built-in tool, memory, multi-agent layer,
+// research, and the llama.cpp subprocess manager. Both the desktop GUI
+// and the headless `ask` CLI build on this so they stay feature-identical.
 package runtime
 
 import (
@@ -23,6 +23,7 @@ import (
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/sessions"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/tools"
 )
+
 // Stack is the fully-wired agent runtime.
 type Stack struct {
 	Cfg     *config.Config
@@ -57,17 +58,24 @@ func NewStack(cfg *config.Config) *Stack {
 	client := llm.NewClient(cfg)
 	orch := agent.New(cfg, client)
 
-	// v1.0.1: materialize AI-CONTEXT.md in the app folder (user-readable,
-	// user-editable, version-managed) and remember its path for the UI/CLI.
-	if path, err := aicontext.EnsureFile(cfg.DataDir); err != nil {
-		logging.Default().Warn("runtime", "AI context file: %v", err)
+	// v1.0.1: materialize AI-CONTEXT.md in the app folder.
+	if path, err := aicontext.EnsureFile(
+		cfg.DataDir,
+	); err != nil {
+		logging.Default().Warn(
+			"runtime",
+			"AI context file: %v",
+			err,
+		)
 	} else {
-		logging.Default().Info("runtime", "AI context file: %s", path)
+		logging.Default().Info(
+			"runtime",
+			"AI context file: %s",
+			path,
+		)
 	}
 
-	// Canonical base dir for every tool: the portable app folder.
-	// Relative paths in files/shell/git/dataAnalysis all resolve here,
-	// so chained workflows (files→dataAnalysis→git) never break.
+	// Canonical base dir for every tool.
 	tools.SetBaseDir(cfg.DataDir)
 
 	// Core tools.
@@ -87,20 +95,23 @@ func NewStack(cfg *config.Config) *Stack {
 
 	// v1.0.6: vision + terminal.
 	llamaSrv := llm.NewLlamaServer(cfg)
+
 	orch.Register(tools.Screenshot{})
 
-	linuxSim := tools.NewLinuxSim(cfg.DataDir)
+	linuxSim := tools.NewLinuxSim(
+		cfg.DataDir,
+	)
+
 	orch.Register(linuxSim)
 
 	// Version Zeta: autonomous Coding Lab.
-	// The Lab is registered only when enabled. Initialization failure is
-	// surfaced through logging while preserving the rest of the runtime.
 	var labTool *lab.Tool
 
 	if cfg.LabEnabled {
 		var err error
 
 		labTool, err = lab.NewTool(cfg)
+
 		if err != nil {
 			logging.Default().Warn(
 				"runtime",
@@ -120,10 +131,6 @@ func NewStack(cfg *config.Config) *Stack {
 	}
 
 	// Version Zeta: unified external research.
-	//
-	// The service owns provider routing and result normalization. The agent
-	// receives one stable "research" tool, while GitHub and Reddit remain
-	// independently replaceable providers.
 	var researchService *research.Service
 	var researchTool *research.Tool
 
@@ -131,13 +138,19 @@ func NewStack(cfg *config.Config) *Stack {
 		researchConfig := research.ServiceConfig{
 			Backend:    cfg.ResearchBackend,
 			MaxResults: cfg.ResearchMaxResults,
-			Timeout:    researchTimeout(cfg.ResearchTimeoutSec),
+			Timeout: researchTimeout(
+				cfg.ResearchTimeoutSec,
+			),
 		}
 
-		researchService = research.NewService(researchConfig)
+		researchService = research.NewService(
+			researchConfig,
+		)
 
 		researchHTTPClient := &http.Client{
-			Timeout: researchTimeout(cfg.ResearchTimeoutSec),
+			Timeout: researchTimeout(
+				cfg.ResearchTimeoutSec,
+			),
 		}
 
 		if cfg.ResearchGitHub {
@@ -147,7 +160,9 @@ func NewStack(cfg *config.Config) *Stack {
 				"",
 			)
 
-			if err := researchService.Register(githubProvider); err != nil {
+			if err := researchService.Register(
+				githubProvider,
+			); err != nil {
 				logging.Default().Warn(
 					"research",
 					"GitHub provider unavailable: %v",
@@ -169,7 +184,9 @@ func NewStack(cfg *config.Config) *Stack {
 				cfg.ResearchUserAgent,
 			)
 
-			if err := researchService.Register(redditProvider); err != nil {
+			if err := researchService.Register(
+				redditProvider,
+			); err != nil {
 				logging.Default().Warn(
 					"research",
 					"Reddit provider unavailable: %v",
@@ -183,7 +200,57 @@ func NewStack(cfg *config.Config) *Stack {
 			}
 		}
 
-		tool, err := research.NewTool(researchService)
+		if cfg.ResearchWeb {
+			duckDuckGoProvider :=
+				research.NewDuckDuckGoProvider(
+					researchHTTPClient,
+					"",
+				)
+
+			if err := researchService.Register(
+				duckDuckGoProvider,
+			); err != nil {
+				logging.Default().Warn(
+					"research",
+					"DuckDuckGo provider unavailable: %v",
+					err,
+				)
+			} else {
+				logging.Default().Info(
+					"research",
+					"DuckDuckGo provider registered",
+				)
+			}
+		}
+
+		if cfg.ResearchSearXNGURL != "" {
+			searxngProvider :=
+				research.NewSearXNGProvider(
+					researchHTTPClient,
+					cfg.ResearchSearXNGURL,
+				)
+
+			if err := researchService.Register(
+				searxngProvider,
+			); err != nil {
+				logging.Default().Warn(
+					"research",
+					"SearXNG provider unavailable: %v",
+					err,
+				)
+			} else {
+				logging.Default().Info(
+					"research",
+					"SearXNG provider registered: %s",
+					cfg.ResearchSearXNGURL,
+				)
+			}
+		}
+
+		tool, err := research.NewTool(
+			researchService,
+		)
+
 		if err != nil {
 			logging.Default().Warn(
 				"research",
@@ -192,6 +259,7 @@ func NewStack(cfg *config.Config) *Stack {
 			)
 		} else {
 			researchTool = tool
+
 			orch.Register(researchTool)
 
 			logging.Default().Info(
@@ -199,14 +267,16 @@ func NewStack(cfg *config.Config) *Stack {
 				"unified research tool registered: backend=%s results=%d timeout=%s providers=%v",
 				researchService.Backend(),
 				cfg.ResearchMaxResults,
-				researchTimeout(cfg.ResearchTimeoutSec),
+				researchTimeout(
+					cfg.ResearchTimeoutSec,
+				),
 				researchService.ProviderNames(),
 			)
 		}
 	}
 
 	// Vision gate: the screenshot tool refuses politely when the engine
-	// cannot see images (no projector paired / remote provider).
+	// cannot see images.
 	tools.VisionCheck = func() error {
 		if cfg.IsRemote() {
 			return fmt.Errorf(
@@ -229,19 +299,27 @@ func NewStack(cfg *config.Config) *Stack {
 		return nil
 	}
 
-	// Memory + persistent recall (v1.0.2): the recall engine indexes a tiny
-	// digest of every completed exchange and re-injects the most relevant
-	// ones into each new turn — past chats stay usable without re-feeding
-	// them into the context window.
-	mem := memory.New(cfg.DataDir + "/memory.jsonl")
-	engine := recall.New(cfg.DataDir)
+	// Memory + persistent recall.
+	mem := memory.New(
+		cfg.DataDir + "/memory.jsonl",
+	)
+
+	engine := recall.New(
+		cfg.DataDir,
+	)
 
 	orch.Register(memory.Tool{
 		Store: mem,
-		RecallSearch: func(query string, k int) []string {
+		RecallSearch: func(
+			query string,
+			k int,
+		) []string {
 			var lines []string
 
-			for _, c := range engine.Search(query, k) {
+			for _, c := range engine.Search(
+				query,
+				k,
+			) {
 				lines = append(
 					lines,
 					formatCapsuleLine(c),
@@ -256,9 +334,13 @@ func NewStack(cfg *config.Config) *Stack {
 		orch.SetRecaller(engine)
 
 		go func() {
-			store := sessions.New(cfg.SessionsDir)
+			store := sessions.New(
+				cfg.SessionsDir,
+			)
 
-			if err := engine.Backfill(store); err != nil {
+			if err := engine.Backfill(
+				store,
+			); err != nil {
 				logging.Default().Warn(
 					"recall",
 					"backfill: %v",
@@ -274,8 +356,7 @@ func NewStack(cfg *config.Config) *Stack {
 		}()
 	}
 
-	// Job-Object sandbox (overrides plain codeExec when available);
-	// workdirs live under <app folder>/sandbox/.
+	// Job-Object sandbox (overrides plain codeExec when available).
 	sb, sbErr := sandbox.NewCodeExecSandbox(
 		512,
 		25,
@@ -317,20 +398,25 @@ func NewStack(cfg *config.Config) *Stack {
 	}
 }
 
-// researchTimeout converts the configuration's seconds value into a safe
-// service/client timeout.
+// researchTimeout converts the configuration's seconds value
+// into a safe service/client timeout.
 func researchTimeout(seconds int) time.Duration {
 	if seconds <= 0 {
 		seconds = 20
 	}
 
-	return time.Duration(seconds) * time.Second
+	return time.Duration(seconds) *
+		time.Second
 }
 
-// formatCapsuleLine renders one recall capsule for the memory tool's
-// history action.
-func formatCapsuleLine(c recall.Capsule) string {
-	line := c.TS.Format("2006-01-02") +
+// formatCapsuleLine renders one recall capsule for the memory
+// tool's history action.
+func formatCapsuleLine(
+	c recall.Capsule,
+) string {
+	line := c.TS.Format(
+		"2006-01-02",
+	) +
 		" [" +
 		c.SessionID +
 		"]"
@@ -367,8 +453,9 @@ func (s *Stack) BrowserTool() *tools.BrowserTool {
 }
 
 // EnsureLLM makes sure an LLM backend is reachable:
-//   - provider "local": boots the bundled llama.cpp server (downloads the
-//     binary on first run) unless one is already running
+//
+//   - provider "local": boots the bundled llama.cpp server unless one is
+//     already running
 //   - provider "remote": nothing to boot — the endpoint is used as-is
 func (s *Stack) EnsureLLM() error {
 	if s.Cfg.IsRemote() {
