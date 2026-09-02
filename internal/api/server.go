@@ -411,6 +411,9 @@ func (s *Server) mergeConfigPatch(data []byte) error {
 	if err := json.Unmarshal(data, &patch); err != nil {
 		return err
 	}
+	if patch == nil {
+		return fmt.Errorf("configuration patch must be a JSON object")
+	}
 
 	currentData, err := json.Marshal(s.cfg)
 	if err != nil {
