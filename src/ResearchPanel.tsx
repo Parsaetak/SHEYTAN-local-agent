@@ -1,4 +1,5 @@
 import {
+	memo,
 	type FormEvent,
 	useEffect,
 	useMemo,
@@ -7,6 +8,13 @@ import {
 
 import type { ResearchResult } from "./api";
 import { useRuntimeStore } from "./store";
+
+const publishedAtFormatter =
+	new Intl.DateTimeFormat([], {
+		year: "numeric",
+		month: "short",
+		day: "numeric",
+	});
 
 function formatDuration(value: number): string {
 	if (!Number.isFinite(value) || value < 0) {
@@ -34,11 +42,7 @@ function formatPublishedAt(value?: string): string {
 		return value;
 	}
 
-	return date.toLocaleDateString([], {
-		year: "numeric",
-		month: "short",
-		day: "numeric",
-	});
+	return publishedAtFormatter.format(date);
 }
 
 function formatScore(value: number): string {
@@ -57,113 +61,156 @@ function resultDomain(url: string): string {
 	}
 }
 
-function ResearchResultCard({
-	result,
-	index,
-}: {
-	result: ResearchResult;
-	index: number;
-}) {
-	const domain = useMemo(
-		() => resultDomain(result.url),
-		[result.url],
-	);
+const ResearchResultCard = memo(
+	function ResearchResultCard({
+		result,
+		index,
+	}: {
+		result: ResearchResult;
+		index: number;
+	}) {
+		const domain = useMemo(
+			() => resultDomain(result.url),
+			[result.url],
+		);
 
-	return (
-		<article className="research-result">
-			<div className="research-result-index">
-				{String(index + 1).padStart(2, "0")}
-			</div>
-
-			<div className="research-result-body">
-				<div className="research-result-topline">
-					<div className="research-result-source">
-						<span className="research-provider">
-							{result.provider}
-						</span>
-
-						<span className="research-source">
-							{result.source}
-						</span>
-
-						<span className="research-domain">
-							{domain}
-						</span>
-					</div>
-
-					<div className="research-scores">
-						<span>
-							AUTHORITY{" "}
-							<strong>
-								{result.authority}
-							</strong>
-						</span>
-
-						<span>
-							MATCH{" "}
-							<strong>
-								{formatScore(
-									result.matchScore,
-								)}
-							</strong>
-						</span>
-					</div>
+		return (
+			<article className="research-result">
+				<div className="research-result-index">
+					{String(index + 1).padStart(
+						2,
+						"0",
+					)}
 				</div>
 
-				<h3>{result.title || "Untitled result"}</h3>
+				<div className="research-result-body">
+					<div className="research-result-topline">
+						<div className="research-result-source">
+							<span className="research-provider">
+								{result.provider}
+							</span>
 
-				{result.snippet ? (
-					<p>{result.snippet}</p>
-				) : (
-					<p className="muted">
-						No summary was provided by the source.
-					</p>
-				)}
+							<span className="research-source">
+								{result.source}
+							</span>
 
-				<div className="research-result-footer">
-					<span>
-						{formatPublishedAt(
-							result.publishedAt,
-						)}
-					</span>
+							<span className="research-domain">
+								{domain}
+							</span>
+						</div>
 
-					{result.contentHash ? (
+						<div className="research-scores">
+							<span>
+								AUTHORITY{" "}
+								<strong>
+									{
+										result.authority
+									}
+								</strong>
+							</span>
+
+							<span>
+								MATCH{" "}
+								<strong>
+									{formatScore(
+										result.matchScore,
+									)}
+								</strong>
+							</span>
+						</div>
+					</div>
+
+					<h3>
+						{result.title ||
+							"Untitled result"}
+					</h3>
+
+					{result.snippet ? (
+						<p>
+							{result.snippet}
+						</p>
+					) : (
+						<p className="muted">
+							No summary was
+							provided by the
+							source.
+						</p>
+					)}
+
+					<div className="research-result-footer">
 						<span>
-							HASH{" "}
-							<code>
-								{result.contentHash.slice(
-									0,
-									16,
-								)}
-							</code>
+							{formatPublishedAt(
+								result.publishedAt,
+							)}
 						</span>
-					) : null}
 
-					<a
-						href={result.url}
-						target="_blank"
-						rel="noreferrer noopener"
-					>
-						Open source ↗
-					</a>
+						{result.contentHash ? (
+							<span>
+								HASH{" "}
+								<code>
+									{result.contentHash.slice(
+										0,
+										16,
+									)}
+								</code>
+							</span>
+						) : null}
+
+						<a
+							href={
+								result.url
+							}
+							target="_blank"
+							rel="noreferrer noopener"
+						>
+							Open source ↗
+						</a>
+					</div>
 				</div>
-			</div>
-		</article>
-	);
-}
+			</article>
+		);
+	},
+);
 
 export default function ResearchPanel() {
-	const {
-		researchConfig,
-		research,
-		researchLoading,
-		researchError,
-		loadResearchConfig,
-		searchResearch,
-	} = useRuntimeStore();
+	const researchConfig =
+		useRuntimeStore(
+			(state) =>
+				state.researchConfig,
+		);
 
-	const [query, setQuery] = useState("");
-	const [backend, setBackend] = useState("");
+	const research = useRuntimeStore(
+		(state) => state.research,
+	);
+
+	const researchLoading =
+		useRuntimeStore(
+			(state) =>
+				state.researchLoading,
+		);
+
+	const researchError =
+		useRuntimeStore(
+			(state) => state.researchError,
+		);
+
+	const loadResearchConfig =
+		useRuntimeStore(
+			(state) =>
+				state.loadResearchConfig,
+		);
+
+	const searchResearch =
+		useRuntimeStore(
+			(state) =>
+				state.searchResearch,
+		);
+
+	const [query, setQuery] =
+		useState("");
+
+	const [backend, setBackend] =
+		useState("");
 
 	useEffect(() => {
 		void loadResearchConfig();
@@ -177,7 +224,9 @@ export default function ResearchPanel() {
 		setBackend((current) => {
 			if (
 				current &&
-				researchConfig.providers.includes(current)
+				researchConfig.providers.includes(
+					current,
+				)
 			) {
 				return current;
 			}
@@ -199,7 +248,8 @@ export default function ResearchPanel() {
 
 		await searchResearch({
 			query: value,
-			backend: backend || undefined,
+			backend:
+				backend || undefined,
 		});
 	}
 
@@ -218,20 +268,26 @@ export default function ResearchPanel() {
 					</span>
 
 					<h2>
-						External knowledge, locally orchestrated
+						External knowledge,
+						locally orchestrated
 					</h2>
 
 					<p>
-						Search evidence through the configured
-						providers. Results remain external
-						provenance rather than trusted memory.
+						Search evidence through
+						the configured
+						providers. Results remain
+						external provenance
+						rather than trusted
+						memory.
 					</p>
 				</div>
 
 				<div className="research-engine-state">
 					<span
 						className={`status-dot ${
-							researchConfig ? "ready" : ""
+							researchConfig
+								? "ready"
+								: ""
 						}`}
 					/>
 
@@ -251,17 +307,23 @@ export default function ResearchPanel() {
 			>
 				<div className="research-query-wrap">
 					<label htmlFor="research-query">
-						<span className="eyebrow">QUERY</span>
+						<span className="eyebrow">
+							QUERY
+						</span>
 
 						<input
 							id="research-query"
 							type="text"
 							value={query}
 							onChange={(event) =>
-								setQuery(event.target.value)
+								setQuery(
+									event.target.value,
+								)
 							}
 							placeholder="Search GitHub, Reddit, and the web..."
-							disabled={researchLoading}
+							disabled={
+								researchLoading
+							}
 							autoComplete="off"
 						/>
 					</label>
@@ -275,19 +337,28 @@ export default function ResearchPanel() {
 							id="research-backend"
 							value={backend}
 							onChange={(event) =>
-								setBackend(event.target.value)
+								setBackend(
+									event.target.value,
+								)
 							}
 							disabled={
 								researchLoading ||
-								providerOptions.length === 0
+								providerOptions.length ===
+									0
 							}
 						>
 							{backend &&
 							!providerOptions.includes(
 								backend,
 							) ? (
-								<option value={backend}>
-									{backend}
+								<option
+									value={
+										backend
+									}
+								>
+									{
+										backend
+									}
 								</option>
 							) : null}
 
@@ -303,7 +374,9 @@ export default function ResearchPanel() {
 									</option>
 
 									{providerOptions.map(
-										(provider) => (
+										(
+											provider,
+										) => (
 											<option
 												key={
 													provider
@@ -312,7 +385,9 @@ export default function ResearchPanel() {
 													provider
 												}
 											>
-												{provider}
+												{
+													provider
+												}
 											</option>
 										),
 									)}
@@ -338,8 +413,11 @@ export default function ResearchPanel() {
 				<div className="research-search-meta">
 					<span>
 						{researchConfig
-							? `${providerOptions.length} provider${
-									providerOptions.length === 1
+							? `${
+									providerOptions.length
+								} provider${
+									providerOptions.length ===
+									1
 										? ""
 										: "s"
 								} available`
@@ -373,7 +451,8 @@ export default function ResearchPanel() {
 							</span>
 
 							<strong>
-								{resultCount} result
+								{resultCount}{" "}
+								result
 								{resultCount === 1
 									? ""
 									: "s"}
@@ -404,14 +483,22 @@ export default function ResearchPanel() {
 						</div>
 					</div>
 
-					{research.results.length > 0 ? (
+					{research.results.length >
+					0 ? (
 						<div className="research-result-list">
 							{research.results.map(
-								(result, index) => (
+								(
+									result,
+									index,
+								) => (
 									<ResearchResultCard
 										key={`${result.url}-${index}`}
-										result={result}
-										index={index}
+										result={
+											result
+										}
+										index={
+											index
+										}
 									/>
 								),
 							)}
@@ -423,12 +510,16 @@ export default function ResearchPanel() {
 							</div>
 
 							<strong>
-								No evidence returned
+								No evidence
+								returned
 							</strong>
 
 							<span>
-								The configured providers did not
-								return usable results for this
+								The configured
+								providers did
+								not return
+								usable results
+								for this
 								query.
 							</span>
 						</div>
@@ -441,11 +532,13 @@ export default function ResearchPanel() {
 					</div>
 
 					<strong>
-						Research engine standing by
+						Research engine
+						standing by
 					</strong>
 
 					<span>
-						Submit a query to retrieve external
+						Submit a query to
+						retrieve external
 						evidence.
 					</span>
 				</div>
