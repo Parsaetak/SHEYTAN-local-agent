@@ -61,15 +61,35 @@ type RuntimeState = {
 
 let socket: WebSocket | null = null;
 let activitySequence = 0;
+let activitySessionId: string | null = null;
 
 function createActivityID(): string {
 	activitySequence += 1;
 	return `${Date.now()}-${activitySequence}`;
 }
 
-function normalizeActivity(payload: unknown): ActivityEvent {
+function normalizeActivity(
+	payload: unknown,
+): ActivityEvent {
 	if (payload && typeof payload === "object") {
-		const value = payload as Record<string, unknown>;
+		const value =
+			payload as Record<string, unknown>;
+
+		const rawTimestamp = value.timestamp;
+
+		let timestamp = Date.now();
+
+		if (typeof rawTimestamp === "number") {
+			timestamp = rawTimestamp;
+		} else if (typeof rawTimestamp === "string") {
+			const parsed = Date.parse(
+				rawTimestamp,
+			);
+
+			if (!Number.isNaN(parsed)) {
+				timestamp = parsed;
+			}
+		}
 
 		return {
 			id: createActivityID(),
@@ -77,10 +97,7 @@ function normalizeActivity(payload: unknown): ActivityEvent {
 				typeof value.type === "string"
 					? value.type
 					: "activity",
-			timestamp:
-				typeof value.timestamp === "number"
-					? value.timestamp
-					: Date.now(),
+			timestamp,
 			data: value,
 		};
 	}
@@ -95,32 +112,39 @@ function normalizeActivity(payload: unknown): ActivityEvent {
 	};
 }
 
-export const useRuntimeStore = create<RuntimeState>((set, get) => ({
-	app: null,
-	sysinfo: null,
-	models: null,
-	presets: [],
-	tools: [],
+export const useRuntimeStore =
+	create<RuntimeState>((set, get) => ({
+		app: null,
+		sysinfo: null,
+		models: null,
+		presets: [],
+		tools: [],
 
-	sessions: [],
-	activeSessionId: null,
+		sessions: [],
+		activeSessionId: null,
 
-	connection: "idle",
-	loading: false,
-	error: null,
+		connection: "idle",
+		loading: false,
+		error: null,
 
-	activity: [],
-	running: false,
+		activity: [],
+		running: false,
 
-	loadInitialState: async () => {
-		set({
-			loading: true,
-			error: null,
-		});
+		loadInitialState: async () => {
+			set({
+				loading: true,
+				error: null,
+			});
 
-		try {
-			const [app, sysinfo, presets, models, sessions, tools] =
-				await Promise.all([
+			try {
+				const [
+					app,
+					sysinfo,
+					presets,
+					models,
+					sessions,
+					tools,
+				] = await Promise.all([
 					api.state(),
 					api.sysinfo(),
 					api.presets(),
@@ -129,239 +153,382 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
 					api.tools(),
 				]);
 
-			const activeSessionId =
-				get().activeSessionId &&
-				sessions.some(
-					(session) => session.id === get().activeSessionId,
-				)
-					? get().activeSessionId
-					: (sessions[0]?.id ?? null);
+				const current =
+					get().activeSessionId;
+
+				const activeSessionId =
+					current &&
+					sessions.some(
+						(session) =>
+							session.id ===
+							current,
+					)
+						? current
+						: (sessions[0]?.id ??
+							null);
+
+				set({
+					app,
+					sysinfo,
+					presets,
+					models,
+					sessions,
+					tools,
+					activeSessionId,
+					loading: false,
+				});
+			} catch (error) {
+				set({
+					loading: false,
+					error:
+						error instanceof Error
+							? error.message
+							: "Failed to initialize runtime state.",
+				});
+			}
+		},
+
+		refreshModels: async () => {
+			try {
+				const models =
+					await api.models();
+
+				set({ models });
+			} catch (error) {
+				set({
+					error:
+						error instanceof Error
+							? error.message
+							: "Failed to refresh models.",
+				});
+			}
+		},
+
+		refreshSessions: async () => {
+			try {
+				const sessions =
+					await api.sessions();
+
+				const current =
+					get().activeSessionId;
+
+				const activeSessionId =
+					current &&
+					sessions.some(
+						(session) =>
+							session.id ===
+							current,
+					)
+						? current
+						: (sessions[0]?.id ??
+							null);
+
+				set({
+					sessions,
+					activeSessionId,
+				});
+			} catch (error) {
+				set({
+					error:
+						error instanceof Error
+							? error.message
+							: "Failed to refresh sessions.",
+				});
+			}
+		},
+
+		refreshTools: async () => {
+			try {
+				const tools =
+					await api.tools();
+
+				set({ tools });
+			} catch (error) {
+				set({
+					error:
+						error instanceof Error
+							? error.message
+							: "Failed to refresh tools.",
+				});
+			}
+		},
+
+		createSession: async () => {
+			const session =
+				await api.createSession();
+
+			set((state) => ({
+				sessions: [
+					session,
+					...state.sessions,
+				],
+				activeSessionId:
+					session.id,
+			}));
+
+			return session;
+		},
+
+		selectSession: (id) => {
+			if (
+				get().activeSessionId ===
+				id
+			) {
+				return;
+			}
+
+			get().disconnectActivity();
 
 			set({
-				app,
-				sysinfo,
-				presets,
-				models,
-				sessions,
-				tools,
-				activeSessionId,
-				loading: false,
+				activeSessionId: id,
+				error: null,
+				activity: [],
 			});
-		} catch (error) {
+
+			if (id) {
+				get().connectActivity();
+			}
+		},
+
+		deleteSession: async (id) => {
+			await api.deleteSession(id);
+
+			if (
+				get().activeSessionId ===
+				id
+			) {
+				get().disconnectActivity();
+			}
+
+			set((state) => {
+				const sessions =
+					state.sessions.filter(
+						(session) =>
+							session.id !==
+							id,
+					);
+
+				const activeSessionId =
+					state.activeSessionId ===
+					id
+						? (sessions[0]?.id ??
+							null)
+						: state.activeSessionId;
+
+				return {
+					sessions,
+					activeSessionId,
+				};
+			});
+
+			if (get().activeSessionId) {
+				get().connectActivity();
+			}
+		},
+
+		run: async (message) => {
+			const sessionId =
+				get().activeSessionId;
+
+			if (!sessionId) {
+				throw new Error(
+					"No active session.",
+				);
+			}
+
+			if (!message.trim()) {
+				return;
+			}
+
 			set({
-				loading: false,
-				error:
-					error instanceof Error
-						? error.message
-						: "Failed to initialize runtime state.",
+				running: true,
+				error: null,
 			});
-		}
-	},
 
-	refreshModels: async () => {
-		try {
-			const models = await api.models();
-			set({ models });
-		} catch (error) {
+			try {
+				await api.run({
+					sessionId,
+					message: message.trim(),
+				});
+
+				await get().refreshSessions();
+			} catch (error) {
+				set({
+					error:
+						error instanceof Error
+							? error.message
+							: "Agent run failed.",
+					running: false,
+				});
+
+				throw error;
+			}
+		},
+
+		abort: async () => {
+			const sessionId =
+				get().activeSessionId;
+
+			if (!sessionId) {
+				set({
+					running: false,
+				});
+				return;
+			}
+
+			try {
+				await api.abort(sessionId);
+			} finally {
+				set({
+					running: false,
+				});
+			}
+		},
+
+		connectActivity: () => {
+			const sessionId =
+				get().activeSessionId;
+
+			if (!sessionId) {
+				return;
+			}
+
+			if (
+				socket &&
+				activitySessionId ===
+					sessionId &&
+				(socket.readyState ===
+					WebSocket.OPEN ||
+					socket.readyState ===
+						WebSocket.CONNECTING)
+			) {
+				return;
+			}
+
+			if (socket) {
+				socket.close();
+				socket = null;
+			}
+
+			activitySessionId =
+				sessionId;
+
 			set({
-				error:
-					error instanceof Error
-						? error.message
-						: "Failed to refresh models.",
+				connection: "connecting",
 			});
-		}
-	},
 
-	refreshSessions: async () => {
-		try {
-			const sessions = await api.sessions();
-
-			const activeSessionId =
-				get().activeSessionId &&
-				sessions.some(
-					(session) => session.id === get().activeSessionId,
-				)
-					? get().activeSessionId
-					: (sessions[0]?.id ?? null);
-
-			set({
-				sessions,
-				activeSessionId,
-			});
-		} catch (error) {
-			set({
-				error:
-					error instanceof Error
-						? error.message
-						: "Failed to refresh sessions.",
-			});
-		}
-	},
-
-	refreshTools: async () => {
-		try {
-			const tools = await api.tools();
-			set({ tools });
-		} catch (error) {
-			set({
-				error:
-					error instanceof Error
-						? error.message
-						: "Failed to refresh tools.",
-			});
-		}
-	},
-
-	createSession: async () => {
-		const session = await api.createSession();
-
-		set((state) => ({
-			sessions: [session, ...state.sessions],
-			activeSessionId: session.id,
-		}));
-
-		return session;
-	},
-
-	selectSession: (id) => {
-		set({
-			activeSessionId: id,
-			error: null,
-		});
-	},
-
-	deleteSession: async (id) => {
-		await api.deleteSession(id);
-
-		set((state) => {
-			const sessions = state.sessions.filter(
-				(session) => session.id !== id,
+			socket = new WebSocket(
+				activityWebSocketURL(
+					sessionId,
+				),
 			);
 
-			const activeSessionId =
-				state.activeSessionId === id
-					? (sessions[0]?.id ?? null)
-					: state.activeSessionId;
+			socket.onopen = () => {
+				if (
+					activitySessionId !==
+					get().activeSessionId
+				) {
+					return;
+				}
 
-			return {
-				sessions,
-				activeSessionId,
+				set({
+					connection:
+						"connected",
+				});
 			};
-		});
-	},
 
-	run: async (message) => {
-		const sessionId = get().activeSessionId;
+			socket.onmessage = (
+				event,
+			) => {
+				try {
+					const payload =
+						JSON.parse(
+							event.data,
+						) as unknown;
 
-		if (!sessionId) {
-			throw new Error("No active session.");
-		}
+					const activity =
+						normalizeActivity(
+							payload,
+						);
 
-		if (!message.trim()) {
-			return;
-		}
+					set((state) => ({
+						activity:
+							state.activity
+								.length >=
+							500
+								? [
+										...state.activity.slice(
+											-499,
+										),
+										activity,
+									]
+								: [
+										...state.activity,
+										activity,
+									],
+						running:
+							typeof activity
+								.data
+								.running ===
+							"boolean"
+								? Boolean(
+										activity
+											.data
+											.running,
+									)
+								: state.running,
+					}));
+				} catch {
+					// Ignore malformed activity frames.
+				}
+			};
 
-		set({
-			running: true,
-			error: null,
-		});
+			socket.onerror = () => {
+				if (
+					activitySessionId ===
+					get().activeSessionId
+				) {
+					set({
+						connection:
+							"error",
+					});
+				}
+			};
 
-		try {
-			await api.run({
-				sessionId,
-				message: message.trim(),
-			});
-		} catch (error) {
-			set({
-				error:
-					error instanceof Error
-						? error.message
-						: "Agent run failed.",
-			});
-			throw error;
-		}
-	},
+			socket.onclose = () => {
+				socket = null;
 
-	abort: async () => {
-		try {
-			await api.abort();
-		} finally {
-			set({
-				running: false,
-			});
-		}
-	},
+				if (
+					activitySessionId !==
+					get().activeSessionId
+				) {
+					return;
+				}
 
-	connectActivity: () => {
-		if (
-			socket &&
-			(socket.readyState === WebSocket.OPEN ||
-				socket.readyState === WebSocket.CONNECTING)
-		) {
-			return;
-		}
+				set({
+					connection:
+						"disconnected",
+				});
+			};
+		},
 
-		set({
-			connection: "connecting",
-		});
-
-		socket = new WebSocket(activityWebSocketURL());
-
-		socket.onopen = () => {
-			set({
-				connection: "connected",
-			});
-		};
-
-		socket.onmessage = (event) => {
-			try {
-				const payload = JSON.parse(event.data) as unknown;
-				const activity = normalizeActivity(payload);
-
-				set((state) => ({
-					activity:
-						state.activity.length >= 500
-							? [...state.activity.slice(-499), activity]
-							: [...state.activity, activity],
-					running:
-						typeof activity.data.running === "boolean"
-							? activity.data.running
-							: state.running,
-				}));
-			} catch {
-				// Ignore malformed activity frames.
+		disconnectActivity: () => {
+			if (socket) {
+				socket.close();
+				socket = null;
 			}
-		};
 
-		socket.onerror = () => {
-			set({
-				connection: "error",
-			});
-		};
-
-		socket.onclose = () => {
-			socket = null;
+			activitySessionId = null;
 
 			set({
-				connection: "disconnected",
+				connection:
+					"disconnected",
 			});
-		};
-	},
+		},
 
-	disconnectActivity: () => {
-		if (socket) {
-			socket.close();
-			socket = null;
-		}
-
-		set({
-			connection: "disconnected",
-		});
-	},
-
-	clearActivity: () => {
-		set({
-			activity: [],
-		});
-	},
-}));
+		clearActivity: () => {
+			set({
+				activity: [],
+			});
+		},
+	}));
