@@ -181,6 +181,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/run", s.handleRun)
 	mux.HandleFunc("/api/abort", s.handleAbort)
 	mux.HandleFunc("/api/tools", s.handleTools)
+	mux.HandleFunc("/api/lab", s.handleLab)
+	mux.HandleFunc("/api/lab/", s.handleLabTask)
+	mux.HandleFunc("/api/research", s.handleResearch)
 
 	// WebSocket: real-time agent activity for a session
 	mux.HandleFunc("/ws/activity", s.handleActivityWS)
