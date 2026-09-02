@@ -7,22 +7,22 @@ package runtime
 import (
 	"fmt"
 	"net/http"
+	"time"
 
-	"github.com/sheytan/local-agent/internal/agent"
-	"github.com/sheytan/local-agent/internal/aicontext"
-	"github.com/sheytan/local-agent/internal/config"
-	"github.com/sheytan/local-agent/internal/lab"
-	"github.com/sheytan/local-agent/internal/llm"
-	"github.com/sheytan/local-agent/internal/logging"
-	"github.com/sheytan/local-agent/internal/memory"
-	"github.com/sheytan/local-agent/internal/multiagent"
-	"github.com/sheytan/local-agent/internal/recall"
-	"github.com/sheytan/local-agent/internal/research"
-	"github.com/sheytan/local-agent/internal/sandbox"
-	"github.com/sheytan/local-agent/internal/sessions"
-	"github.com/sheytan/local-agent/internal/tools"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/agent"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/aicontext"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/lab"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/logging"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/memory"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/multiagent"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/recall"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/research"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/sandbox"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/sessions"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/tools"
 )
-
 // Stack is the fully-wired agent runtime.
 type Stack struct {
 	Cfg     *config.Config
