@@ -8,6 +8,7 @@ import {
 
 import type { ActivityEvent } from "./store";
 import { useRuntimeStore } from "./store";
+import { initializeAgent } from "./agent-init";
 
 function formatActivity(
 	activity: ActivityEvent,
@@ -64,12 +65,6 @@ function AgentBody() {
 		(state) => state.running,
 	);
 
-	const loadInitialState =
-		useRuntimeStore(
-			(state) =>
-				state.loadInitialState,
-		);
-
 	const createSession =
 		useRuntimeStore(
 			(state) =>
@@ -119,7 +114,7 @@ function AgentBody() {
 	useEffect(() => {
 		let cancelled = false;
 
-		void loadInitialState().then(() => {
+		void initializeAgent().then(() => {
 			if (!cancelled) {
 				connectActivity();
 			}
@@ -130,7 +125,6 @@ function AgentBody() {
 			disconnectActivity();
 		};
 	}, [
-		loadInitialState,
 		connectActivity,
 		disconnectActivity,
 	]);
