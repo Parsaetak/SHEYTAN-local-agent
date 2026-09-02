@@ -60,6 +60,7 @@ func NewService(cfg ServiceConfig) *Service {
 	if maxResults <= 0 {
 		maxResults = defaults.MaxResults
 	}
+
 	if maxResults > 50 {
 		maxResults = 50
 	}
@@ -80,12 +81,21 @@ func NewService(cfg ServiceConfig) *Service {
 // Register adds or replaces a provider by its canonical name.
 func (s *Service) Register(provider Provider) error {
 	if provider == nil {
-		return fmt.Errorf("%w: nil provider", ErrProviderUnavailable)
+		return fmt.Errorf(
+			"%w: nil provider",
+			ErrProviderUnavailable,
+		)
 	}
 
-	name := strings.ToLower(strings.TrimSpace(provider.Name()))
+	name := strings.ToLower(
+		strings.TrimSpace(provider.Name()),
+	)
+
 	if name == "" {
-		return fmt.Errorf("%w: provider name is empty", ErrProviderUnavailable)
+		return fmt.Errorf(
+			"%w: provider name is empty",
+			ErrProviderUnavailable,
+		)
 	}
 
 	s.mu.Lock()
@@ -98,7 +108,10 @@ func (s *Service) Register(provider Provider) error {
 
 // Unregister removes a provider from the service.
 func (s *Service) Unregister(name string) {
-	name = strings.ToLower(strings.TrimSpace(name))
+	name = strings.ToLower(
+		strings.TrimSpace(name),
+	)
+
 	if name == "" {
 		return
 	}
@@ -111,7 +124,10 @@ func (s *Service) Unregister(name string) {
 
 // Provider returns a registered provider by name.
 func (s *Service) Provider(name string) (Provider, bool) {
-	name = strings.ToLower(strings.TrimSpace(name))
+	name = strings.ToLower(
+		strings.TrimSpace(name),
+	)
+
 	if name == "" {
 		return nil, false
 	}
@@ -120,6 +136,7 @@ func (s *Service) Provider(name string) (Provider, bool) {
 	defer s.mu.RUnlock()
 
 	provider, ok := s.providers[name]
+
 	return provider, ok
 }
 
@@ -128,7 +145,11 @@ func (s *Service) ProviderNames() []string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	names := make([]string, 0, len(s.providers))
+	names := make(
+		[]string,
+		0,
+		len(s.providers),
+	)
 
 	for name := range s.providers {
 		names = append(names, name)
@@ -142,17 +163,16 @@ func (s *Service) ProviderNames() []string {
 // SetBackend changes the default routing mode.
 //
 // "auto" enables bounded multi-provider research.
+// "web" is retained as a compatibility alias for DuckDuckGo.
 // Any other value selects one registered provider explicitly.
-//
-// This changes the service's default behavior only. Per-request backend
-// selection should use SearchWithBackend so concurrent requests do not
-// mutate shared service state.
 func (s *Service) SetBackend(backend string) error {
 	backend = normalizeBackend(backend)
 
 	if backend != BackendAuto {
 		s.mu.RLock()
+
 		_, exists := s.providers[backend]
+
 		s.mu.RUnlock()
 
 		if !exists {
@@ -165,7 +185,9 @@ func (s *Service) SetBackend(backend string) error {
 	}
 
 	s.mu.Lock()
+
 	s.backend = backend
+
 	s.mu.Unlock()
 
 	return nil
@@ -190,7 +212,11 @@ func (s *Service) Search(
 	ctx context.Context,
 	req SearchRequest,
 ) (SearchResponse, error) {
-	return s.SearchWithBackend(ctx, s.Backend(), req)
+	return s.SearchWithBackend(
+		ctx,
+		s.Backend(),
+		req,
+	)
 }
 
 // SearchWithBackend executes one research operation using a request-scoped
@@ -217,7 +243,11 @@ func (s *Service) SearchWithBackend(
 	defaultMaxResults := s.maxResults
 	timeout := s.timeout
 
-	providers := make(map[string]Provider, len(s.providers))
+	providers := make(
+		map[string]Provider,
+		len(s.providers),
+	)
+
 	for name, provider := range s.providers {
 		providers[name] = provider
 	}
@@ -225,17 +255,24 @@ func (s *Service) SearchWithBackend(
 	s.mu.RUnlock()
 
 	maxResults := req.MaxResults
+
 	if maxResults <= 0 {
 		maxResults = defaultMaxResults
 	}
+
 	if maxResults > 50 {
 		maxResults = 50
 	}
 
 	req.MaxResults = maxResults
 
+	if backend == BackendWeb {
+		backend = BackendDuckDuckGo
+	}
+
 	if backend != BackendAuto {
 		provider, ok := providers[backend]
+
 		if !ok {
 			return SearchResponse{}, fmt.Errorf(
 				"%w: provider %q is not registered",
@@ -261,7 +298,9 @@ func (s *Service) SearchWithBackend(
 }
 
 func normalizeBackend(backend string) string {
-	backend = strings.ToLower(strings.TrimSpace(backend))
+	backend = strings.ToLower(
+		strings.TrimSpace(backend),
+	)
 
 	if backend == "" {
 		return BackendAuto
@@ -276,12 +315,20 @@ func (s *Service) searchProvider(
 	req SearchRequest,
 	timeout time.Duration,
 ) (SearchResponse, error) {
-	ctx, cancel := context.WithTimeout(ctx, timeout)
+	ctx, cancel := context.WithTimeout(
+		ctx,
+		timeout,
+	)
+
 	defer cancel()
 
 	started := time.Now()
 
-	response, err := provider.Search(ctx, req)
+	response, err := provider.Search(
+		ctx,
+		req,
+	)
+
 	if err != nil {
 		if ctx.Err() != nil {
 			return SearchResponse{}, ctx.Err()
@@ -291,6 +338,7 @@ func (s *Service) searchProvider(
 	}
 
 	response = NormalizeResponse(response)
+
 	response.Provider = provider.Name()
 	response.Duration = time.Since(started)
 
@@ -330,10 +378,18 @@ func (s *Service) searchAuto(
 		)
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, timeout)
+	ctx, cancel := context.WithTimeout(
+		ctx,
+		timeout,
+	)
+
 	defer cancel()
 
-	names := make([]string, 0, len(providers))
+	names := make(
+		[]string,
+		0,
+		len(providers),
+	)
 
 	for name := range providers {
 		names = append(names, name)
@@ -341,7 +397,10 @@ func (s *Service) searchAuto(
 
 	sort.Strings(names)
 
-	resultsCh := make(chan providerSearchResult, len(names))
+	resultsCh := make(
+		chan providerSearchResult,
+		len(names),
+	)
 
 	var wg sync.WaitGroup
 
@@ -354,7 +413,10 @@ func (s *Service) searchAuto(
 		go func() {
 			defer wg.Done()
 
-			response, err := provider.Search(ctx, req)
+			response, err := provider.Search(
+				ctx,
+				req,
+			)
 
 			resultsCh <- providerSearchResult{
 				name:     name,
@@ -367,16 +429,28 @@ func (s *Service) searchAuto(
 	wg.Wait()
 	close(resultsCh)
 
-	allResults := make([]collectedResult, 0)
+	allResults := make(
+		[]collectedResult,
+		0,
+	)
 
 	var providerErrors []error
 	var successfulProviders int
 
 	for providerResult := range resultsCh {
 		if providerResult.err != nil {
-			if !errors.Is(providerResult.err, ErrNoResults) &&
-				!errors.Is(providerResult.err, context.Canceled) &&
-				!errors.Is(providerResult.err, context.DeadlineExceeded) {
+			if !errors.Is(
+				providerResult.err,
+				ErrNoResults,
+			) &&
+				!errors.Is(
+					providerResult.err,
+					context.Canceled,
+				) &&
+				!errors.Is(
+					providerResult.err,
+					context.DeadlineExceeded,
+				) {
 				providerErrors = append(
 					providerErrors,
 					fmt.Errorf(
@@ -390,7 +464,9 @@ func (s *Service) searchAuto(
 			continue
 		}
 
-		response := NormalizeResponse(providerResult.response)
+		response := NormalizeResponse(
+			providerResult.response,
+		)
 
 		if len(response.Results) == 0 {
 			continue
@@ -432,7 +508,8 @@ func (s *Service) searchAuto(
 		return response, ctx.Err()
 	}
 
-	if successfulProviders == 0 && len(providerErrors) > 0 {
+	if successfulProviders == 0 &&
+		len(providerErrors) > 0 {
 		return response, fmt.Errorf(
 			"%w: all providers failed: %v",
 			ErrProviderUnavailable,
@@ -447,7 +524,8 @@ func mergeResearchResults(
 	input []collectedResult,
 	maxResults int,
 ) []Result {
-	if len(input) == 0 || maxResults <= 0 {
+	if len(input) == 0 ||
+		maxResults <= 0 {
 		return nil
 	}
 
@@ -456,7 +534,11 @@ func mergeResearchResults(
 		index  int
 	}
 
-	ranked := make([]rankedResult, 0, len(input))
+	ranked := make(
+		[]rankedResult,
+		0,
+		len(input),
+	)
 
 	for index, item := range input {
 		result := NormalizeResult(
@@ -473,45 +555,61 @@ func mergeResearchResults(
 		)
 	}
 
-	sort.SliceStable(ranked, func(i, j int) bool {
-		left := ranked[i].result
-		right := ranked[j].result
+	sort.SliceStable(
+		ranked,
+		func(i, j int) bool {
+			left := ranked[i].result
+			right := ranked[j].result
 
-		leftScore := combinedResearchScore(left)
-		rightScore := combinedResearchScore(right)
+			leftScore := combinedResearchScore(left)
+			rightScore := combinedResearchScore(right)
 
-		if leftScore != rightScore {
-			return leftScore > rightScore
-		}
+			if leftScore != rightScore {
+				return leftScore > rightScore
+			}
 
-		leftAuthority := left.Authority.Rank()
-		rightAuthority := right.Authority.Rank()
+			leftAuthority := left.Authority.Rank()
+			rightAuthority := right.Authority.Rank()
 
-		if leftAuthority != rightAuthority {
-			return leftAuthority > rightAuthority
-		}
+			if leftAuthority != rightAuthority {
+				return leftAuthority > rightAuthority
+			}
 
-		if !left.PublishedAt.Equal(right.PublishedAt) {
-			return left.PublishedAt.After(right.PublishedAt)
-		}
+			if !left.PublishedAt.Equal(
+				right.PublishedAt,
+			) {
+				return left.PublishedAt.After(
+					right.PublishedAt,
+				)
+			}
 
-		leftURL := left.URL
-		rightURL := right.URL
+			leftURL := left.URL
+			rightURL := right.URL
 
-		if leftURL != rightURL {
-			return leftURL < rightURL
-		}
+			if leftURL != rightURL {
+				return leftURL < rightURL
+			}
 
-		return ranked[i].index < ranked[j].index
-	})
+			return ranked[i].index < ranked[j].index
+		},
+	)
 
-	seen := make(map[string]struct{}, len(ranked))
-	results := make([]Result, 0, minInt(maxResults, len(ranked)))
+	seen := make(
+		map[string]struct{},
+		len(ranked),
+	)
+
+	results := make(
+		[]Result,
+		0,
+		minInt(maxResults, len(ranked)),
+	)
 
 	for _, item := range ranked {
 		result := item.result
 
 		key := researchResultKey(result)
+
 		if key == "" {
 			continue
 		}
@@ -521,7 +619,11 @@ func mergeResearchResults(
 		}
 
 		seen[key] = struct{}{}
-		results = append(results, result)
+
+		results = append(
+			results,
+			result,
+		)
 
 		if len(results) >= maxResults {
 			break
@@ -532,25 +634,39 @@ func mergeResearchResults(
 }
 
 func researchResultKey(result Result) string {
-	if hash := strings.TrimSpace(result.ContentHash); hash != "" {
+	if hash := strings.TrimSpace(
+		result.ContentHash,
+	); hash != "" {
 		return "hash:" + strings.ToLower(hash)
 	}
 
-	if rawURL := strings.TrimSpace(result.URL); rawURL != "" {
+	if rawURL := strings.TrimSpace(
+		result.URL,
+	); rawURL != "" {
 		return "url:" + strings.ToLower(rawURL)
 	}
 
-	title := strings.ToLower(strings.TrimSpace(result.Title))
-	snippet := strings.ToLower(strings.TrimSpace(result.Snippet))
+	title := strings.ToLower(
+		strings.TrimSpace(result.Title),
+	)
+
+	snippet := strings.ToLower(
+		strings.TrimSpace(result.Snippet),
+	)
 
 	if title == "" && snippet == "" {
 		return ""
 	}
 
-	return "content:" + title + "\x00" + snippet
+	return "content:" +
+		title +
+		"\x00" +
+		snippet
 }
 
-func combinedResearchScore(result Result) float64 {
+func combinedResearchScore(
+	result Result,
+) float64 {
 	match := result.MatchScore
 
 	if match < 0 {
@@ -565,7 +681,8 @@ func combinedResearchScore(result Result) float64 {
 
 	// Relevance is weighted more heavily than authority.
 	// Authority remains a secondary trust signal.
-	return (match * 0.70) + (authority * 0.30)
+	return (match * 0.70) +
+		(authority * 0.30)
 }
 
 func minInt(left, right int) int {
