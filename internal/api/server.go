@@ -14,16 +14,16 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/sheytan/local-agent/internal/agent"
-	"github.com/sheytan/local-agent/internal/chunking"
-	"github.com/sheytan/local-agent/internal/config"
-	"github.com/sheytan/local-agent/internal/installer"
-	"github.com/sheytan/local-agent/internal/llm"
-	"github.com/sheytan/local-agent/internal/recall"
-	"github.com/sheytan/local-agent/internal/runtime"
-	"github.com/sheytan/local-agent/internal/sessions"
-	"github.com/sheytan/local-agent/internal/sysinfo"
-	"github.com/sheytan/local-agent/web"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/agent"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/chunking"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/installer"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/recall"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/runtime"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/sessions"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/sysinfo"
+	"github.com/Parsaetak/SHEYTAN-local-agent/web"
 )
 
 // Server bundles everything the HTTP handlers need.
@@ -47,8 +47,87 @@ type Server struct {
 }
 
 type runState struct {
-	cancel  context.CancelFunc
-	updates chan agent.Activity
+	cancel context.CancelFunc
+	hub    *activityHub
+}
+
+// activityHub broadcasts activity events to all WebSocket subscribers of a
+// single active run. Each client receives its own buffered channel so clients
+// do not consume events from one another.
+type activityHub struct {
+	mu      sync.RWMutex
+	clients map[int]chan agent.Activity
+	nextID  int
+	closed  bool
+}
+
+func newActivityHub() *activityHub {
+	return &activityHub{
+		clients: make(map[int]chan agent.Activity),
+	}
+}
+
+func (h *activityHub) subscribe() (int, <-chan agent.Activity, func()) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if h.closed {
+		ch := make(chan agent.Activity)
+		close(ch)
+		return 0, ch, func() {}
+	}
+
+	id := h.nextID
+	h.nextID++
+
+	ch := make(chan agent.Activity, 128)
+	h.clients[id] = ch
+
+	var once sync.Once
+
+	unsubscribe := func() {
+		once.Do(func() {
+			h.mu.Lock()
+			defer h.mu.Unlock()
+
+			if existing, ok := h.clients[id]; ok {
+				delete(h.clients, id)
+				close(existing)
+			}
+		})
+	}
+
+	return id, ch, unsubscribe
+}
+
+func (h *activityHub) publish(ev agent.Activity) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	for _, ch := range h.clients {
+		select {
+		case ch <- ev:
+		default:
+			// A slow WebSocket must never block the agent run.
+			// Only that slow subscriber may lose an event.
+		}
+	}
+}
+
+func (h *activityHub) close() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if h.closed {
+		return
+	}
+
+	h.closed = true
+
+	for id, ch := range h.clients {
+		delete(h.clients, id)
+		close(ch)
+	}
 }
 
 // New constructs a fully-wired server from the canonical runtime stack.
@@ -445,28 +524,37 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 
 	// Spawn the run.
 	ctx, cancel := context.WithCancel(context.Background())
-	updates := make(chan agent.Activity, 64)
+	hub := newActivityHub()
 
 	s.runsMu.Lock()
 
+	// There can be only one active run per session. Cancel the previous run
+	// before replacing its state.
 	if old, ok := s.runs[sess.ID]; ok {
 		old.cancel()
+		old.hub.close()
 	}
 
 	s.runs[sess.ID] = &runState{
-		cancel:  cancel,
-		updates: updates,
+		cancel: cancel,
+		hub:    hub,
 	}
 
 	s.runsMu.Unlock()
 
 	go func() {
-		defer close(updates)
-
 		defer func() {
 			s.runsMu.Lock()
-			delete(s.runs, sess.ID)
+
+			// Only remove the run if this goroutine still owns the current
+			// session entry. A newer run may already have replaced it.
+			if current, ok := s.runs[sess.ID]; ok && current.hub == hub {
+				delete(s.runs, sess.ID)
+			}
+
 			s.runsMu.Unlock()
+
+			hub.close()
 			cancel()
 		}()
 
@@ -474,10 +562,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 			ctx,
 			messages,
 			func(a agent.Activity) {
-				select {
-				case updates <- a:
-				default:
-				}
+				hub.publish(a)
 
 				// Persist milestone events only. Streaming response/reasoning
 				// deltas are intentionally not persisted individually because
@@ -499,11 +584,11 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		)
 
 		if err != nil {
-			updates <- agent.Activity{
+			hub.publish(agent.Activity{
 				Type:      "error",
 				Caption:   err.Error(),
 				Timestamp: time.Now(),
-			}
+			})
 			return
 		}
 
@@ -550,10 +635,16 @@ func (s *Server) handleAbort(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewDecoder(r.Body).Decode(&body)
 
 	s.runsMu.Lock()
-	defer s.runsMu.Unlock()
+	rs, ok := s.runs[body.SessionID]
+	s.runsMu.Unlock()
 
-	if rs, ok := s.runs[body.SessionID]; ok {
+	if ok {
 		rs.cancel()
+
+		// NOTE:
+		// s.orch.Abort() is intentionally still present here for compatibility
+		// with the current orchestrator. The dedicated per-session abort fix
+		// is handled separately in P0-9.
 		s.orch.Abort()
 	}
 
@@ -592,6 +683,9 @@ func (s *Server) handleActivityWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	_, updates, unsubscribe := rs.hub.subscribe()
+	defer unsubscribe()
+
 	// Read loop: client may send {"action":"abort"} to cancel.
 	go func() {
 		for {
@@ -608,17 +702,12 @@ func (s *Server) handleActivityWS(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	// Forward every activity to the WS client.
-	for ev := range rs.updates {
+	// Forward every activity published to this specific subscriber.
+	for ev := range updates {
 		if err := conn.WriteJSON(ev); err != nil {
 			return
 		}
 	}
-
-	_ = websocket.FormatCloseMessage(
-		websocket.CloseNormalClosure,
-		"",
-	)
 }
 
 // --- helpers ---
