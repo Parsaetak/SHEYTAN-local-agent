@@ -96,7 +96,6 @@ func Serve(cfg *config.Config, args []string) int {
 		IdleTimeout:       60 * time.Second,
 	}
 
-	// Graceful shutdown is triggered by SIGINT/SIGTERM.
 	shutdownCtx, stopSignal := signal.NotifyContext(
 		context.Background(),
 		os.Interrupt,
@@ -130,20 +129,26 @@ func Serve(cfg *config.Config, args []string) int {
 
 	err = httpServer.ListenAndServe()
 
-	if err != nil && !errors.Is(err, http.ErrServerClosed) {
-		fmt.Fprintln(os.Stderr, "server:", err)
-		srv.Close()
+	// A normal shutdown is reported by net/http as ErrServerClosed.
+	if err == nil || errors.Is(err, http.ErrServerClosed) {
 		<-shutdownDone
-		return 1
+		srv.Close()
+		return 0
 	}
 
-	<-shutdownDone
+	// Unexpected server failure: close the server immediately rather than
+	// waiting for an external signal that may never arrive.
+	fmt.Fprintln(os.Stderr, "server:", err)
 
-	// Shutdown the runtime only after the HTTP server has stopped accepting
-	// requests and active handlers have had a chance to finish.
+	_ = httpServer.Close()
 	srv.Close()
 
-	return 0
+	// Stop the signal context so the shutdown goroutine can exit even though
+	// no OS signal caused this shutdown.
+	stopSignal()
+	<-shutdownDone
+
+	return 1
 }
 
 func openBrowser(url string) {
