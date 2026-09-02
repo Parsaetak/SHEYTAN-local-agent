@@ -153,11 +153,20 @@ func NewStack(cfg *config.Config) *Stack {
 			),
 		}
 
+		researchCacheTTL := researchCacheTTL(
+			cfg.ResearchCacheTTLMin,
+		)
+
 		if cfg.ResearchGitHub {
 			githubProvider := research.NewGitHubProvider(
 				researchHTTPClient,
 				"",
 				"",
+			)
+
+			githubProvider = research.NewCachedProvider(
+				githubProvider,
+				researchCacheTTL,
 			)
 
 			if err := researchService.Register(
@@ -184,6 +193,11 @@ func NewStack(cfg *config.Config) *Stack {
 				cfg.ResearchUserAgent,
 			)
 
+			redditProvider = research.NewCachedProvider(
+				redditProvider,
+				researchCacheTTL,
+			)
+
 			if err := researchService.Register(
 				redditProvider,
 			); err != nil {
@@ -207,6 +221,11 @@ func NewStack(cfg *config.Config) *Stack {
 					"",
 				)
 
+			duckDuckGoProvider = research.NewCachedProvider(
+				duckDuckGoProvider,
+				researchCacheTTL,
+			)
+
 			if err := researchService.Register(
 				duckDuckGoProvider,
 			); err != nil {
@@ -229,6 +248,11 @@ func NewStack(cfg *config.Config) *Stack {
 					researchHTTPClient,
 					cfg.ResearchSearXNGURL,
 				)
+
+			searxngProvider = research.NewCachedProvider(
+				searxngProvider,
+				researchCacheTTL,
+			)
 
 			if err := researchService.Register(
 				searxngProvider,
@@ -264,12 +288,13 @@ func NewStack(cfg *config.Config) *Stack {
 
 			logging.Default().Info(
 				"research",
-				"unified research tool registered: backend=%s results=%d timeout=%s providers=%v",
+				"unified research tool registered: backend=%s results=%d timeout=%s cache=%s providers=%v",
 				researchService.Backend(),
 				cfg.ResearchMaxResults,
 				researchTimeout(
 					cfg.ResearchTimeoutSec,
 				),
+				researchCacheTTL,
 				researchService.ProviderNames(),
 			)
 		}
@@ -407,6 +432,17 @@ func researchTimeout(seconds int) time.Duration {
 
 	return time.Duration(seconds) *
 		time.Second
+}
+
+// researchCacheTTL converts the configured cache lifetime in minutes.
+// Zero or negative values disable caching.
+func researchCacheTTL(minutes int) time.Duration {
+	if minutes <= 0 {
+		return 0
+	}
+
+	return time.Duration(minutes) *
+		time.Minute
 }
 
 // formatCapsuleLine renders one recall capsule for the memory
