@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -41,10 +42,10 @@ func Embedded() string {
 }
 
 // EnsureFile materializes AI-CONTEXT.md in the app folder:
-//   - missing                            → write the embedded canonical file
-//   - marker version < ContextVersion   → overwrite with the new canonical
-//   - marker version >= current         → keep (the user may have edited it)
-//   - no marker (user-authored file)    → keep, untouched
+//   - missing                          → write the embedded canonical file
+//   - marker version < ContextVersion → overwrite with the new canonical
+//   - marker version >= current       → keep (the user may have edited it)
+//   - no marker (user-authored file)  → keep, untouched
 //
 // It returns the path of the effective file.
 func EnsureFile(dataDir string) (string, error) {
@@ -63,8 +64,6 @@ func EnsureFile(dataDir string) (string, error) {
 		if !hasMarker {
 			return p, nil
 		}
-
-		// Outdated marker → regenerate below.
 
 	case os.IsNotExist(err):
 		// Missing → write below.
@@ -162,10 +161,12 @@ func ResetProbeCache() {
 	probeInfo = nil
 }
 
-// toolNames lists the built-in tools in canonical order. The orchestrator
-// registers exactly these names (codeExec may be the sandboxed variant on
-// Windows — same name, stronger isolation).
-var toolNames = []string{
+// defaultToolNames exists only as a compatibility fallback for callers that
+// do not yet have the orchestrator registry available.
+//
+// The live agent path should call SystemMessageWithTools/SystemMessageWithTools
+// with the actual registered tool names.
+var defaultToolNames = []string{
 	"files",
 	"shell",
 	"codeExec",
@@ -182,10 +183,24 @@ var toolNames = []string{
 	"diff",
 }
 
-// Briefing builds the LIVE ENVIRONMENT block for the active config. It is
-// deliberately compact and dated to day granularity so the prompt prefix
-// stays stable within a session (see package comment).
+// Briefing builds the LIVE ENVIRONMENT block for the active config using the
+// compatibility tool list.
 func Briefing(cfg *config.Config) string {
+	return BriefingWithTools(
+		cfg,
+		nil,
+	)
+}
+
+// BriefingWithTools builds the LIVE ENVIRONMENT block using the actual
+// registered tool names supplied by the runtime.
+//
+// Passing nil/empty tools intentionally falls back to the compatibility
+// built-in list so older callers retain stable behavior.
+func BriefingWithTools(
+	cfg *config.Config,
+	registeredTools []string,
+) string {
 	var b strings.Builder
 
 	b.WriteString(
@@ -273,12 +288,10 @@ func Briefing(cfg *config.Config) string {
 		)
 	}
 
-	// v1.0.2 tool selection: list only what the user actually enabled so
-	// the model never plans around a disabled tool. Empty list = all.
-	tools := toolNames
+	tools := normalizeToolNames(registeredTools)
 
 	if cfg != nil {
-		tools = cfg.EnabledToolList(toolNames)
+		tools = cfg.EnabledToolList(tools)
 	}
 
 	b.WriteString(
@@ -294,10 +307,6 @@ func Briefing(cfg *config.Config) string {
 		)
 	}
 
-	// v1.0.6 vision status: tells the model whether attached images and
-	// the screenshot tool arrive as REAL image parts (projector paired)
-	// or as text notes. Static (config + models folder) so the prefix
-	// stays cacheable within a session.
 	if cfg != nil &&
 		!cfg.IsRemote() &&
 		cfg.VisionEnabled {
@@ -314,8 +323,6 @@ func Briefing(cfg *config.Config) string {
 		}
 	}
 
-	// v1.0.7 continuum status: teaches the model that long threads roll
-	// into chapters and how to treat the FRAMEWORK briefing block.
 	if cfg != nil &&
 		cfg.ContinuumEnabled {
 		fmt.Fprintf(
@@ -331,18 +338,62 @@ func Briefing(cfg *config.Config) string {
 	return b.String()
 }
 
-// SystemMessage builds the complete first system message: the instruction
-// file (disk copy, user-editable, embedded fallback) + the live environment
-// block. Callers should prepend it as message[0] exactly once per
-// conversation.
+// normalizeToolNames removes empty names and duplicates, then sorts the
+// registry into a deterministic order so prompt construction remains stable
+// across runs and makes cache behavior predictable.
+func normalizeToolNames(names []string) []string {
+	if len(names) == 0 {
+		names = defaultToolNames
+	}
+
+	seen := make(map[string]struct{}, len(names))
+	out := make([]string, 0, len(names))
+
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+
+		if _, exists := seen[name]; exists {
+			continue
+		}
+
+		seen[name] = struct{}{}
+		out = append(out, name)
+	}
+
+	sort.Strings(out)
+
+	return out
+}
+
+// SystemMessage builds the complete first system message using the
+// compatibility built-in tool list.
 func SystemMessage(cfg *config.Config) string {
+	return SystemMessageWithTools(
+		cfg,
+		nil,
+	)
+}
+
+// SystemMessageWithTools builds the complete first system message using the
+// actual registered tool names supplied by the runtime.
+func SystemMessageWithTools(
+	cfg *config.Config,
+	registeredTools []string,
+) string {
 	dataDir := ""
 
 	if cfg != nil {
 		dataDir = cfg.DataDir
 	}
 
-	return Load(dataDir) + Briefing(cfg)
+	return Load(dataDir) +
+		BriefingWithTools(
+			cfg,
+			registeredTools,
+		)
 }
 
 // HeaderSentinel is a stable substring identifying an AI-context system
