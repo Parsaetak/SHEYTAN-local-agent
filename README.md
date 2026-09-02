@@ -1,34 +1,13 @@
 # SHEYTAN™ Local-Agent — Version Zeta
 
-> A local-first autonomous AI coding laboratory.
+> A local-first autonomous AI software-engineering environment.
 >
 > **SHEYTAN™ is a trademark of Parsaetak · © 2024–2026 Parsaetak. All rights reserved.**
 > Licensed under the Parsaetak Proprietary License v1.1.
 
-SHEYTAN-Local-Agent is a native Go application designed to make a local AI model function as a practical software-engineering agent.
+SHEYTAN-Local-Agent is a local-first AI agent built to reason about software, use controlled tools, operate inside isolated coding workspaces, research technical problems, and verify whether proposed changes actually work.
 
-The **Version Zeta** architecture combines:
-
-* a local LLM mind
-* persistent memory and recall
-* deterministic tool calling
-* isolated coding workspaces
-* controlled command execution
-* automated tests/builds/linting
-* autonomous repair loops
-* Git inspection
-* GitHub research
-* Reddit research
-* general web research
-* browser automation
-* vision
-* multi-agent orchestration
-* diagnostics and telemetry
-* native Windows UI
-* headless server operation
-* portable application data
-
-The central design principle is:
+The defining rule of Version Zeta is:
 
 > **The AI may propose a solution. The laboratory decides whether the solution actually works.**
 
@@ -36,63 +15,71 @@ The central design principle is:
 
 ## Version Zeta
 
-Version Zeta changes the project's center of gravity from a general-purpose local AI assistant into an **autonomous coding laboratory**.
-
-The existing agent runtime already provides the core reasoning/tool loop, persistent recall, streaming activity, context management, tool allow-listing, iteration limits, and abort support.
-
-Zeta adds the surrounding engineering system that allows those capabilities to operate on real software projects safely.
-
-### Zeta architecture
+Version Zeta moves the project toward an autonomous coding laboratory rather than a conventional chat assistant.
 
 ```text
-                         SHEYTAN-LOCAL-AGENT
+                         SHEYTAN — VERSION ZETA
                                   │
-                 ┌────────────────┴────────────────┐
-                 │                                 │
-             LOCAL AI                           MEMORY
-                 │                                 │
-          LM Studio / LLM                 recall / sessions
-                 │
-                 ▼
-          ┌───────────────┐
-          │  ORCHESTRATOR │
-          │ plan / act    │
-          │ observe / fix │
-          └───────┬───────┘
-                  │
-       ┌──────────┼───────────┐
-       │          │           │
-       ▼          ▼           ▼
-     TOOLS       LAB       RESEARCH
-       │          │           │
-       │          │      ┌────┼─────────┐
-       │          │      │    │         │
-       │          │    GitHub Reddit   Web
-       │          │
-       │    ┌─────┴──────────┐
-       │    │    WORKSPACE   │
-       │    │ isolated copy  │
-       │    └─────┬──────────┘
-       │          │
-       │     edit / execute
-       │          │
-       │    ┌─────▼──────────┐
-       │    │  VERIFICATION  │
-       │    │ test/build/lint│
-       │    └─────┬──────────┘
-       │          │
-       │       PASS / FAIL
-       │          │
-       └──────────┴───────────────↺
+                    ┌─────────────┴─────────────┐
+                    │                           │
+                LOCAL AI                   ENGINEERING STATE
+                    │                    memory / recall / sessions
+                    ▼                           │
+              ORCHESTRATOR ◄───────────────────┘
+                    │
+          ┌─────────┼──────────┐
+          │         │          │
+        TOOLS      LAB      RESEARCH
+          │         │          │
+          │         │     GitHub / Reddit / Web
+          │         │          │
+          │    ┌────┴─────┐    │
+          │    │ WORKSPACE│    │
+          │    │ isolated │    │
+          │    └────┬─────┘    │
+          │         │          │
+          │      RUN / EDIT ◄──┘
+          │         │
+          │      VERIFY
+          │         │
+          └─────────┴──────────────► PASS / FAIL
+                                         │
+                                FAIL ────┴────► REPAIR ↺
 ```
+
+The model remains replaceable. The orchestration, tooling, isolation, verification, research, memory, and UI are application-owned systems.
+
+---
+
+# Current Architecture
+
+The project currently contains a Go backend/runtime with web and Windows desktop surfaces.
+
+```text
+Go runtime
+ ├── local/remote LLM
+ ├── orchestrator
+ ├── tools
+ ├── memory / recall
+ ├── browser
+ ├── sandbox
+ ├── Coding Lab
+ └── HTTP + WebSocket API
+```
+
+The current web frontend is a static UI embedded into the Go server, while Windows retains the existing native Fyne entry point.
+
+The next UI stage is a **Node.js + React + TypeScript + Vite frontend**, while keeping the Go runtime as the execution and systems backend.
+
+This separation keeps process execution, filesystem access, sandboxing, local LLM management, and orchestration in Go while giving the UI a modern application stack.
 
 ---
 
 # Coding Lab
 
-The Coding Lab is the core Version Zeta subsystem.
+The Coding Lab is the central Version Zeta execution system.
 
-A task starts with a source repository:
+A task begins from a source project:
 
 ```text
 project/
@@ -102,7 +89,7 @@ project/
 └── .git/
 ```
 
-The Lab creates a disposable copy:
+The Lab creates an isolated workspace:
 
 ```text
 lab/
@@ -110,42 +97,126 @@ lab/
     └── task-YYYYMMDD-HHMMSS-random/
         ├── source files
         ├── tests
-        └── build environment
+        └── build/test state
 ```
 
-The source repository is never supposed to be the direct execution target of the autonomous loop.
+The autonomous task operates on the disposable workspace instead of directly modifying the original source tree.
 
-The current workspace layer:
-
-* creates unique task directories
-* copies regular files
-* excludes `.git`
-* ignores symbolic links
-* prevents source/workspace overlap
-* prevents workspace path traversal
-* restricts cleanup to the laboratory root
-* supports cancellation through `context.Context`
-
-Current file:
+## Implemented Lab layers
 
 ```text
-internal/lab/workspace.go
+internal/lab/
+├── workspace.go
+├── runner.go
+├── policy.go
+├── task.go
+├── session.go
+├── verifier.go
+├── tool.go
+├── lab_test.go
+└── runner_test.go
 ```
+
+Current foundation includes:
+
+* isolated workspace creation
+* source/workspace overlap protection
+* `.git` exclusion
+* symlink exclusion
+* workspace path traversal protection
+* bounded process execution
+* context cancellation
+* command timeouts
+* shared stdout/stderr output limits
+* conservative command policy
+* task lifecycle management
+* session registry
+* objective verification
+* verification invalidation after commands
+* successful-task verification gating
+* orchestrator tool integration
+* regression tests for critical Lab behavior
 
 ---
 
-# Autonomous coding loop
+# Verification Invariant
 
-The intended Zeta repair loop is:
+A successful Coding Lab task cannot be completed without a current passing verification.
+
+```text
+RUN / EDIT
+     │
+     ▼
+verification becomes stale
+     │
+     ▼
+VERIFY
+     │
+     ├── FAIL ──► repair / research
+     │
+     └── PASS
+           │
+           ▼
+        FINISH
+```
+
+This prevents an older successful verification result from being reused after a later workspace mutation.
+
+---
+
+# Controlled Execution
+
+The intended execution path is:
+
+```text
+LLM
+ │
+ ▼
+Tool API
+ │
+ ▼
+Command Policy
+ │
+ ▼
+Coding Lab Runner
+ │
+ ▼
+Isolated Workspace
+ │
+ ▼
+Process
+```
+
+Current controls include:
+
+```text
+workspace boundary
+command timeout
+combined output limit
+network policy
+interactive-command policy
+destructive-command policy
+tool allow-list
+abort support
+structured execution results
+```
+
+The policy layer is defense-in-depth and is not a replacement for operating-system isolation.
+
+---
+
+# Autonomous Repair Loop
+
+The intended Zeta loop is:
 
 ```text
 USER TASK
    │
    ▼
-ANALYZE REPOSITORY
+ANALYZE PROJECT
    │
    ▼
-RUN BASELINE
+BASELINE
    │
    ├── build
    ├── tests
@@ -163,193 +234,223 @@ RUN
    ▼
 VERIFY
    │
-   ├──────── PASS ────────► REVIEW ──► COMPLETE
+   ├── PASS ──► REVIEW ──► COMPLETE
    │
-   └──────── FAIL
-                 │
-                 ▼
-              DIAGNOSE
-                 │
-                 ▼
-             RESEARCH
-                 │
-                 ▼
-                EDIT
-                 │
-                 └───────────────► VERIFY
+   └── FAIL
+          │
+          ▼
+       DIAGNOSE
+          │
+          ▼
+       RESEARCH
+          │
+          ▼
+        REPAIR ↺
 ```
 
-The agent should not stop merely because code "looks correct."
-
-A successful autonomous task should be supported by executable evidence such as:
-
-```text
-✓ tests passed
-✓ build passed
-✓ lint passed
-✓ regression checks passed
-✓ requested behavior reproduced
-✓ final diff reviewed
-```
+The autonomous repair controller is still under active implementation.
 
 ---
 
 # Research Engine
 
-Zeta gives the coding agent external research capabilities.
+Version Zeta is designed to research technical failures instead of blindly guessing.
 
-Research sources are intentionally separated by purpose.
-
-## GitHub
-
-GitHub is the primary code-repair source.
-
-The future research interface is designed around:
+Planned research sources include:
 
 ```text
-github_search_code()
-github_search_issues()
-github_search_prs()
-github_read_issue()
-github_read_pr()
-github_read_file()
-```
-
-Typical use:
-
-```text
-compiler error
-      ↓
-GitHub code search
-      ↓
-GitHub issues
-      ↓
-pull requests
-      ↓
-maintainer discussion
-      ↓
-candidate solution
-      ↓
-local verification
-```
-
-A discovered GitHub solution is treated as a **candidate**, not automatically as truth.
-
----
-
-## Reddit
-
-Reddit is intended for practical troubleshooting and real-world experience.
-
-Typical questions:
-
-```text
-"Has anyone encountered this?"
-"What fixed this?"
-"Is this bug still present?"
-"Does this work on Intel hardware?"
-"What workaround is currently used?"
-```
-
-Reddit evidence is useful for experience and troubleshooting, but should normally receive less authority than official documentation or maintainer-authored changes.
-
----
-
-## General web
-
-General web research fills gaps between repositories, documentation, discussions, and tutorials.
-
-The system may use:
-
-```text
-SearXNG
-DuckDuckGo
-direct bounded HTTP fetches
+GitHub
+Reddit
+general web
 official documentation
-project documentation
+SearXNG
+bounded HTTP fetches
 ```
 
-A self-hosted SearXNG instance is particularly useful because it can act as a unified local search gateway.
-
----
-
-# Evidence-driven repair
-
-Zeta follows this rule:
+Research should extract evidence such as:
 
 ```text
-SEARCH RESULT
-      ↓
-EXTRACT CLAIM
-      ↓
-CHECK VERSION / CONTEXT
-      ↓
-COMPARE SOURCES
-      ↓
-APPLY CANDIDATE
-      ↓
-RUN LOCALLY
-      ↓
-PASS → ACCEPT
-FAIL → REJECT / RESEARCH AGAIN
+exact error strings
+package/module names
+symbols
+version information
+maintainer explanations
+known regressions
+candidate patches
+workarounds
 ```
 
-This is important because language models can produce technically convincing but incorrect fixes.
-
-The laboratory is the final authority for whether a candidate repair is operationally successful.
+A discovered solution is treated as a **candidate**, then checked against the local project and version context.
 
 ---
 
-# Local AI
+# Evidence Model
 
-SHEYTAN-Local-Agent supports local and remote OpenAI-compatible LLM providers.
-
-The local architecture is designed around:
+The intended authority order is approximately:
 
 ```text
-SHEYTAN Agent
-     │
-     ▼
-LLM client
-     │
-     ├── bundled llama.cpp
-     │
-     └── compatible local endpoint
+official documentation
+        ↓
+maintainer-authored issue / PR
+        ↓
+project source / release information
+        ↓
+high-quality technical discussion
+        ↓
+community reports / Reddit
+        ↓
+unknown web content
 ```
 
-The project also maintains support for remote OpenAI-compatible providers.
+This ranking is guidance, not proof.
 
-The model remains replaceable. The orchestration, tools, research system, workspace, verification, and memory are owned by SHEYTAN.
+Local execution and objective verification remain the final acceptance criterion.
 
 ---
 
-# Persistent memory
+# AI Runtime
 
-SHEYTAN already contains persistent session and recall infrastructure.
-
-The Zeta direction extends that concept to coding work:
+SHEYTAN supports local and remote OpenAI-compatible providers.
 
 ```text
-project knowledge
-    │
-    ├── architecture
-    ├── dependencies
-    ├── known failures
-    ├── previous fixes
-    ├── successful commands
-    ├── rejected approaches
-    └── verified repairs
+SHEYTAN
+   │
+   ▼
+LLM Client
+   │
+   ├── local llama.cpp
+   └── remote OpenAI-compatible endpoint
 ```
 
-This allows future tasks to benefit from previous verified work instead of rediscovering the same problem repeatedly.
+The orchestrator provides:
+
+* deterministic tool ordering
+* tool allow-listing
+* iterative tool calls
+* streaming activity
+* abort support
+* history windowing
+* persistent recall
+* context-pressure tracking
+* configurable iteration limits
 
 ---
 
-# Tool architecture
+# Memory and Recall
 
-Every agent capability should implement a controlled tool interface.
+Persistent sessions and recall are already part of the runtime.
 
-Conceptually:
+Zeta is extending that foundation toward engineering memory:
+
+```text
+project
+├── architecture knowledge
+├── dependency information
+├── known failures
+├── successful commands
+├── verified fixes
+├── rejected approaches
+└── research evidence
+```
+
+The long-term goal is to make previously verified engineering knowledge reusable across tasks.
+
+---
+
+# User Interface — Zeta UI Migration
+
+The existing UI is being replaced incrementally by a modern Node.js frontend while the Go runtime remains the systems core.
+
+Target stack:
+
+```text
+Node.js
+TypeScript
+React
+Vite
+REST
+WebSocket
+```
+
+Target architecture:
+
+```text
+             Node / React UI
+                    │
+             REST + WebSocket
+                    │
+                    ▼
+              Go HTTP API
+                    │
+                    ▼
+             Shared Go Runtime
+                    │
+       ┌────────────┼─────────────┐
+       │            │             │
+      LLM          LAB         RESEARCH
+```
+
+The migration is intended to improve:
+
+* UI development speed
+* component reuse
+* maintainability
+* interactive rendering
+* live project visualization
+* editor integration
+* responsive application behavior
+
+Critical process, filesystem, sandbox, LLM, and orchestration logic remains in Go.
+
+The migration is **planned/in progress**, not yet complete.
+
+---
+
+# Live SVG Workspace
+
+SVG becomes a first-class project artifact in the new UI.
+
+```text
+.svg file
+   │
+   ├── live SVG renderer
+   │      ├── zoom
+   │      ├── pan
+   │      ├── selection
+   │      └── instant refresh
+   │
+   └── source editor
+          ├── XML editing
+          ├── formatting
+          ├── validation
+          └── save
+```
+
+The intended workflow is:
+
+```text
+AI creates SVG
+      ↓
+Coding Lab writes file
+      ↓
+UI renders SVG live
+      ↓
+user edits SVG source
+      ↓
+preview updates immediately
+      ↓
+Lab verifies resulting artifact
+```
+
+The new interface is intended to allow both **visual inspection** and **direct SVG source editing** without leaving the application.
+
+The SVG editor/preview is a target of the Node/React UI stage and is not yet a completed product feature.
+
+---
+
+# Tool Architecture
+
+Agent tools implement the common interface:
 
 ```go
 type Tool interface {
@@ -360,149 +461,39 @@ type Tool interface {
 }
 ```
 
-The current orchestrator already uses this registry-style architecture.
-
-Zeta extends the tool surface toward:
+Current tool families include:
 
 ```text
-LOCAL
+Core
 ├── files
 ├── shell
 ├── code execution
 ├── git
 ├── browser
+├── web search
 ├── JSON
 ├── archive
+├── bounded fetch
 ├── diff
 └── data analysis
 
-LAB
-├── create workspace
-├── inspect workspace
-├── run command
-├── run tests
-├── build
-├── lint
-├── verify
-└── cleanup
+Coding Lab
+└── coding_lab
 
-RESEARCH
-├── web search
-├── web fetch
-├── GitHub code
-├── GitHub issues
-├── GitHub PRs
-├── Reddit search
-└── Reddit fetch
+Runtime
+├── memory
+├── recall
+├── screenshot
+└── linux terminal
 ```
 
----
-
-# Security model
-
-The autonomous agent should not receive unrestricted access to the entire operating system.
-
-The intended execution path is:
-
-```text
-LLM
- │
- ▼
-Tool API
- │
- ▼
-Policy
- │
- ▼
-Lab Runner
- │
- ▼
-Isolated Workspace
- │
- ▼
-Process
-```
-
-Important controls include:
-
-```text
-workspace boundary
-command timeout
-iteration limit
-network policy
-tool allow-list
-abort support
-resource quota
-structured logging
-```
-
-The current `workspace.go` already establishes the filesystem-boundary foundation for this model.
-
----
-
-# Project structure
-
-Current architecture includes:
-
-```text
-SHEYTAN-local-agent/
-│
-├── cmd/
-│   ├── ask.go
-│   ├── context.go
-│   ├── diagnostics.go
-│   ├── license.go
-│   ├── root.go
-│   ├── serve.go
-│   ├── stress.go
-│   └── ...
-│
-├── internal/
-│   ├── agent/
-│   │   └── orchestrator.go
-│   │
-│   ├── aicontext/
-│   │   └── AI-CONTEXT.md
-│   │
-│   ├── api/
-│   ├── artifacts/
-│   ├── browser/
-│   ├── chunking/
-│   ├── config/
-│   ├── continuum/
-│   ├── llm/
-│   ├── logging/
-│   ├── memory/
-│   ├── multiagent/
-│   │
-│   └── lab/
-│       └── workspace.go
-│
-├── models/
-├── sessions/
-├── logs/
-├── browser-profile/
-├── sandbox/
-├── workspace/
-├── lab/
-│   └── workspaces/
-│
-├── charts/
-├── go.mod
-├── go.sum
-├── README.md
-└── worklog.md
-```
-
-The exact tree will expand as the Zeta Lab and Research engines are implemented.
+The Coding Lab is registered through the shared runtime stack so the main runtime can use the same implementation.
 
 ---
 
 # Configuration
 
-Version Zeta adds dedicated configuration for the Coding Lab and research system.
-
-Important settings include:
+Version Zeta adds dedicated Lab and research settings:
 
 ```text
 LabEnabled
@@ -524,53 +515,67 @@ ResearchWeb
 ResearchUserAgent
 ```
 
-The defaults are intentionally conservative.
-
-For example:
+Default safety posture:
 
 ```text
-Lab network access      OFF
-workspace preservation  OFF
-command timeout         300 seconds
-research enabled        ON
-GitHub research         ON
-Reddit research         ON
-web research            ON
+Coding Lab           enabled
+Lab network          disabled
+workspace retention  disabled
+command timeout     300 seconds
+research             enabled
+GitHub research      enabled
+Reddit research      enabled
+web research         enabled
 ```
 
 ---
 
-# Version naming
-
-The numbered release system is retired for the main project identity.
-
-The current project identity is:
+# Project Structure
 
 ```text
-SHEYTAN-Local-Agent
-Version Zeta
+SHEYTAN-local-agent/
+├── cmd/
+├── internal/
+│   ├── agent/
+│   ├── aicontext/
+│   ├── api/
+│   ├── artifacts/
+│   ├── browser/
+│   ├── chunking/
+│   ├── config/
+│   ├── continuum/
+│   ├── lab/
+│   ├── llm/
+│   ├── logging/
+│   ├── memory/
+│   ├── multiagent/
+│   ├── native/
+│   ├── recall/
+│   ├── runtime/
+│   ├── sandbox/
+│   ├── sessions/
+│   └── tools/
+├── web/
+│   ├── embed.go
+│   └── static/
+├── models/
+├── sessions/
+├── logs/
+├── sandbox/
+├── workspace/
+├── lab/
+├── charts/
+├── go.mod
+├── go.sum
+├── README.md
+└── worklog.md
 ```
 
-The configuration exposes:
-
-```go
-const (
-    AppName    = "SHEYTAN-Local-Agent"
-    AppVersion = "Zeta"
-)
-```
-
-Future internal implementation milestones may still be documented separately, but the user-facing release identity remains **Version Zeta**.
+The future Node/React frontend will be added as a dedicated application surface rather than replacing the Go runtime.
 
 ---
 
 # Running
-
-Interactive GUI:
-
-```bash
-sheytan-local-agent
-```
 
 Headless agent:
 
@@ -578,7 +583,7 @@ Headless agent:
 sheytan-local-agent ask "Analyze this project"
 ```
 
-Server:
+HTTP/web server:
 
 ```bash
 sheytan-local-agent serve
@@ -608,140 +613,114 @@ Version:
 sheytan-local-agent version
 ```
 
-The eventual Coding Lab interface is intended to expose commands such as:
+Windows currently retains the native desktop entry point while the Node/React UI migration is developed.
 
-```bash
-sheytan-local-agent lab run "Fix all failing tests"
+---
+
+# Version Naming
+
+The user-facing numbered release identity is retired.
+
+The project identity is:
+
+```text
+SHEYTAN-Local-Agent
+Version Zeta
 ```
 
-and:
+Configuration exposes:
 
-```bash
-sheytan-local-agent lab run \
-    --repo ./project \
-    "Implement the requested feature and make the complete test suite pass"
+```go
+const (
+    AppName    = "SHEYTAN-Local-Agent"
+    AppVersion = "Zeta"
+)
+```
+
+Internal engineering milestones may still be tracked in `worklog.md`, but the public application identity remains **Version Zeta**.
+
+---
+
+# Current Development Status
+
+## Implemented
+
+```text
+✓ Go runtime and application architecture
+✓ local and remote LLM support
+✓ orchestrator/tool registry
+✓ persistent sessions and recall
+✓ streaming / abort / context management
+✓ browser and Git tooling
+✓ diagnostics and stress infrastructure
+✓ portable application data
+✓ Coding Lab workspace isolation
+✓ Coding Lab runner
+✓ conservative command policy
+✓ Coding Lab task lifecycle
+✓ Coding Lab session registry
+✓ objective verification
+✓ verification invalidation/gating
+✓ Coding Lab orchestrator integration
+✓ Lab regression tests
+✓ shared stdout/stderr output limiting
+```
+
+## In progress
+
+```text
+□ unified API/runtime construction
+□ autonomous repair controller
+□ GitHub research provider
+□ Reddit research provider
+□ general web / SearXNG research
+□ research cache and evidence ranking
+□ engineering/coding memory integration
+□ Node.js + React + TypeScript + Vite UI
+□ live SVG editor/preview
+□ full GUI/Lab integration
+□ end-to-end autonomous coding verification
 ```
 
 ---
 
-# Design principles
+# Core Objective
 
-## Local-first
-
-Local computation should be preferred whenever practical.
-
-## Evidence over confidence
-
-A plausible AI answer is not equivalent to a verified software change.
-
-## Isolate before executing
-
-Autonomous code should run in a controlled laboratory workspace.
-
-## Research before guessing
-
-Known bugs, issues, patches, documentation, and real-world reports should be searched before reinventing solutions.
-
-## Verify before accepting
-
-Tests, builds, linting, regression checks, and diffs are part of the reasoning loop.
-
-## Keep the model replaceable
-
-The architecture should work with multiple local models and compatible endpoints.
-
-## Keep state portable
-
-Application state belongs inside the application data root whenever practical.
-
-## Make failures observable
-
-Every major action should produce useful logs and structured activity events.
-
----
-
-# Current Zeta development status
-
-### Completed foundation
-
-* Go application architecture
-* native GUI/server surface
-* local/remote LLM support
-* agent orchestration
-* tool registry
-* persistent memory/recall
-* context management
-* streaming activity
-* browser automation
-* Git tooling
-* diagnostics
-* stress testing
-* portable application data
-* isolated Lab workspace foundation
-
-### Current development sequence
+The finished Version Zeta system should turn a request such as:
 
 ```text
-Zeta
- │
- ├── 1. Workspace        ← current foundation
- ├── 2. Runner
- ├── 3. Verifier
- ├── 4. Lab tool adapter
- ├── 5. Research provider
- ├── 6. GitHub research
- ├── 7. Reddit research
- ├── 8. Web research
- ├── 9. Autonomous repair loop
- ├── 10. Research cache
- ├── 11. Coding memory
- └── 12. Zeta integration/UI
+Fix every failing test in this repository.
+Research unfamiliar errors.
+Do not modify files outside the project.
+Keep iterating until the build and tests pass.
 ```
 
----
-
-# Core objective
-
-The long-term objective of Version Zeta is not simply:
+into a bounded engineering loop:
 
 ```text
-"AI that writes code"
+REQUEST
+  ↓
+ANALYZE
+  ↓
+BASELINE
+  ↓
+DIAGNOSE
+  ↓
+RESEARCH
+  ↓
+PLAN
+  ↓
+PATCH
+  ↓
+RUN
+  ↓
+VERIFY
+  │
+  ├── PASS → REVIEW → COMPLETE
+  │
+  └── FAIL → RESEARCH → REPAIR ↺
 ```
 
-It is:
+The defining objective remains:
 
-```text
-                HUMAN
-                  │
-                  ▼
-               TASK
-                  │
-                  ▼
-             LOCAL AI MIND
-                  │
-        ┌─────────┼──────────┐
-        │         │          │
-        ▼         ▼          ▼
-      CODE      RESEARCH    TOOLS
-        │         │          │
-        └─────────┼──────────┘
-                  │
-                  ▼
-             CODING LAB
-                  │
-                  ▼
-              EXECUTE
-                  │
-                  ▼
-              VERIFY
-             /       \
-          PASS       FAIL
-           │           │
-           ▼           ▼
-        REVIEW      RESEARCH
-           │           │
-           ▼           └──────► REPAIR
-        COMPLETE              ↺
-```
-
-The laboratory, not the language model, determines whether the software is actually fixed.
+> **Build an AI software engineer whose claims are backed by executable evidence.**
