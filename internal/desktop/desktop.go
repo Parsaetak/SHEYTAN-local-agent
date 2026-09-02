@@ -2,11 +2,9 @@
 package desktop
 
 import (
-	"errors"
 	"fmt"
 	"io/fs"
 	"net/http"
-	"time"
 
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/api"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
@@ -53,13 +51,12 @@ func Run(cfg *config.Config) int {
 
 	assetHandler := application.AssetFileServerFS(staticFS)
 	apiHandler := srv.Handler()
-	combinedHandler := desktopHandler(assetHandler, apiHandler)
 
 	app := application.New(application.Options{
 		Name:        config.AppName,
 		Description: "SHEYTAN Local Agent",
 		Assets: application.AssetOptions{
-			Handler: combinedHandler,
+			Handler: desktopHandler(assetHandler, apiHandler),
 		},
 	})
 
@@ -90,9 +87,9 @@ func Run(cfg *config.Config) int {
 // desktopHandler routes application API traffic to the Go backend and all
 // other traffic to Wails' embedded asset server.
 //
-// Keeping both paths in one handler is what allows the production executable
-// to remain completely self-contained while preserving the existing REST and
-// WebSocket API contract used by the React frontend.
+// Keeping both paths in one handler makes the production executable fully
+// self-contained while preserving the existing REST and WebSocket API
+// contract used by the React frontend.
 func desktopHandler(assetHandler http.Handler, apiHandler http.Handler) http.Handler {
 	mux := http.NewServeMux()
 
@@ -102,8 +99,3 @@ func desktopHandler(assetHandler http.Handler, apiHandler http.Handler) http.Han
 
 	return mux
 }
-
-// Keep this symbol referenced so future desktop lifecycle additions can use a
-// common shutdown duration without reintroducing a network server.
-var _ = errors.Is
-var _ = time.Second
