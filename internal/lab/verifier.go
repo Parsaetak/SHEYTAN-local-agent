@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -12,6 +15,11 @@ var (
 	ErrVerificationFailed   = errors.New("lab: verification failed")
 	ErrVerificationEmpty    = errors.New("lab: no verification checks configured")
 	ErrVerificationCanceled = errors.New("lab: verification canceled")
+	ErrVerificationTrivial  = errors.New("lab: verification command is not meaningful")
+)
+
+const (
+	maxVerificationCommandLength = 16 * 1024
 )
 
 // VerificationStatus describes the outcome of one verification check.
@@ -33,9 +41,9 @@ const (
 // workspace state.
 type VerificationCheck struct {
 	Name         string  `json:"name"`
-	Command      Command       `json:"command"`
-	Required     bool          `json:"required"`
-	AllowFailure bool          `json:"allowFailure,omitempty"`
+	Command      Command `json:"command"`
+	Required     bool    `json:"required"`
+	AllowFailure bool    `json:"allowFailure,omitempty"`
 }
 
 // VerificationResult records the result of one verification check.
@@ -65,9 +73,6 @@ type VerificationSummary struct {
 }
 
 // Verifier executes objective checks against a running task.
-//
-// The verifier deliberately reuses TaskManager so policy and workspace
-// boundaries remain identical between normal task commands and verification.
 type Verifier struct {
 	Tasks *TaskManager
 }
@@ -85,6 +90,10 @@ func NewVerifier(tasks *TaskManager) (*Verifier, error) {
 
 // Verify executes all configured checks and records the resulting verification
 // state on the task.
+//
+// Verification commands are independently policy-checked and must be
+// meaningful. A trivial command such as "echo ok", "true", or "exit 0" cannot
+// provide objective evidence of the workspace state.
 //
 // The task is considered verified only after the complete verification run has
 // finished and the resulting summary has been recorded through
@@ -118,11 +127,15 @@ func (v *Verifier) Verify(
 			ErrTaskNotRunnable,
 			task.Status,
 		)
+
 		return finishVerification(summary, err)
 	}
 
 	if len(checks) == 0 {
-		return finishVerification(summary, ErrVerificationEmpty)
+		return finishVerification(
+			summary,
+			ErrVerificationEmpty,
+		)
 	}
 
 	if ctx == nil {
@@ -130,7 +143,6 @@ func (v *Verifier) Verify(
 	}
 
 	for index, check := range checks {
-		// Check cancellation before starting another verification command.
 		if err := ctx.Err(); err != nil {
 			summary.Error = ErrVerificationCanceled.Error()
 			summary.Passed = false
@@ -145,6 +157,7 @@ func (v *Verifier) Verify(
 		}
 
 		normalized, err := normalizeCheck(check, index)
+
 		if err != nil {
 			finished := time.Now().UTC()
 
@@ -174,7 +187,10 @@ func (v *Verifier) Verify(
 			summary.FinishedAt = finished
 			summary.Duration = finished.Sub(started)
 
-			recordErr := v.Tasks.RecordVerification(task, summary)
+			recordErr := v.Tasks.RecordVerification(
+				task,
+				summary,
+			)
 
 			if recordErr != nil {
 				return summary, errors.Join(
@@ -198,9 +214,6 @@ func (v *Verifier) Verify(
 
 		checkStarted := time.Now().UTC()
 
-		// Policy is checked again here even though RunCommand also checks it.
-		// This keeps verification policy failures represented explicitly as
-		// verification results rather than as an unexplained execution failure.
 		if err := v.Tasks.Policy.EvaluateForWorkspace(
 			normalized.Command.Command,
 			normalized.Command.WorkingDir,
@@ -215,7 +228,10 @@ func (v *Verifier) Verify(
 				FinishedAt: checkFinished,
 			}
 
-			summary.Results = append(summary.Results, result)
+			summary.Results = append(
+				summary.Results,
+				result,
+			)
 
 			if normalized.Required && !normalized.AllowFailure {
 				summary.RequiredFailed++
@@ -229,7 +245,10 @@ func (v *Verifier) Verify(
 				summary.FinishedAt = checkFinished
 				summary.Duration = checkFinished.Sub(started)
 
-				recordErr := v.Tasks.RecordVerification(task, summary)
+				recordErr := v.Tasks.RecordVerification(
+					task,
+					summary,
+				)
 
 				if recordErr != nil {
 					return summary, errors.Join(
@@ -297,16 +316,6 @@ func (v *Verifier) Verify(
 
 			return summary, ErrVerificationCanceled
 
-		case errors.Is(commandErr, ErrCommandTimedOut):
-			verificationResult.Status = VerificationFailed
-			verificationResult.Error = commandErrorString(commandErr)
-
-			if normalized.Required && !normalized.AllowFailure {
-				summary.RequiredFailed++
-			} else {
-				summary.OptionalFailed++
-			}
-
 		default:
 			verificationResult.Status = VerificationFailed
 			verificationResult.Error = commandErrorString(commandErr)
@@ -323,8 +332,6 @@ func (v *Verifier) Verify(
 			verificationResult,
 		)
 
-		// Required failures stop the verification run immediately. The failed
-		// summary is still persisted to the Task so Finish() remains blocked.
 		if verificationResult.Status == VerificationFailed &&
 			normalized.Required &&
 			!normalized.AllowFailure {
@@ -333,7 +340,10 @@ func (v *Verifier) Verify(
 			summary.FinishedAt = checkFinished
 			summary.Duration = checkFinished.Sub(started)
 
-			recordErr := v.Tasks.RecordVerification(task, summary)
+			recordErr := v.Tasks.RecordVerification(
+				task,
+				summary,
+			)
 
 			if recordErr != nil {
 				return summary, errors.Join(
@@ -351,8 +361,6 @@ func (v *Verifier) Verify(
 	summary.FinishedAt = finished
 	summary.Duration = finished.Sub(started)
 
-	// At least one required check must exist. This prevents an accidentally
-	// empty required set from becoming an automatic success.
 	summary.Passed =
 		summary.RequiredTotal > 0 &&
 		summary.RequiredFailed == 0 &&
@@ -362,10 +370,11 @@ func (v *Verifier) Verify(
 		summary.Error = ErrVerificationFailed.Error()
 	}
 
-	// Record the result AFTER all commands are complete. RunCommand invalidates
-	// verification before every command, so recording earlier would immediately
-	// be wiped out by the next check.
-	recordErr := v.Tasks.RecordVerification(task, summary)
+	recordErr := v.Tasks.RecordVerification(
+		task,
+		summary,
+	)
+
 	if recordErr != nil {
 		if summary.Passed {
 			summary.Passed = false
@@ -382,42 +391,70 @@ func (v *Verifier) Verify(
 	return summary, nil
 }
 
-// VerifyStandard provides a simple build/test verification profile.
+// VerifyStandard provides project-aware verification.
 //
-// Empty command strings are ignored. At least one of the supplied commands
-// must therefore be present for verification to succeed.
+// Explicit build/test commands are used when supplied. When either is empty,
+// the verifier discovers appropriate native checks from the workspace.
+//
+// This means an empty caller configuration cannot silently become a successful
+// verification.
 func (v *Verifier) VerifyStandard(
 	ctx context.Context,
 	task *Task,
 	buildCommand string,
 	testCommand string,
 ) (VerificationSummary, error) {
-	checks := make([]VerificationCheck, 0, 2)
-
-	buildCommand = strings.TrimSpace(buildCommand)
-	testCommand = strings.TrimSpace(testCommand)
-
-	if buildCommand != "" {
-		checks = append(checks, VerificationCheck{
-			Name:     "build",
-			Required: true,
-			Command: Command{
-				Command: buildCommand,
-			},
-		})
+	if task == nil ||
+		task.Workspace == nil ||
+		strings.TrimSpace(task.Workspace.Path) == "" {
+		return VerificationSummary{}, ErrInvalidWorkspace
 	}
 
-	if testCommand != "" {
-		checks = append(checks, VerificationCheck{
-			Name:     "tests",
-			Required: true,
-			Command: Command{
-				Command: testCommand,
-			},
-		})
+	checks, err := standardChecks(
+		task.Workspace.Path,
+		buildCommand,
+		testCommand,
+	)
+
+	if err != nil {
+		return VerificationSummary{}, err
 	}
 
-	return v.Verify(ctx, task, checks)
+	return v.Verify(
+		ctx,
+		task,
+		checks,
+	)
+}
+
+// VerifyNative performs independent native project verification.
+//
+// It deliberately ignores caller-provided verification commands and derives
+// meaningful checks from the workspace itself. This is the stronger path used
+// by autonomous repair/verification.
+func (v *Verifier) VerifyNative(
+	ctx context.Context,
+	task *Task,
+) (VerificationSummary, error) {
+	if task == nil ||
+		task.Workspace == nil ||
+		strings.TrimSpace(task.Workspace.Path) == "" {
+		return VerificationSummary{}, ErrInvalidWorkspace
+	}
+
+	checks, err := discoverNativeChecks(
+		task.Workspace.Path,
+	)
+
+	if err != nil {
+		return VerificationSummary{}, err
+	}
+
+	return v.Verify(
+		ctx,
+		task,
+		checks,
+	)
 }
 
 // VerifyCommands verifies an arbitrary ordered list of commands.
@@ -428,7 +465,11 @@ func (v *Verifier) VerifyCommands(
 	task *Task,
 	commands []string,
 ) (VerificationSummary, error) {
-	checks := make([]VerificationCheck, 0, len(commands))
+	checks := make(
+		[]VerificationCheck,
+		0,
+		len(commands),
+	)
 
 	for index, command := range commands {
 		command = strings.TrimSpace(command)
@@ -437,16 +478,462 @@ func (v *Verifier) VerifyCommands(
 			continue
 		}
 
-		checks = append(checks, VerificationCheck{
-			Name:     fmt.Sprintf("check-%d", index+1),
-			Required: true,
-			Command: Command{
-				Command: command,
+		checks = append(
+			checks,
+			VerificationCheck{
+				Name:     fmt.Sprintf("check-%d", index+1),
+				Required: true,
+				Command: Command{
+					Command: command,
+				},
 			},
-		})
+		)
 	}
 
-	return v.Verify(ctx, task, checks)
+	if len(checks) == 0 {
+		return VerificationSummary{}, ErrVerificationEmpty
+	}
+
+	return v.Verify(
+		ctx,
+		task,
+		checks,
+	)
+}
+
+// standardChecks builds required checks from explicit commands and/or the
+// project detected in workspaceRoot.
+func standardChecks(
+	workspaceRoot string,
+	buildCommand string,
+	testCommand string,
+) ([]VerificationCheck, error) {
+	buildCommand = strings.TrimSpace(buildCommand)
+	testCommand = strings.TrimSpace(testCommand)
+
+	if buildCommand != "" {
+		if err := validateVerificationCommand(buildCommand); err != nil {
+			return nil, err
+		}
+	}
+
+	if testCommand != "" {
+		if err := validateVerificationCommand(testCommand); err != nil {
+			return nil, err
+		}
+	}
+
+	checks := make(
+		[]VerificationCheck,
+		0,
+		4,
+	)
+
+	if buildCommand != "" {
+		checks = append(
+			checks,
+			VerificationCheck{
+				Name:     "build",
+				Required: true,
+				Command: Command{
+					Command: buildCommand,
+				},
+			},
+		)
+	}
+
+	if testCommand != "" {
+		checks = append(
+			checks,
+			VerificationCheck{
+				Name:     "tests",
+				Required: true,
+				Command: Command{
+					Command: testCommand,
+				},
+			},
+		)
+	}
+
+	if len(checks) == 0 {
+		discovered, err := discoverNativeChecks(
+			workspaceRoot,
+		)
+
+		if err != nil {
+			return nil, err
+		}
+
+		checks = append(
+			checks,
+			discovered...,
+		)
+	}
+
+	if len(checks) == 0 {
+		return nil, ErrVerificationEmpty
+	}
+
+	return checks, nil
+}
+
+// discoverNativeChecks identifies meaningful project verification commands
+// directly from the workspace.
+//
+// At most one build check and one test check are generated for each detected
+// project family, avoiding a combinatorial explosion while still providing
+// objective evidence.
+func discoverNativeChecks(
+	workspaceRoot string,
+) ([]VerificationCheck, error) {
+	workspaceRoot = strings.TrimSpace(workspaceRoot)
+
+	if workspaceRoot == "" {
+		return nil, ErrInvalidWorkspace
+	}
+
+	info, err := os.Stat(workspaceRoot)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"lab: inspect verification workspace: %w",
+			err,
+		)
+	}
+
+	if !info.IsDir() {
+		return nil, ErrInvalidWorkspace
+	}
+
+	checks := make(
+		[]VerificationCheck,
+		0,
+		4,
+	)
+
+	// Go project.
+	if fileExists(filepath.Join(workspaceRoot, "go.mod")) {
+		checks = append(
+			checks,
+			VerificationCheck{
+				Name:     "go-build",
+				Required: true,
+				Command: Command{
+					Command: goBuildCommand(),
+				},
+			},
+		)
+
+		checks = append(
+			checks,
+			VerificationCheck{
+				Name:     "go-test",
+				Required: true,
+				Command: Command{
+					Command: goTestCommand(),
+				},
+			},
+		)
+	}
+
+	// Node/npm project.
+	if fileExists(filepath.Join(workspaceRoot, "package.json")) {
+		testCommand := ""
+
+		if fileExists(filepath.Join(workspaceRoot, "package-lock.json")) ||
+			fileExists(filepath.Join(workspaceRoot, "npm-shrinkwrap.json")) {
+			testCommand = "npm test -- --runInBand"
+		} else {
+			testCommand = "npm test"
+		}
+
+		checks = append(
+			checks,
+			VerificationCheck{
+				Name:     "node-test",
+				Required: true,
+				Command: Command{
+					Command: testCommand,
+				},
+			},
+		)
+
+		// A package.json with a build script is independently verified by npm.
+		if packageHasScript(workspaceRoot, "build") {
+			checks = append(
+				checks,
+				VerificationCheck{
+					Name:     "node-build",
+					Required: true,
+					Command: Command{
+						Command: "npm run build",
+					},
+				},
+			)
+		}
+	}
+
+	// Python project.
+	if fileExists(filepath.Join(workspaceRoot, "pyproject.toml")) ||
+		fileExists(filepath.Join(workspaceRoot, "setup.py")) ||
+		fileExists(filepath.Join(workspaceRoot, "pytest.ini")) {
+		python := "python3"
+
+		if runtime.GOOS == "windows" {
+			python = "python"
+		}
+
+		checks = append(
+			checks,
+			VerificationCheck{
+				Name:     "python-compile",
+				Required: true,
+				Command: Command{
+					Command: fmt.Sprintf(
+						"%s -m compileall -q .",
+						python,
+					),
+				},
+			},
+		)
+
+		if fileExists(filepath.Join(workspaceRoot, "pytest.ini")) ||
+			fileExists(filepath.Join(workspaceRoot, "tests")) {
+			checks = append(
+				checks,
+				VerificationCheck{
+					Name:     "python-test",
+					Required: true,
+					Command: Command{
+						Command: fmt.Sprintf(
+							"%s -m pytest -q",
+							python,
+						),
+					},
+				},
+			)
+		}
+	}
+
+	// Rust project.
+	if fileExists(filepath.Join(workspaceRoot, "Cargo.toml")) {
+		checks = append(
+			checks,
+			VerificationCheck{
+				Name:     "rust-build",
+				Required: true,
+				Command: Command{
+					Command: "cargo check",
+				},
+			},
+		)
+
+		checks = append(
+			checks,
+			VerificationCheck{
+				Name:     "rust-test",
+				Required: true,
+				Command: Command{
+					Command: "cargo test --quiet",
+				},
+			},
+		)
+	}
+
+	if len(checks) == 0 {
+		return nil, fmt.Errorf(
+			"%w: no recognized project build/test configuration",
+			ErrVerificationEmpty,
+		)
+	}
+
+	return checks, nil
+}
+
+func goBuildCommand() string {
+	return "go build ./..."
+}
+
+func goTestCommand() string {
+	return "go test ./..."
+}
+
+func validateVerificationCommand(command string) error {
+	command = strings.TrimSpace(command)
+
+	if command == "" {
+		return ErrCommandEmpty
+	}
+
+	if len(command) > maxVerificationCommandLength {
+		return ErrCommandTooLong
+	}
+
+	tokens, err := tokenizeCommand(command)
+	if err != nil {
+		return fmt.Errorf(
+			"%w: %v",
+			ErrVerificationTrivial,
+			err,
+		)
+	}
+
+	words := commandWords(tokens)
+
+	if len(words) == 0 {
+		return ErrVerificationTrivial
+	}
+
+	meaningful := false
+
+	for _, commandWords := range words {
+		if len(commandWords) == 0 {
+			continue
+		}
+
+		name := filepath.Base(
+			normalizedToken(commandWords[0]),
+		)
+
+		switch name {
+		case "echo",
+			"printf",
+			"true",
+			"false",
+			"exit":
+			// These are not objective project verification commands.
+			continue
+		}
+
+		if name == "cmd.exe" &&
+			len(commandWords) >= 3 &&
+			normalizedToken(commandWords[1]) == "/c" &&
+			isTrivialCommandWords(commandWords[2:]) {
+			continue
+		}
+
+		if name == "sh" ||
+			name == "bash" {
+			inner := commandWords[1:]
+
+			if len(inner) > 0 &&
+				normalizedToken(inner[0]) == "-c" &&
+				len(inner) > 1 {
+				innerCommand := strings.Join(
+					inner[1:],
+					" ",
+				)
+
+				if isTrivialVerificationString(
+					innerCommand,
+				) {
+					continue
+				}
+			}
+		}
+
+		meaningful = true
+	}
+
+	if !meaningful {
+		return fmt.Errorf(
+			"%w: %q",
+			ErrVerificationTrivial,
+			command,
+		)
+	}
+
+	return nil
+}
+
+func isTrivialCommandWords(words []string) bool {
+	if len(words) == 0 {
+		return true
+	}
+
+	return isTrivialVerificationString(
+		strings.Join(words, " "),
+	)
+}
+
+func isTrivialVerificationString(command string) bool {
+	tokens, err := tokenizeCommand(
+		strings.TrimSpace(command),
+	)
+
+	if err != nil {
+		return false
+	}
+
+	words := commandWords(tokens)
+
+	if len(words) != 1 ||
+		len(words[0]) == 0 {
+		return false
+	}
+
+	name := filepath.Base(
+		normalizedToken(words[0][0]),
+	)
+
+	switch name {
+	case "true",
+		"false",
+		"echo",
+		"printf",
+		"exit":
+		return true
+	}
+
+	return false
+}
+
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+
+	return err == nil && info != nil
+}
+
+// packageHasScript checks package.json without importing a full JSON schema.
+// Verification discovery only needs the existence of a scripts.<name> entry.
+func packageHasScript(
+	workspaceRoot string,
+	script string,
+) bool {
+	path := filepath.Join(
+		workspaceRoot,
+		"package.json",
+	)
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+
+	needle := fmt.Sprintf(
+		`"%s"`,
+		script,
+	)
+
+	text := string(data)
+
+	// Keep this deliberately conservative. A false negative merely omits an
+	// optional native build check; a false positive could make verification
+	// fail on projects without that script.
+	scriptsIndex := strings.Index(
+		text,
+		`"scripts"`,
+	)
+
+	if scriptsIndex < 0 {
+		return false
+	}
+
+	rest := text[scriptsIndex:]
+
+	return strings.Contains(
+		rest,
+		needle,
+	)
 }
 
 func normalizeCheck(
@@ -456,13 +943,24 @@ func normalizeCheck(
 	name := strings.TrimSpace(check.Name)
 
 	if name == "" {
-		name = fmt.Sprintf("check-%d", index+1)
+		name = fmt.Sprintf(
+			"check-%d",
+			index+1,
+		)
 	}
 
-	command := strings.TrimSpace(check.Command.Command)
+	command := strings.TrimSpace(
+		check.Command.Command,
+	)
 
 	if command == "" {
 		return VerificationCheck{}, ErrCommandEmpty
+	}
+
+	if err := validateVerificationCommand(
+		command,
+	); err != nil {
+		return VerificationCheck{}, err
 	}
 
 	check.Name = name
@@ -486,7 +984,9 @@ func finishVerification(
 	finished := time.Now().UTC()
 
 	summary.FinishedAt = finished
-	summary.Duration = finished.Sub(summary.StartedAt)
+	summary.Duration = finished.Sub(
+		summary.StartedAt,
+	)
 	summary.Passed = false
 
 	if err != nil {
