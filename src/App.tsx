@@ -7,10 +7,11 @@ import {
 } from "react";
 
 import LabPanel from "./LabPanel";
+import ResearchPanel from "./ResearchPanel";
 import type { ActivityEvent } from "./store";
 import { useRuntimeStore } from "./store";
 
-type AppView = "agent" | "lab";
+type AppView = "agent" | "lab" | "research";
 
 function formatActivity(activity: ActivityEvent): string {
 	const data = activity.data;
@@ -236,21 +237,27 @@ function App() {
 							<span className="eyebrow">
 								{view === "agent"
 									? "AGENT"
-									: "CODING LAB"}
+									: view === "lab"
+										? "CODING LAB"
+										: "RESEARCH"}
 							</span>
 
 							<h1>
 								{view === "agent"
 									? activeSession?.title ||
 										"Forge a new task"
-									: "Autonomous engineering"}
+									: view === "lab"
+										? "Autonomous engineering"
+										: "External intelligence"}
 							</h1>
 						</div>
 
 						<div className="header-actions">
 							<button
 								type="button"
-								className="secondary-button"
+								className={`secondary-button ${
+									view === "agent" ? "active" : ""
+								}`}
 								onClick={() => setView("agent")}
 								aria-pressed={view === "agent"}
 							>
@@ -259,11 +266,24 @@ function App() {
 
 							<button
 								type="button"
-								className="secondary-button"
+								className={`secondary-button ${
+									view === "lab" ? "active" : ""
+								}`}
 								onClick={() => setView("lab")}
 								aria-pressed={view === "lab"}
 							>
 								Coding Lab
+							</button>
+
+							<button
+								type="button"
+								className={`secondary-button ${
+									view === "research" ? "active" : ""
+								}`}
+								onClick={() => setView("research")}
+								aria-pressed={view === "research"}
+							>
+								Research
 							</button>
 
 							{view === "agent" ? (
@@ -289,6 +309,8 @@ function App() {
 
 					{view === "lab" ? (
 						<LabPanel />
+					) : view === "research" ? (
+						<ResearchPanel />
 					) : (
 						<>
 							<section className="workspace-content">
@@ -319,9 +341,11 @@ function App() {
 												<div className="activity-empty-mark">
 													✦
 												</div>
+
 												<strong>
 													Awaiting the first operation
 												</strong>
+
 												<span>
 													Send a task below to begin a
 													local agent run.
