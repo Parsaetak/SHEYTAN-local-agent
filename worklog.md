@@ -1,26 +1,31 @@
-# Worklog
+# SHEYTAN-Local-Agent — Worklog
 
-# SHEYTAN-Local-Agent — Version Zeta
+## 2026-09-02 — Version Zeta Stabilization
+
+### Project direction
+
+The repository is being consolidated into a local-first AI software-engineering runtime built around:
+
+```text
+Go runtime
++ controlled tools
++ Coding Lab
++ objective verification
++ bounded repair
++ external research
++ engineering memory
++ React frontend
+```
+
+The governing principle is:
+
+> **The language model proposes. The system verifies.**
 
 ---
 
-## Project Direction
+# Runtime Identity
 
-Version Zeta establishes the next architectural stage of SHEYTAN-Local-Agent:
-
-> A local-first AI software engineer with an isolated coding laboratory, controlled execution, objective verification, persistent engineering memory, external research, autonomous bounded repair, and a modern interactive UI.
-
-The project keeps the Go implementation as the systems/runtime foundation while moving the user interface toward a Node.js + React + TypeScript + Vite architecture.
-
-The defining engineering principle is:
-
-> The language model does not declare its own code correct. The system must produce executable evidence.
-
----
-
-# Current Identity
-
-The application identity is split into a numeric release version and a human-facing codename.
+The application identity is now separated into:
 
 ```go
 const (
@@ -30,93 +35,19 @@ const (
 )
 ```
 
-Runtime Go version reporting uses the actual Go runtime rather than a hardcoded version string.
+The runtime reports the actual Go runtime version instead of a hardcoded Go version.
 
 ---
 
-# Go Runtime
+# Repository / Module Normalization
 
-The Go architecture remains responsible for system-level operations:
-
-```text
-LLM management
-orchestration
-tool execution
-filesystem operations
-process execution
-sandboxing
-Coding Lab
-research services
-memory
-sessions
-HTTP API
-WebSocket activity
-```
-
-The Go runtime provides:
-
-```text
-native backend
-native process control
-native filesystem APIs
-strong concurrency primitives
-native Windows integration
-portable application data
-predictable long-running service behavior
-```
-
----
-
-# Agent Runtime
-
-The agent runtime is centered around the orchestrator.
-
-Responsibilities include:
-
-```text
-planning
-LLM execution
-tool calls
-tool results
-iterative reasoning
-streaming activity
-abort support
-tool allow-listing
-history management
-persistent recall
-context pressure tracking
-deterministic tool ordering
-dynamic tool discovery
-```
-
-Tools use the common interface:
-
-```go
-type Tool interface {
-    Name() string
-    Description() string
-    Parameters() any
-    Run(ctx context.Context, args json.RawMessage) (string, error)
-}
-```
-
-The orchestrator exposes its actual runtime registry rather than maintaining a separate execution-only list.
-
-The AI context now receives the enabled registered tools from the orchestrator so the model's advertised capabilities match the tools actually available to it.
-
----
-
-# Module Path Normalization
-
-The Go module path was standardized across the repository.
-
-Canonical module path:
+The canonical Go module path is:
 
 ```text
 github.com/Parsaetak/SHEYTAN-local-agent
 ```
 
-The obsolete path:
+The obsolete module path:
 
 ```text
 github.com/sheytan/local-agent
@@ -124,49 +55,21 @@ github.com/sheytan/local-agent
 
 was removed from Go imports.
 
-This eliminates mixed-module resolution and allows the repository to build against one consistent module identity.
-
----
-
-# Dependency Maintenance
-
-The TOML dependency was aligned with the supported release:
+The TOML dependency was aligned to:
 
 ```text
 github.com/BurntSushi/toml v1.6.0
 ```
 
-The module file was tidied after dependency normalization.
+The module was tidied after the dependency correction.
 
 ---
 
-# AI Context
+# Agent / AI Context
+
+The AI context system was upgraded so runtime instructions can use the actual registered tool set.
 
 Implemented:
-
-```text
-internal/aicontext/aicontext.go
-internal/aicontext/AI-CONTEXT.md
-```
-
-Capabilities include:
-
-```text
-embedded AI operating instructions
-materialized AI-CONTEXT.md
-version markers
-user-customizable context files
-live environment briefing
-OS/runtime information
-CPU/RAM/GPU information
-provider/model information
-connectivity status
-vision capability status
-Continuum status
-tool capability briefing
-```
-
-The AI context now supports:
 
 ```text
 SystemMessage()
@@ -175,51 +78,55 @@ Briefing()
 BriefingWithTools()
 ```
 
-The compatibility API remains available, while the live runtime path uses the actual registered tool list.
+The runtime now derives exposed tool capabilities from the actual orchestrator registry.
 
----
-
-# Tool Capability Exposure
-
-The live AI context now derives available tools from the orchestrator registry.
-
-This prevents a divergence between:
+This prevents:
 
 ```text
-tools advertised to the model
+advertised tools
 ```
 
-and:
+from drifting away from:
 
 ```text
-tools actually registered in the runtime
+registered tools
 ```
 
-The configured allow-list is applied before the tool list is exposed.
-
-Dynamic tools such as:
+The operational AI constitution is maintained in:
 
 ```text
-coding_lab
-research
-future runtime tools
+internal/aicontext/AI-CONTEXT.md
 ```
 
-can therefore appear automatically without maintaining another hardcoded list.
+The constitution defines:
+
+```text
+truth/evidence rules
+tool-use rules
+research rules
+memory rules
+verification rules
+safety rules
+failure handling
+final-answer discipline
+```
 
 ---
 
 # Configuration
 
-The configuration layer now contains the Version Zeta runtime controls required for the Coding Lab and research stack.
+Version Zeta configuration includes Coding Lab and research controls.
 
-Important controls include:
+Important settings:
 
 ```text
 LabEnabled
 LabWorkspaceRoot
-LabAllowNetwork
+LabCommandTimeoutSec
 LabMaxIterations
+LabKeepWorkspaces
+LabAllowNetwork
+
 ResearchEnabled
 ResearchBackend
 ResearchSearXNGURL
@@ -232,116 +139,80 @@ ResearchWeb
 ResearchUserAgent
 ```
 
-The Lab iteration limit is bounded:
+Lab iteration bounds are:
 
 ```text
 default = 25
 maximum = 100
 ```
 
-The effective configuration falls back to the bounded default when no explicit Lab value is supplied.
+The effective configuration is bounded even when no explicit value is supplied.
 
 ---
 
-# Performance Work
+# API Hardening
 
-The project contains multiple performance-oriented mechanisms:
-
-```text
-deterministic tool ordering
-history windowing
-persistent recall
-stream coalescing
-frame-oriented UI pacing
-LLM telemetry
-prompt-prefix stability
-batch tuning
-KV-cache reuse controls
-FlashAttention controls
-configurable thread counts
-resource retention controls
-```
-
-The orchestrator sorts tool definitions before building LLM requests.
-
-This makes prompt construction deterministic and avoids unnecessary prompt-prefix churn caused by Go map iteration order.
-
----
-
-# API and WebSocket Hardening
-
-Implemented in:
+The HTTP API was hardened around:
 
 ```text
-internal/api/server.go
-internal/api/ws.go
-```
-
-The API layer now includes:
-
-```text
-per-session cancellation
-WebSocket lifecycle hardening
-origin checking
-restricted CORS handling
+per-session abort
+WebSocket lifecycle
+origin validation
+restricted CORS
 configuration patching
 configuration secret redaction
 ```
 
-Remote API credentials are not returned through normal configuration GET responses.
+Configuration GET responses do not expose sensitive remote API credentials.
 
-Configuration updates are applied as patches against the current configuration rather than blindly replacing the complete stored configuration.
+Configuration PUT/POST updates merge patches into the current configuration so unrelated fields are preserved.
 
-WebSocket origins are checked against the configured/local development policy.
+WebSocket origins are checked against the local/same-origin policy.
+
+Activity connections are session-specific.
 
 ---
 
-# LLM / llama.cpp Hardening
+# LLM Runtime Hardening
 
-Implemented:
+The LLM client now rejects successful HTTP responses that contain no usable choices.
 
-```text
-internal/llm/llama.go
-```
+An empty choices array is treated as an error.
+
+This prevents silent acceptance of structurally invalid LLM responses.
+
+---
+
+# llama.cpp Hardening
 
 The llama startup deadlock was removed.
 
-Archive extraction now rejects unsafe ZIP paths including:
+Archive extraction now rejects unsafe ZIP entries involving:
 
 ```text
 absolute paths
-parent-directory traversal
+parent traversal
 Windows volume paths
 backslash traversal
 ```
 
-This prevents archive entries from escaping the intended extraction directory.
+This prevents extracted files from escaping the target directory.
 
 ---
 
-# Sandbox
+# Sandbox Timeout
 
-Implemented:
+Sandbox execution now propagates timeout context into the actual command execution path.
 
-```text
-internal/sandbox/sandbox.go
-```
-
-Sandbox execution now propagates the timeout context into the actual command execution path.
-
-The timeout therefore applies to the running process rather than merely timing the caller.
+The timeout therefore applies to the running process instead of only measuring the caller.
 
 ---
 
-# Filesystem Path Security
+# Filesystem Security
 
-Implemented:
+The base-directory layer now provides checked path resolution.
 
-```text
-internal/tools/basedir.go
-```
-
-The path layer now provides:
+Important primitives include:
 
 ```text
 BaseDir
@@ -354,30 +225,22 @@ SafeExistingPath
 UnsafeAbsolutePath
 ```
 
-Protection includes:
+Protection covers:
 
 ```text
-empty/unset base handling
-absolute path rejection
-relative traversal rejection
-tilde path handling
-symlink-prefix escape detection
-canonical workspace restriction
+absolute paths
+relative traversal
+unset base directories
+tilde expansion hazards
+symlink-prefix escapes
+workspace restrictions
 ```
-
-Tools can therefore operate relative to the application/workspace root without implicitly accepting arbitrary host paths.
 
 ---
 
 # Fetch / SSRF Protection
 
-Implemented:
-
-```text
-internal/tools/fetch.go
-```
-
-The fetch layer includes:
+The controlled fetch path now contains:
 
 ```text
 bounded response bodies
@@ -387,52 +250,44 @@ localhost blocking
 loopback blocking
 link-local blocking
 private-network blocking
-DNS resolution checks
+DNS resolution validation
 request timeout
 ```
 
-Default response size is bounded and the maximum configurable response remains capped.
+Default and maximum response limits are bounded.
 
-The objective is to prevent a model-controlled fetch operation from being used to reach internal/private network resources.
+The objective is to prevent model-controlled HTTP access from reaching internal/private services.
 
 ---
 
-# Shell / Git Jail
+# Shell and Git Policy
 
-Implemented in:
+Shell and Git working directories are checked against the canonical base directory.
 
-```text
-internal/tools/tools.go
-```
-
-The shell and Git tools now resolve working directories against the canonical base directory.
-
-Git argument handling rejects escape mechanisms such as:
+Git escape mechanisms are blocked, including:
 
 ```text
 -C
 --git-dir
 --work-tree
 absolute external paths
-path traversal
+parent traversal
 file:// repository targets
 ```
 
-The shell uses a non-login shell invocation.
+Legitimate workspace-local Git workflows such as committing remain possible.
+
+Git publishing is blocked.
+
+Destructive command patterns are rejected through the Lab policy layer.
+
+The policy is defense in depth and is not considered a substitute for OS-level sandboxing.
 
 ---
 
 # Process Control
 
-Implemented:
-
-```text
-internal/proc/proc.go
-internal/proc/proc_other.go
-internal/proc/proc_windows.go
-```
-
-Process execution now supports process-tree-aware cancellation.
+Process execution now supports process-tree cancellation.
 
 Unix-like systems use process groups.
 
@@ -443,122 +298,96 @@ CREATE_NEW_PROCESS_GROUP
 taskkill /PID /T /F
 ```
 
-This prevents timed-out or canceled commands from leaving child processes running behind.
+This is used to prevent timed-out or canceled commands from leaving child processes running.
 
 ---
 
-# Lab Runner
+# Coding Lab Runner
 
-Implemented:
-
-```text
-internal/lab/runner.go
-```
-
-Responsibilities:
+The Lab runner now handles:
 
 ```text
-execute commands
-validate working directories
-capture stdout
-capture stderr
-capture exit status
-measure execution duration
-enforce context cancellation
-enforce command timeout
-bound combined output
-sanitize inherited environment
-avoid stdin inheritance
+working-directory validation
+stdout capture
+stderr capture
+combined output limits
+exit status
+duration
+timeouts
+context cancellation
+stdin isolation
+environment sanitization
+process-tree cleanup
 ```
-
-stdout and stderr share one combined output budget.
 
 The runner does not inherit the host environment wholesale.
 
-Sensitive host environment values are removed before Lab execution.
+Sensitive environment values are removed before Lab execution.
 
 ---
 
-# Lab Policy
+# Coding Lab Policy
 
-Implemented:
+The Lab policy is token-aware rather than relying exclusively on naive substring matching.
 
-```text
-internal/lab/policy.go
-```
-
-The policy layer is tokenized rather than based only on naive substring matching.
-
-Controls include:
+It controls:
 
 ```text
 dangerous commands
 interactive commands
 network operations
-filesystem escape
 absolute paths
-parent traversal
+path traversal
 Git publishing
 destructive Git operations
-command-specific dangerous arguments
+workspace escapes
+dangerous arguments
 ```
 
-Allowed workspace Git workflows include legitimate operations such as commits.
+The security principle is:
 
-Git publishing is blocked.
+```text
+allow normal engineering work
+block obvious escape/destructive paths
+```
 
-Destructive operations such as root-level removal are rejected.
-
-The policy remains defense-in-depth and is not treated as a complete OS isolation boundary.
+while still relying on the wider runtime for defense in depth.
 
 ---
 
 # Coding Lab Workspace
 
-Implemented:
+The Lab workspace manager now supports:
 
 ```text
-internal/lab/workspace.go
+Create
+Remove
+PathFor
+Snapshot
+Promote
 ```
 
-The workspace manager provides:
-
-```text
-Create()
-Remove()
-PathFor()
-Snapshot()
-Promote()
-```
-
-Capabilities include:
+The workspace layer provides:
 
 ```text
 source validation
 workspace isolation
-cryptographically random workspace IDs
-regular-file copying
-.git preservation for promotion/snapshots
-symbolic-link exclusion
+random workspace IDs
+safe regular-file copying
+.git handling
+symlink exclusion
 path traversal protection
 root-restricted cleanup
-source/workspace overlap protection
-context cancellation
+source/workspace overlap checks
 ```
 
-The Lab workspace is intentionally isolated from the source tree during autonomous modification.
+The workspace remains disposable and isolated while autonomous modifications are being evaluated.
 
 ---
 
-# Lab Task Lifecycle
+# Task Lifecycle
 
-Implemented:
-
-```text
-internal/lab/task.go
-```
-
-Task lifecycle:
+Lab tasks use:
 
 ```text
 pending
@@ -569,7 +398,7 @@ canceled
 blocked
 ```
 
-Flow:
+Typical flow:
 
 ```text
 NewTask
@@ -585,40 +414,19 @@ Promote
 Finish
 ```
 
-A task's runtime ID is aligned with the shared workspace ID when execution starts.
+Task and workspace runtime IDs are aligned.
 
 ---
 
 # Verification Gate
 
-Implemented:
+The core Lab rule is:
 
-```text
-internal/lab/verifier.go
-```
-
-Core invariant:
-
-> A task cannot become successfully completed without a current passing verification.
+> **A successful task requires current passing verification.**
 
 Verification is invalidated whenever a new command mutates the workspace.
 
-Therefore:
-
-```text
-VERIFY PASS
-     │
-     ▼
-workspace mutation
-     │
-     ▼
-verification stale
-     │
-     ▼
-VERIFY AGAIN
-```
-
-The system rejects trivial commands as proof of correctness, including:
+The system explicitly rejects trivial proof commands such as:
 
 ```text
 echo
@@ -628,13 +436,13 @@ false
 exit 0
 ```
 
+The verifier instead seeks meaningful project checks.
+
 ---
 
 # Native Verification
 
-The verifier can discover project checks automatically.
-
-Supported project families include:
+Automatic verification discovery currently covers common project families:
 
 ```text
 Go
@@ -643,122 +451,113 @@ Python
 Rust
 ```
 
-Examples include:
+Representative checks include:
 
 ```text
 go build ./...
 go test ./...
 npm test
 npm run build
-Python compile checks
+Python compilation checks
 pytest
 cargo check
 cargo test
 ```
 
-Verification requires meaningful passing checks rather than accepting an arbitrary successful shell command.
+The verifier does not accept arbitrary successful commands as proof.
 
 ---
 
-# Lab Promotion
+# Promotion / Snapshot Safety
 
-Implemented:
-
-```text
-export_patch
-promote
-```
-
-The promotion flow now:
+Lab promotion now follows:
 
 ```text
 workspace
    ↓
-create snapshot
+snapshot
    ↓
-verify current state
+current verification
    ↓
-mirror workspace into source
+promote
    ↓
-preserve .git
+source
 ```
 
 A snapshot is created before source mutation.
 
-The Lab workspace is not deleted immediately after promotion, which preserves the evidence and allows recovery/debugging.
+The Lab workspace is preserved after promotion rather than immediately deleted.
 
-The final task completion gate requires promotion evidence corresponding to the current verification.
+This keeps evidence available for:
+
+```text
+recovery
+debugging
+comparison
+post-failure investigation
+```
 
 ---
 
-# Lab Export Patch
+# Patch Export
 
-The Lab can export a binary-safe Git patch comparing:
+The Lab can export a binary-safe Git patch representing the difference between:
 
 ```text
 source tree
 ```
 
-against:
+and:
 
 ```text
 Lab workspace
 ```
 
-The patch is stored under the Lab root's patch directory.
+Patch artifacts are stored beneath the Lab root.
 
 ---
 
-# Autonomous Repair Controller
+# Autonomous Repair
 
-Implemented:
+The Lab contains a bounded repair controller.
 
-```text
-internal/lab/repair.go
-```
-
-The bounded repair controller performs:
+The controller performs:
 
 ```text
 baseline verification
 diagnosis
-bounded repair commands
+bounded repair action
 re-verification
 final verification
 ```
 
-The controller is limited by:
-
-```text
-maximum repair iterations
-```
-
-with:
+Iteration policy:
 
 ```text
 default = 25
-absolute cap = 100
+maximum = 100
 ```
 
 The controller rejects empty repair actions.
 
-Identical normalized commands are not retried forever.
+Identical normalized actions are not allowed to repeat forever.
 
-A repeated identical action is rejected after the configured repetition threshold.
+All repair commands still pass through the normal:
 
-Every repair command runs through the normal Lab task/policy/runner controls.
+```text
+policy
+runner
+workspace
+verification
+```
+
+layers.
 
 ---
 
 # Lab Session Registry
 
-Implemented:
-
-```text
-internal/lab/session.go
-```
-
-The registry provides:
+The Lab session registry provides:
 
 ```text
 Create
@@ -773,79 +572,55 @@ RemoveCompleted
 SnapshotTasks
 ```
 
-Each session owns synchronization state so concurrent actions within the same Lab session do not race.
+Each Lab session owns synchronization state.
 
-Registry operations avoid lock-order deadlocks with the per-session task mutex.
-
----
-
-# Shared IDs
-
-The Lab now uses one shared random identity across the task/workspace runtime.
-
-The task ID becomes the workspace ID when execution begins.
-
-This simplifies:
-
-```text
-task tracking
-workspace lookup
-patch naming
-snapshot naming
-repair bookkeeping
-```
+Registry locking and per-session task locking are structured to avoid lock-order deadlocks.
 
 ---
 
 # Research Engine
 
-Implemented:
+The research service was consolidated into a unified provider architecture.
 
-```text
-internal/research/provider.go
-internal/research/service.go
-internal/research/github.go
-internal/research/reddit.go
-internal/research/tool.go
-```
-
-The research layer exposes one unified service with multiple backends:
+Current providers:
 
 ```text
 Auto
 GitHub
 Reddit
-Web
 SearXNG
 DuckDuckGo
+Web compatibility alias
 ```
 
-The unified agent-facing interface is:
+The agent-facing tool is:
 
 ```text
 research
 ```
 
+Research requests and results are normalized.
+
 The service supports:
 
 ```text
-bounded result counts
-bounded timeouts
-provider validation
-request normalization
-result normalization
+result limits
+timeouts
+normalization
 deduplication
-provider ranking
-authority ranking
+authority classification
+relevance ranking
+content hashes
+provider metadata
 ```
+
+The `web` backend is explicitly treated as a compatibility alias for DuckDuckGo rather than as an unrestricted generic web provider.
 
 ---
 
-# Research Provider Model
+# Research Result Model
 
-Research requests are normalized before execution.
-
-Results preserve:
+Research results retain fields such as:
 
 ```text
 title
@@ -860,141 +635,140 @@ content hash
 metadata
 ```
 
-Results are deduplicated using:
+Deduplication can use:
 
 ```text
 content hash
-URL
+normalized URL
 normalized content
 ```
+
+This reduces repeated evidence from multiple providers.
 
 ---
 
 # Research Ranking
 
-The research layer distinguishes technical authority from raw relevance.
+The research layer distinguishes:
 
-Current authority classes include:
+```text
+relevance
+```
+
+from:
+
+```text
+authority
+```
+
+Authority classes include concepts such as:
 
 ```text
 official documentation
-project/maintainer material
+project / maintainer material
 technical discussion
 community material
 unknown material
 ```
 
-Ranking combines:
+Ranking is advisory.
 
-```text
-relevance
-authority
-provider evidence
-```
+A highly ranked result is still only evidence.
 
-The ranking is advisory.
-
-Local execution and verification remain the final authority.
+The local project and executable verification remain the final acceptance mechanism.
 
 ---
 
 # GitHub Research
 
-Implemented:
+The GitHub provider is bounded and validates endpoint construction.
+
+Its purpose is to locate engineering evidence such as:
 
 ```text
-internal/research/github.go
-```
-
-The GitHub provider supports bounded issue/pull-request research using GitHub's search endpoint.
-
-It is designed to surface:
-
-```text
-exact error messages
-package/module names
-symbols
+exact errors
+issues
+pull requests
 regressions
+symbols
+module names
 maintainer explanations
-known workarounds
+workarounds
 ```
 
-Protection includes:
+Response bodies are bounded.
 
-```text
-4 MiB maximum response body
-validated endpoint construction
-scheme/host validation
-safe path joining
-normalized ranking scores
-NaN/Inf score rejection
-```
-
-GitHub evidence is treated as research evidence and must be independently verified before being considered a confirmed fix.
+GitHub content remains research evidence rather than automatically trusted memory.
 
 ---
 
 # Reddit Research
 
-Implemented:
+The Reddit provider is designed for practical/community evidence:
 
 ```text
-internal/research/reddit.go
-```
-
-Reddit research supports practical evidence such as:
-
-```text
-hardware-specific problems
-installation issues
+installation failures
+hardware issues
 configuration problems
 regressions
 community workarounds
 ```
 
-OAuth/token requirements and bounded response handling are enforced where applicable.
+OAuth/token requirements are enforced where needed.
 
-Reddit is treated as experiential evidence rather than authoritative documentation.
+Reddit remains lower-authority experiential evidence.
 
 ---
 
-# Web Research Direction
+# Web Research
 
-The unified service has explicit support for:
+The web layer currently supports:
 
 ```text
-Web
-SearXNG
 DuckDuckGo
+SearXNG
 ```
 
-The architecture is prepared for free external research through configurable backends while retaining:
+with:
 
 ```text
-timeouts
-result limits
-response caps
+bounded timeouts
+bounded results
+bounded bodies
 normalization
 ranking
 deduplication
 ```
 
-Untrusted external content must remain evidence rather than being silently elevated to authoritative memory.
+No external result should be promoted to authoritative engineering knowledge without appropriate evidence.
+
+---
+
+# Research Cache
+
+Research caching was added with bounded storage.
+
+The cache uses:
+
+```text
+TTL
+bounded entry count
+normalized request keys
+copy-on-read/write behavior
+```
+
+Only successful non-empty research results are cached.
+
+This avoids caching provider failures as if they were useful evidence.
 
 ---
 
 # Engineering Memory
 
-Implemented:
+Memory now has explicit classes:
 
 ```text
-internal/memory/memory.go
-```
-
-Memory is now structured into seven classes:
-
-```text
-M1 = user facts
+M1 = trusted user facts
 M2 = preferences
 M3 = project state
 M4 = decisions
@@ -1003,624 +777,348 @@ M6 = conversation summaries
 M7 = observations / untrusted or provisional knowledge
 ```
 
-Every memory entry can carry:
+Entries can retain:
 
 ```text
-class
 trust level
 provenance
 source
-URI
-reference
-observation time
-quarantine state
-authority state
+URI/reference information
 ```
+
+External provenance is automatically quarantined.
+
+External research cannot silently become trusted M1–M6 knowledge merely because a caller supplied a trusted-looking label.
 
 ---
 
 # Memory Trust Model
 
-Trust levels include:
+The memory system distinguishes:
 
 ```text
-unknown
-untrusted
-provisional
-trusted
-verified
+trusted user information
+verified local information
+generated/provisional information
+external research
 ```
 
-M1 is restricted to explicit trusted/verified user-originated facts.
-
-External research is automatically treated as:
+External sources such as:
 
 ```text
-M7
-provisional
-quarantined
-non-authoritative
-```
-
-This prevents material copied from the public web from silently becoming a persistent user fact.
-
----
-
-# Memory Recall
-
-Normal recall excludes quarantined entries.
-
-Memory results expose:
-
-```text
-class
-trust
-authoritative status
-source
-provenance
-quarantine status
-```
-
-This makes recalled information distinguishable from verified system facts.
-
-Persistent conversation recall remains available separately from curated memory.
-
----
-
-# Memory Compatibility
-
-The memory store retains compatibility with the existing:
-
-```text
-Append
-All
-Search
-DeleteByID
-Clear
-Count
-```
-
-interfaces.
-
-The newer structured path is:
-
-```text
-AppendEntry
-SearchWithOptions
-NormalizeEntry
-```
-
----
-
-# AI Context + Memory Boundary
-
-The AI context and memory architecture now enforce two separate principles:
-
-```text
-AI context = operational instructions
-memory     = evidence with provenance
-```
-
-A retrieved memory item does not automatically become a trusted system instruction.
-
-An external research result does not automatically become an authoritative memory fact.
-
----
-
-# Recall Infrastructure
-
-Persistent recall continues to index completed conversations as bounded capsules.
-
-The orchestrator can inject relevant previous exchanges into the current prompt while respecting:
-
-```text
-recall limits
-history limits
-context budget
-```
-
-This allows long-running engineering tasks to reuse previous work without replaying the complete conversation every turn.
-
----
-
-# Runtime Integration
-
-Implemented:
-
-```text
-internal/runtime/runtime.go
-```
-
-The runtime stack wires:
-
-```text
-LLM
-orchestrator
-memory
-recall
-Coding Lab
+web
 research
-sandbox
-browser
-filesystem tools
-shell
-Git
-Linux simulation
-vision
+GitHub
+Reddit
 ```
 
-The runtime registers Coding Lab when enabled.
+are quarantined as provisional knowledge by default.
 
-The runtime also registers the unified Research tool when research is enabled.
+Default recall excludes quarantined entries.
+
+Explicit requests can include them when appropriate.
 
 ---
 
-# Current API/Runtime Boundary
+# Multi-Agent / Critic Behavior
 
-The architecture still contains an important integration gap:
+The critic path now treats malformed or failed structured responses as unsatisfied rather than accidentally passing them.
 
-```text
-CLI / desktop
-      ↓
-runtime.NewStack()
-      ↓
-shared orchestrator
+Planner fallback behavior remains graceful where possible.
 
-HTTP server
-      ↓
-api.New()
-      ↓
-separate runtime surface
-```
-
-The next major backend integration task is:
+The runtime therefore follows:
 
 ```text
-unify API server with runtime.Stack
+valid evidence
++
+valid structured response
+=
+accepted state
 ```
 
-The goal is for:
-
-```text
-CLI
-desktop
-React UI
-HTTP API
-WebSocket
-```
-
-to operate against one authoritative runtime/tool registry.
+rather than treating parser failure as success.
 
 ---
 
-# UI / UX Migration
+# Frontend Migration
 
-## Current State
-
-The application currently includes:
-
-```text
-Go/Fyne native UI
-Go HTTP API
-WebSocket activity stream
-embedded/static web interface
-```
-
-## Target State
-
-The UI is being moved toward:
+The frontend is being migrated toward:
 
 ```text
 Node.js
-React
 TypeScript
+React
 Vite
-```
-
-with:
-
-```text
+Zustand
 REST
 WebSocket
 ```
 
-connecting to the Go backend.
+The current React shell already integrates with the actual Go API.
 
-Target architecture:
+Current frontend/runtime integration includes:
 
 ```text
-             React / TypeScript
-                     │
-              REST + WebSocket
-                     │
-                     ▼
-                  Go API
-                     │
-                     ▼
-                Runtime Stack
-                     │
-        ┌────────────┼────────────┐
-        ▼            ▼            ▼
-       LLM          LAB        RESEARCH
+application state
+system information
+models
+presets
+tools
+sessions
+session creation
+session deletion
+active session selection
+agent runs
+abort
+activity WebSocket
+runtime status
 ```
 
-The Go backend remains authoritative for execution and system access.
+The React activity connection is session-aware.
+
+Initialization now loads the session state first and connects to the active session afterward.
 
 ---
 
-# UI Capability Parity
+# Frontend Next Stage
 
-The React interface must expose the capabilities already present in Go rather than inventing unsupported backend behavior.
-
-The intended UI surface includes:
+The next frontend stage is:
 
 ```text
-chat
-streaming activity
-session management
-tool activity
-Coding Lab
-research
-memory
-configuration
-diagnostics
-verification
-artifacts
+React UI parity
+      ↓
+Coding Lab panel
+      ↓
+Research panel
+      ↓
+project/task inspection
+      ↓
+artifact workflows
 ```
+
+The SVG editor/preview is intentionally later.
+
+The frontend should not duplicate Go execution logic.
 
 ---
 
-# SVG Workspace
+# Documentation Corrections
 
-The SVG editor remains a planned first-class workspace feature.
+The previous documentation contained several stale statements describing already-implemented systems as planned.
 
-Target:
-
-```text
-SVG file
-   │
-   ├── visual canvas
-   │      ├── zoom
-   │      ├── pan
-   │      ├── selection
-   │      └── live refresh
-   │
-   └── source editor
-          ├── XML
-          ├── formatting
-          ├── validation
-          └── save
-```
-
-Target workflow:
+The documentation is being normalized around four states:
 
 ```text
-AI generation
-     ↓
-Lab file write
-     ↓
-live SVG render
-     ↓
-human inspection
-     ↓
-source edit
-     ↓
-instant preview
-     ↓
-verification
+Implemented
+In progress
+Planned
+Experimental
 ```
 
-This remains downstream of the backend stabilization work.
+This worklog records actual implementation state rather than aspirational architecture.
 
 ---
 
-# Documentation Accuracy
+# Developer Operating Rules
 
-Documentation must reflect actual capabilities.
-
-The project should not claim:
+Developers working on the repository should:
 
 ```text
-implemented
+inspect current code before editing
+preserve API contracts
+preserve security boundaries
+keep execution logic in Go
+keep UI concerns in React
+test changed behavior
+avoid unnecessary rewrites
+prefer bounded behavior
+document actual capabilities
 ```
 
-for components that only exist as architectural plans.
+When changing one subsystem, check neighboring contracts.
 
-Likewise, completed components must no longer be described as merely planned.
-
-The worklog itself is maintained against the verified repository state.
-
----
-
-# Security Direction
-
-The intended execution path remains:
+Examples:
 
 ```text
-LLM
- ↓
-Tool API
- ↓
-Policy
- ↓
-Runner
- ↓
-Workspace
- ↓
-Process
-```
+API change
+→ TypeScript API types
+→ Zustand store
+→ UI consumers
 
-Defense-in-depth includes:
+Lab change
+→ policy
+→ runner
+→ task
+→ verifier
+→ promotion
+→ tests
 
-```text
-path restriction
-SSRF protection
-process-tree cancellation
-environment sanitization
-stdin isolation
-shell restriction
-Git restriction
-archive path validation
-workspace isolation
-verification gates
-promotion snapshots
-memory quarantine
-```
-
-Future strengthening may add:
-
-```text
-stronger OS isolation
-resource quotas
-network namespaces/isolation
-package-install controls
-process limits
-workspace quotas
-artifact policies
+Research change
+→ provider
+→ normalization
+→ ranking
+→ deduplication
+→ memory provenance
+→ tests
 ```
 
 ---
 
-# Batch Repair Status
+# Coding-Agent Operating Rules
 
-## Batch A — Build Foundation
+Agents operating on this repository should treat the repository itself as authoritative.
 
-```text
-✓ P0-1 unified Go module path
-✓ P0-2 TOML dependency aligned to v1.6.0
-✓ P0-8 numeric version + codename separation
-✓ runtime Go version reporting
-□ P2-2 .prettierignore
-□ P2-3 releasegate coverage expansion
-```
-
-## Batch B — Runtime Safety
+Required behavior:
 
 ```text
-✓ P0-6 WebSocket race/drop handling
-✓ P0-7 camelCase LLM JSON tags
-✓ P0-9 per-session abort
-✓ P0-16 CORS/WS origin restrictions
-✓ configuration patch semantics
-✓ API secret redaction
-✓ P1-11 full-session UI fetch behavior
+1. Inspect before modifying.
+2. Do not assume a capability exists.
+3. Preserve security invariants.
+4. Treat research as evidence.
+5. Never fake verification.
+6. Re-verify after mutation.
+7. Bound retries, loops, output, and network access.
+8. Keep API field names synchronized.
+9. Keep memory provenance intact.
+10. Keep documentation truthful.
 ```
 
-## Batch C — Execution Security
+Before making architectural changes, read:
 
 ```text
-✓ P0-10 llama startup deadlock
-✓ P0-11 sandbox timeout propagation
-✓ P0-12 ZIP slip protection
-✓ P0-13 filesystem/shell/Git/fetch jail
-✓ SSRF protection
-✓ P1-2 tokenized Lab policy
-✓ sanitized Lab environment
-✓ process-group cancellation
+README.md
+worklog.md
+internal/aicontext/AI-CONTEXT.md
 ```
 
-## Batch D — Coding Lab
+When modifying an existing file, inspect its current live contents rather than relying on an old copy.
 
-```text
-✓ P0-14 independent native verification
-✓ trivial verification rejection
-✓ automatic project-check discovery
-✓ P0-15 promotion snapshots
-✓ promotion without immediate Lab deletion
-✓ P1-1 bounded autonomous repair controller
-✓ P1-3 shared task/workspace ID
-✓ P1-4 per-session mutex
-✓ P1-5 required checks default
-```
-
-## Batch E — Research / Memory / Context
-
-```text
-✓ research request/result normalization
-✓ backend abstraction
-✓ GitHub provider
-✓ Reddit provider
-✓ bounded research responses
-✓ authority/relevance ranking
-✓ research deduplication
-✓ M1-M7 memory classes
-✓ provenance
-✓ trust levels
-✓ untrusted-web quarantine
-✓ non-authoritative normal recall
-✓ dynamic AI-context tool exposure
-□ deeper research-source validation
-□ cache architecture refinement
-□ full engineering-memory integration
-□ operational AI-CONTEXT constitution expansion
-□ critic/research strict-failure semantics
-```
-
-## Batch F — UI
-
-```text
-□ React UI parity
-□ Lab panel
-□ Research panel
-□ memory panel
-□ runtime/session integration
-□ SVG editor
-```
-
-## Batch G — Documentation
-
-```text
-□ final capability audit
-□ README synchronization
-□ worklog synchronization
-□ remove stale planned-state claims
-```
+When a task claims to be complete, verify the actual repository state and the behavior relevant to the change.
 
 ---
 
-# Current Immediate Sequence
+# Verification Discipline
 
-The active engineering sequence is now:
-
-```text
-1. finish Batch-E backend semantics
-        ↓
-2. unify HTTP/API runtime with shared Stack
-        ↓
-3. complete research/cache/evidence hardening
-        ↓
-4. connect engineering memory to verified fixes
-        ↓
-5. complete React/TypeScript/Vite UI parity
-        ↓
-6. implement SVG workspace
-        ↓
-7. run complete end-to-end autonomous coding tests
-        ↓
-8. synchronize README/documentation with verified capabilities
-```
-
----
-
-# Verification Commands
-
-The acceptance sequence remains:
+The intended Go acceptance baseline is:
 
 ```bash
-grep -R 'github.com/sheytan/local-agent' --include='*.go'
 go mod tidy
 go test ./internal/... -tags headless -count=1
 go test ./internal/lab/ -count=1
 go test ./internal/research/ -count=1
 go vet ./internal/...
 go build -o /tmp/sheytan .
+```
+
+Frontend acceptance includes:
+
+```bash
 npm run typecheck
+npm run lint
+npm run build:web
 ```
 
-The desired result is:
+The integrated build is:
+
+```bash
+npm run build
+```
+
+The exact relevant checks should depend on what changed.
+
+A passing command is not proof unless the command actually tests the behavior under change.
+
+---
+
+# Current State — 2026-09-02
+
+## Stable implemented foundations
 
 ```text
-no obsolete module imports
-clean module state
-passing internal tests
-passing Lab tests
-passing research tests
-clean go vet
-successful Go build
-successful frontend typecheck
+✓ Go runtime architecture
+✓ canonical module path
+✓ version/codename separation
+✓ LLM client
+✓ llama runtime hardening
+✓ orchestrator
+✓ dynamic tool exposure
+✓ AI context
+✓ persistent sessions
+✓ memory and recall
+✓ Coding Lab
+✓ Lab isolation
+✓ Lab policy
+✓ Lab runner
+✓ process control
+✓ path security
+✓ fetch/SSRF protection
+✓ verification gate
+✓ native verification
+✓ snapshots
+✓ promotion
+✓ patch export
+✓ bounded repair
+✓ GitHub research
+✓ Reddit research
+✓ DuckDuckGo research
+✓ SearXNG research
+✓ research ranking
+✓ research deduplication
+✓ research cache
+✓ API hardening
+✓ WebSocket security
+✓ React/Vite frontend foundation
+```
+
+## Active work
+
+```text
+□ complete React feature parity
+□ Coding Lab React panel
+□ Research React panel
+□ richer task/project inspection
+□ frontend integration testing
+□ broader end-to-end autonomous workflows
+□ SVG workspace/editor
 ```
 
 ---
 
-# Critical Invariants
+# Working Principle
 
-The following invariants define the repaired architecture.
+The system is intentionally built around:
 
 ```text
-A model cannot declare its own code correct.
-
-A successful command is not automatically verification.
-
-A workspace mutation invalidates previous verification.
-
-Promotion requires current verification.
-
-Finish requires current promotion evidence.
-
-Lab commands operate inside the allowed workspace.
-
-Git push is blocked by Lab policy.
-
-Absolute external working directories are rejected.
-
-Traversal outside the configured base is rejected.
-
-Loopback/private-network fetches are blocked.
-
-Timed-out process trees are terminated.
-
-Lab commands do not inherit host secrets.
-
-Untrusted web material cannot silently become M1 memory.
-
-Quarantined memory is excluded from ordinary recall.
-
-The AI context advertises the actual registered toolset.
-
-Per-session abort does not cancel unrelated sessions.
-
-Tool ordering is deterministic.
-
-Snapshots are created before promotion mutates source.
-
+MODEL
+  +
+REASONING
+  +
+TOOLS
+  +
+MEMORY
+  +
+PLANNING
+  +
+VERIFICATION
+  +
+RUNTIME
+  +
+COMPUTE
 ```
 
----
+A stronger model improves the reasoning component.
 
-# Core Architecture Principle
-
-The defining Version Zeta principle remains:
+It does not remove the need for:
 
 ```text
-AI proposal
-    ↓
+real project state
 controlled execution
-    ↓
-objective verification
-    ↓
-evidence
-    ↓
-accepted result
+persistent evidence
+verification
+security boundaries
+bounded autonomy
 ```
 
-And the long-term autonomous coding loop is:
+The architectural target remains:
 
-```text
-CREATE TASK
-    ↓
-CREATE WORKSPACE
-    ↓
-INSPECT PROJECT
-    ↓
-RUN BASELINE
-    ↓
-ANALYZE FAILURE
-    ↓
-RESEARCH
-    ↓
-PLAN FIX
-    ↓
-EDIT
-    ↓
-RUN
-    ↓
-VERIFY
-    │
-    ├── PASS → REVIEW → PROMOTE → COMPLETE
-    │
-    └── FAIL → DIAGNOSE → RESEARCH → EDIT
-```
-
-The system is therefore designed around one rule:
-
-> **SHEYTAN-Local-Agent must produce evidence, not merely confidence.**
+> **An AI software engineer whose important claims are backed by executable evidence.**
