@@ -1,12 +1,13 @@
-import { cp, mkdir, readdir, rm } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { cp, mkdir, readdir } from "node:fs/promises";
+import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { dirname } from "node:path";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(scriptDir, "..");
 
 const sourceDir = resolve(projectRoot, "dist");
-const targetDir = resolve(projectRoot, "web", "static");
+const stagingDir = resolve(projectRoot, "web", "static-react");
 
 async function main() {
 	await mkdir(sourceDir, { recursive: true });
@@ -21,20 +22,19 @@ async function main() {
 		);
 	}
 
-	await rm(targetDir, {
+	await mkdir(stagingDir, {
+		recursive: true,
+	});
+
+	await cp(sourceDir, stagingDir, {
 		recursive: true,
 		force: true,
 	});
 
-	await mkdir(targetDir, {
-		recursive: true,
-	});
-
-	await cp(sourceDir, targetDir, {
-		recursive: true,
-	});
-
-	console.log(`Frontend synchronized: ${targetDir}`);
+	console.log(`Frontend staged safely at: ${stagingDir}`);
+	console.log(
+		"web/static was left untouched; React integration remains non-destructive until verified.",
+	);
 }
 
 await main();
