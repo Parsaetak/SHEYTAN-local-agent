@@ -356,12 +356,31 @@ func (c *Client) Chat(ctx context.Context, req *ChatRequest) (*ChatResponse, err
                         return nil, err
                 }
                 var out ChatResponse
-                decodeErr := json.NewDecoder(resp.Body).Decode(&out)
-                resp.Body.Close()
+                        decodeErr := json.NewDecoder(resp.Body).Decode(&out)
+                        resp.Body.Close()
+
                 if decodeErr != nil {
-                        c.logCall(req, start, 0, 0, "", decodeErr)
-                        return nil, decodeErr
+	                c.logCall(req, start, 0, 0, "", decodeErr)
+	        return nil, decodeErr
                 }
+
+                if len(out.Choices) == 0 {
+	                err := errors.New(
+		                "LLM response contained no choices",
+	)
+
+	                c.logCall(
+		                req,
+		                start,
+		                0,
+		                0,
+		                "",
+		                err,
+	)
+
+	                return nil, err
+}
+
                 finish := ""
                 contentLen := 0
                 toolCalls := 0
