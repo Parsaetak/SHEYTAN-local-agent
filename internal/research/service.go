@@ -51,7 +51,8 @@ type Service struct {
 func NewService(cfg ServiceConfig) *Service {
 	defaults := DefaultServiceConfig()
 
-	backend := strings.ToLower(strings.TrimSpace(cfg.Backend))
+	backend := normalizeBackend(cfg.Backend)
+
 	if backend == "" {
 		backend = defaults.Backend
 	}
@@ -108,9 +109,7 @@ func (s *Service) Register(provider Provider) error {
 
 // Unregister removes a provider from the service.
 func (s *Service) Unregister(name string) {
-	name = strings.ToLower(
-		strings.TrimSpace(name),
-	)
+	name = canonicalBackendName(name)
 
 	if name == "" {
 		return
@@ -124,9 +123,7 @@ func (s *Service) Unregister(name string) {
 
 // Provider returns a registered provider by name.
 func (s *Service) Provider(name string) (Provider, bool) {
-	name = strings.ToLower(
-		strings.TrimSpace(name),
-	)
+	name = canonicalBackendName(name)
 
 	if name == "" {
 		return nil, false
@@ -167,6 +164,10 @@ func (s *Service) ProviderNames() []string {
 // Any other value selects one registered provider explicitly.
 func (s *Service) SetBackend(backend string) error {
 	backend = normalizeBackend(backend)
+
+	if backend == BackendWeb {
+		backend = BackendDuckDuckGo
+	}
 
 	if backend != BackendAuto {
 		s.mu.RLock()
@@ -304,6 +305,16 @@ func normalizeBackend(backend string) string {
 
 	if backend == "" {
 		return BackendAuto
+	}
+
+	return backend
+}
+
+func canonicalBackendName(backend string) string {
+	backend = normalizeBackend(backend)
+
+	if backend == BackendWeb {
+		return BackendDuckDuckGo
 	}
 
 	return backend
