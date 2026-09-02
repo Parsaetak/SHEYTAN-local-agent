@@ -12,7 +12,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/sheytan/local-agent/internal/proc"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/proc"
 )
 
 var _ = proc.Command // used below on windows/darwin probes
