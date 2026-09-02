@@ -1,5 +1,6 @@
 import {
 	memo,
+	useDeferredValue,
 	useEffect,
 	useMemo,
 	useRef,
@@ -9,6 +10,13 @@ import type { ActivityEvent } from "./store";
 import { useRuntimeStore } from "./store";
 
 const MAX_VISIBLE_EVENTS = 50;
+
+const activityTimeFormatter =
+	new Intl.DateTimeFormat([], {
+		hour: "2-digit",
+		minute: "2-digit",
+		second: "2-digit",
+	});
 
 function formatActivity(
 	activity: ActivityEvent,
@@ -41,10 +49,7 @@ const ActivityItem = memo(
 		item: ActivityEvent;
 	}) {
 		return (
-			<article
-				className="activity-item"
-				key={item.id}
-			>
+			<article className="activity-item">
 				<div className="activity-marker">
 					<span />
 				</div>
@@ -56,15 +61,8 @@ const ActivityItem = memo(
 						</span>
 
 						<time>
-							{new Date(
+							{activityTimeFormatter.format(
 								item.timestamp,
-							).toLocaleTimeString(
-								[],
-								{
-									hour: "2-digit",
-									minute: "2-digit",
-									second: "2-digit",
-								},
 							)}
 						</time>
 					</div>
@@ -99,15 +97,18 @@ function ActivityStream() {
 	const scrollFrameRef =
 		useRef<number | null>(null);
 
+	const deferredActivity =
+		useDeferredValue(activity);
+
 	const visibleActivity = useMemo(
 		() =>
-			activity.length >
+			deferredActivity.length >
 			MAX_VISIBLE_EVENTS
-				? activity.slice(
+				? deferredActivity.slice(
 						-MAX_VISIBLE_EVENTS,
 					)
-				: activity,
-		[activity],
+				: deferredActivity,
+		[deferredActivity],
 	);
 
 	useEffect(() => {
@@ -146,7 +147,7 @@ function ActivityStream() {
 					null;
 			}
 		};
-	}, [activity]);
+	}, [deferredActivity]);
 
 	return (
 		<div className="activity-panel">
@@ -177,7 +178,7 @@ function ActivityStream() {
 			</div>
 
 			<div className="activity-stream">
-				{activity.length ===
+				{deferredActivity.length ===
 				0 ? (
 					<div className="activity-empty">
 						<div className="activity-empty-mark">
