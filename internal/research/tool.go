@@ -52,7 +52,7 @@ Provider routing:
 - auto: query all available providers and merge evidence
 - github: GitHub issues and pull requests
 - reddit: Reddit posts
-- web: general web provider when registered
+- web: compatibility alias for DuckDuckGo
 - searxng: SearXNG provider when registered
 - duckduckgo: DuckDuckGo provider when registered
 
