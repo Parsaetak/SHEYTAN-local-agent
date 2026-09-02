@@ -8,125 +8,88 @@
 
 Version Zeta establishes the next architectural stage of SHEYTAN-Local-Agent:
 
-> A local-first AI software engineer with an isolated coding laboratory, automated verification, persistent engineering memory, and external research across GitHub, Reddit, and the web.
+> A local-first AI software engineer with an isolated coding laboratory, controlled execution, objective verification, persistent engineering memory, external research, and a modern interactive UI.
 
-The project remains implemented in Go and continues to preserve the existing local-AI, tool, GUI, server, memory, diagnostics, browser, and orchestration infrastructure.
+The project keeps the Go implementation as the systems/runtime foundation while moving the user interface toward a Node.js + React + TypeScript + Vite architecture.
 
 ---
 
-## Historical Foundation
-
-### Original local-agent foundation
+# Historical Foundation
 
 The project began as a local-first AI agent capable of interacting with the operating system through tools.
 
 The original architecture included:
 
-* local LLM integration
-* shell execution
-* file operations
-* code execution
-* web search
-* browser automation
-* Git operations
-* multi-agent orchestration
-* persistent memory
-* sandboxing
-* CLI/TUI
+```text
+local LLM
+shell execution
+file operations
+code execution
+web search
+browser automation
+Git
+multi-agent orchestration
+persistent memory
+sandboxing
+CLI/TUI
+```
 
-The original implementation was progressively evolved from an early TypeScript/Node prototype into the current Go implementation.
+The implementation evolved from an earlier TypeScript/Node prototype into the current Go runtime.
 
 ---
 
-## Go Architecture
+# Go Runtime
 
-The project was migrated to a native Go implementation to provide:
+The Go architecture remains responsible for system-level operations:
 
-* a single compiled executable
-* better subprocess control
-* stronger concurrency primitives
-* native Windows support
+```text
+LLM management
+orchestration
+tool execution
+filesystem operations
+process execution
+sandboxing
+Coding Lab
+research services
+memory
+sessions
+HTTP API
+WebSocket activity
+```
+
+The Go runtime provides:
+
+* one native backend
+* native process control
 * native filesystem APIs
-* lower runtime overhead
-* simpler distribution
-* easier long-running service behavior
-
-The repository now uses a modular internal package structure.
+* strong concurrency primitives
+* native Windows integration
+* portable application data
+* predictable long-running service behavior
 
 ---
 
-## Agent Runtime
+# Agent Runtime
 
 The current agent runtime is centered around the orchestrator.
 
-Its responsibilities include:
+Responsibilities include:
 
-* planning
-* LLM execution
-* tool calls
-* tool results
-* iterative reasoning
-* streaming activity
-* abort support
-* tool allow-listing
-* history management
-* persistent recall
-* context pressure tracking
+```text
+planning
+LLM execution
+tool calls
+tool results
+iterative reasoning
+streaming activity
+abort support
+tool allow-listing
+history management
+persistent recall
+context pressure tracking
+```
 
-The orchestrator is the foundation on which the Zeta Coding Lab is being built.
-
----
-
-## Memory and Recall
-
-Persistent memory and recall were introduced so the agent can retain useful information between interactions.
-
-The current system provides:
-
-* persistent session information
-* recall capsules
-* bounded context injection
-* history windowing
-* context rollover support
-
-Zeta extends this idea toward engineering memory:
-
-* known project architecture
-* previously encountered failures
-* verified fixes
-* successful commands
-* rejected approaches
-* research references
-
----
-
-## Performance Work
-
-The project has accumulated several performance-oriented improvements.
-
-These include:
-
-* deterministic tool ordering
-* context window management
-* persistent recall optimization
-* streaming coalescing
-* frame-oriented rendering
-* LLM performance telemetry
-* prompt-prefix stability
-* engine configuration controls
-* batch tuning
-* optional KV-cache reuse
-* optional FlashAttention
-* configurable thread counts
-* resource retention controls
-
-The long-term goal is to keep the local agent responsive while performing long autonomous operations.
-
----
-
-## Current Agent Tool Model
-
-All agent tools implement a common interface conceptually equivalent to:
+Tools are exposed through a stable interface:
 
 ```go
 type Tool interface {
@@ -137,24 +100,45 @@ type Tool interface {
 }
 ```
 
-This allows the orchestrator to expose a stable tool surface to different local models.
+---
+
+# Performance Work
+
+The project already contains several performance-oriented mechanisms:
+
+```text
+deterministic tool ordering
+history windowing
+persistent recall
+stream coalescing
+frame-oriented UI pacing
+LLM telemetry
+prompt-prefix stability
+batch tuning
+KV-cache reuse controls
+FlashAttention controls
+configurable thread counts
+resource retention controls
+```
+
+The UI migration will continue this direction by moving interactive presentation into a dedicated Node/React frontend while retaining the optimized Go runtime.
+
+The target is responsive interaction during long-running local inference and autonomous coding tasks.
 
 ---
 
-# Version Zeta
-
-## Zeta naming transition
+# Version Zeta Naming
 
 The numbered user-facing release identity has been retired.
 
-The application identity is now:
+Current identity:
 
 ```text
 SHEYTAN-Local-Agent
 Version Zeta
 ```
 
-The configuration uses:
+Configuration:
 
 ```go
 const (
@@ -167,9 +151,9 @@ const (
 
 # Coding Lab
 
-## Zeta Coding Lab goal
+## Goal
 
-The Coding Lab changes the agent from:
+The Coding Lab changes the operating model from:
 
 ```text
 AI → answer
@@ -199,54 +183,52 @@ repair
 verify
 ```
 
-The laboratory is intended to provide the controlled environment where that loop can operate.
-
 ---
 
-## Workspace foundation
+# Workspace Foundation
 
-### File created
+Implemented:
 
 ```text
 internal/lab/workspace.go
 ```
 
-### Purpose
+The workspace manager provides:
 
-The workspace package creates isolated task copies from an existing source repository.
+```text
+Create()
+Remove()
+PathFor()
+```
 
-The implementation:
+Capabilities include:
 
-* resolves absolute paths
-* validates the source directory
-* prevents source/workspace overlap
-* generates cryptographically random task IDs
-* creates disposable workspace directories
-* recursively copies regular files
-* skips `.git`
-* skips symbolic links
-* supports context cancellation
-* deletes only workspaces below the configured laboratory root
-* prevents path traversal through workspace-relative paths
+```text
+absolute-path normalization
+source validation
+source/workspace overlap protection
+cryptographically random task IDs
+isolated workspace creation
+regular-file copying
+.git exclusion
+symbolic-link exclusion
+context cancellation
+root-restricted cleanup
+workspace path traversal protection
+```
 
-### Current workspace format
+Workspace format:
 
 ```text
 lab/workspaces/
 └── task-YYYYMMDD-HHMMSS-random/
 ```
 
-The workspace itself intentionally does not preserve the source `.git` directory.
-
-Git state will be handled separately by the future patch/verification layer.
-
 ---
 
-# Next Coding Lab Components
+# Lab Runner
 
-## Runner
-
-Planned file:
+Implemented:
 
 ```text
 internal/lab/runner.go
@@ -254,122 +236,380 @@ internal/lab/runner.go
 
 Responsibilities:
 
-* execute commands in a workspace
-* capture stdout
-* capture stderr
-* capture exit status
-* enforce context cancellation
-* enforce timeouts
-* record duration
-* return structured execution results
-* prevent execution outside the workspace policy
-
----
-
-## Verifier
-
-Planned file:
-
 ```text
-internal/lab/verifier.go
+execute commands
+validate working directories
+capture stdout
+capture stderr
+capture exit status
+measure execution duration
+enforce context cancellation
+enforce command timeout
+bound combined output
+return structured results
 ```
 
-Responsibilities:
+### Important hardening
 
-* detect project language/toolchain
-* identify test commands
-* identify build commands
-* identify lint/static-analysis commands
-* execute verification stages
-* aggregate results
-* report PASS/FAIL evidence
+stdout and stderr now share one output budget.
+
+```text
+configured limit
+      │
+      ▼
+┌───────────────┐
+│ shared budget │
+└───────┬───────┘
+        │
+   ┌────┴────┐
+   ▼         ▼
+stdout     stderr
+```
+
+This prevents the effective retained output from becoming roughly twice the configured limit.
+
+Regression coverage was added in:
+
+```text
+internal/lab/runner_test.go
+```
 
 ---
 
-## Lab Policy
+# Lab Policy
 
-Planned file:
+Implemented:
 
 ```text
 internal/lab/policy.go
 ```
 
-Responsibilities:
+The default policy is intentionally conservative.
 
-* command allow/deny decisions
-* network policy
-* workspace boundary policy
-* destructive operation restrictions
-* resource controls
-* execution mode
+Controls include:
+
+```text
+network access
+dangerous commands
+interactive commands
+workspace escape patterns
+command length
+```
+
+The policy blocks high-confidence destructive/system-level operations such as:
+
+```text
+disk formatting
+filesystem destruction
+registry deletion
+system shutdown/reboot
+destructive Git operations
+Git publishing
+privilege escalation
+recognized network download commands
+```
+
+The policy is defense-in-depth and does not replace OS-level isolation.
 
 ---
 
-## Lab Task
+# Lab Task Lifecycle
 
-Planned file:
+Implemented:
 
 ```text
 internal/lab/task.go
 ```
 
-Responsibilities:
+Task states:
 
-* task metadata
-* task lifecycle
-* task state
-* iteration count
-* failure history
-* research references
-* verification history
+```text
+pending
+running
+succeeded
+failed
+canceled
+blocked
+```
+
+Lifecycle:
+
+```text
+NewTask
+   ↓
+Start
+   ↓
+RunCommand
+   ↓
+Verify
+   ↓
+Finish
+```
+
+Failure/control paths include:
+
+```text
+Fail
+Cancel
+Block
+Close
+```
 
 ---
 
-## Lab Session
+# Verification Gate
 
-Planned file:
+The task lifecycle now enforces a critical invariant:
+
+> A task cannot become successfully completed without a current passing verification.
+
+A command execution invalidates previous verification.
+
+```text
+VERIFY PASS
+     │
+     ▼
+new command
+     │
+     ▼
+verification stale
+     │
+     ▼
+VERIFY AGAIN
+```
+
+This prevents stale verification evidence from being reused after workspace changes.
+
+---
+
+# Verifier
+
+Implemented:
+
+```text
+internal/lab/verifier.go
+```
+
+Verification supports:
+
+```text
+required checks
+optional checks
+build commands
+test commands
+explicit command checks
+structured result aggregation
+cancellation handling
+failure reporting
+task verification recording
+```
+
+Verification is recorded only after the complete verification sequence finishes.
+
+This is important because individual verification commands themselves pass through task execution, which invalidates previous verification state.
+
+---
+
+# Coding Lab Tool
+
+Implemented:
+
+```text
+internal/lab/tool.go
+```
+
+The orchestrator-facing tool is:
+
+```text
+coding_lab
+```
+
+Supported lifecycle actions:
+
+```text
+start_task
+run
+verify
+finish
+fail
+cancel
+block
+close
+```
+
+The model therefore interacts with one controlled Lab interface rather than receiving unrestricted process/filesystem primitives.
+
+---
+
+# Lab Session Registry
+
+Implemented:
 
 ```text
 internal/lab/session.go
 ```
 
-Responsibilities:
+The registry provides:
 
-* persist autonomous coding sessions
-* preserve task state
-* retain execution logs
-* retain verification results
-* connect research evidence to changes
+```text
+Create
+Get
+GetTask
+Touch
+Delete
+List
+Count
+Active
+RemoveCompleted
+SnapshotTasks
+```
+
+This gives the Lab a runtime-level association between an autonomous session and its task.
+
+---
+
+# Lab Tests
+
+Implemented:
+
+```text
+internal/lab/lab_test.go
+internal/lab/runner_test.go
+```
+
+Coverage includes:
+
+```text
+workspace isolation
+.git exclusion
+path escape prevention
+runner success
+runner failure
+runner timeout
+policy rejection
+verification gate
+verification invalidation
+failed verification recording
+session lifecycle
+Coding Lab end-to-end tool flow
+combined output limiting
+```
+
+The repository's Windows CI workflow already runs:
+
+```text
+go test ./internal/... -tags headless
+go vet ./internal/...
+go build ...
+```
+
+so these tests are part of the existing validation path.
+
+---
+
+# Shared Runtime Integration
+
+The Coding Lab was integrated into:
+
+```text
+internal/runtime/runtime.go
+```
+
+The runtime now initializes and registers:
+
+```text
+Coding Lab
+TaskManager
+WorkspaceManager
+Runner
+Policy
+Verifier
+SessionRegistry
+```
+
+The shared runtime exposes the Lab through:
+
+```text
+Stack.Lab
+```
+
+The orchestrator registers:
+
+```text
+coding_lab
+```
+
+when the Lab is enabled.
+
+---
+
+# Current Backend Integration Issue
+
+The HTTP server currently constructs its own orchestrator independently.
+
+Current architecture:
+
+```text
+CLI / desktop
+      ↓
+runtime.NewStack()
+      ↓
+shared orchestrator
+
+HTTP server
+      ↓
+api.New()
+      ↓
+separate orchestrator
+```
+
+This creates a duplicated runtime surface.
+
+The next backend integration task is therefore:
+
+```text
+unify API server with runtime.Stack
+```
+
+The objective is for CLI, desktop, and web UI to operate against the same runtime/tool registry.
 
 ---
 
 # Research Engine
 
-Zeta adds dedicated external research instead of relying on a single generic web-search tool.
+Version Zeta introduces configuration for dedicated technical research.
 
-Planned package:
+Current configuration surface:
+
+```text
+ResearchEnabled
+ResearchBackend
+ResearchSearXNGURL
+ResearchMaxResults
+ResearchTimeoutSec
+ResearchCacheTTLMin
+ResearchGitHub
+ResearchReddit
+ResearchWeb
+ResearchUserAgent
+```
+
+Planned structure:
 
 ```text
 internal/research/
-```
-
-Planned components:
-
-```text
-provider.go
-github.go
-reddit.go
-web.go
-searxng.go
-rank.go
-cache.go
+├── provider.go
+├── github.go
+├── reddit.go
+├── web.go
+├── searxng.go
+├── rank.go
+└── cache.go
 ```
 
 ---
 
-## GitHub Research
-
-GitHub is the primary source for code-level troubleshooting.
+# GitHub Research
 
 Planned capabilities:
 
@@ -377,79 +617,89 @@ Planned capabilities:
 search code
 search issues
 search pull requests
-read issue
-read pull request
-read repository file
+read issues
+read pull requests
+read repository files
 inspect candidate patches
 ```
 
-The agent should prefer exact error strings, package names, symbols, and version information when researching software failures.
+Research should prefer:
+
+```text
+exact error text
+package/module names
+symbols
+version numbers
+maintainer explanations
+known regressions
+```
+
+GitHub evidence remains a candidate until locally verified.
 
 ---
 
-## Reddit Research
+# Reddit Research
 
-Reddit is intended primarily for practical troubleshooting.
-
-Typical research:
+Planned capabilities:
 
 ```text
-real-world reports
+community reports
 hardware-specific workarounds
 configuration issues
 regressions
 installation problems
-community fixes
+practical fixes
 ```
 
-Reddit results should be treated as experience evidence rather than authoritative documentation.
+Reddit is treated as experience evidence rather than authoritative documentation.
 
 ---
 
-## Web Research
+# General Web Research
 
-The web layer should support:
+Planned capabilities:
 
-* general search
-* bounded HTTP fetch
-* documentation lookup
-* official project documentation
-* tutorials
-* technical articles
+```text
+general search
+bounded HTTP fetch
+official documentation lookup
+technical documentation
+tutorial lookup
+project documentation
+SearXNG integration
+```
 
-A self-hosted SearXNG installation is an intended preferred backend for unrestricted local use where practical.
+The research layer should preserve evidence and source context so the autonomous repair controller can make decisions from traceable information.
 
 ---
 
-# Evidence Model
+# Evidence Ranking
 
-The future research engine should distinguish source authority.
-
-Conceptual ranking:
+The intended authority order is:
 
 ```text
 official documentation
         ↓
 maintainer-authored issue / PR
         ↓
-high-quality project source
+project source / release information
         ↓
-technical community discussion
+high-quality technical discussion
         ↓
-Reddit/community reports
+community reports / Reddit
         ↓
 unknown web content
 ```
 
-This ranking is a decision aid, not an absolute truth system.
+The ranking is a decision aid.
 
-The final acceptance criterion remains local verification.
+Verification remains the final authority.
 
 ---
 
-# Autonomous Repair
+# Autonomous Repair Controller
 
-The final Zeta repair loop is planned as:
+The final repair loop is planned as:
 
 ```text
 CREATE TASK
@@ -475,7 +725,6 @@ VERIFY
     ├── PASS → REVIEW → COMPLETE
     │
     └── FAIL → DIAGNOSE → RESEARCH → EDIT
-                               ↺
 ```
 
 The loop must be bounded by:
@@ -483,65 +732,138 @@ The loop must be bounded by:
 ```text
 maximum iterations
 maximum command duration
-maximum task duration
+task timeout
 workspace/resource limits
 abort signal
 ```
 
----
-
-# Engineering Principle
-
-The most important Zeta principle is:
-
-> The language model does not declare its own code correct.
-
-The laboratory produces the evidence.
+The repair controller is not yet implemented.
 
 ---
 
-# Configuration
+# Engineering Memory
 
-Version Zeta adds:
+Existing recall infrastructure stores useful past interactions.
+
+The Zeta extension should connect coding tasks to engineering memory:
 
 ```text
-LabEnabled
-LabWorkspaceRoot
-LabCommandTimeoutSec
-LabMaxIterations
-LabKeepWorkspaces
-LabAllowNetwork
-
-ResearchEnabled
-ResearchBackend
-ResearchSearXNGURL
-ResearchMaxResults
-ResearchTimeoutSec
-ResearchCacheTTLMin
-ResearchGitHub
-ResearchReddit
-ResearchWeb
-ResearchUserAgent
+project architecture
+dependency versions
+known errors
+successful commands
+failed approaches
+verified patches
+research references
+verification evidence
 ```
 
-Default intentions:
-
-```text
-Coding Lab              enabled
-Lab network             disabled
-workspace preservation  disabled
-command timeout        300 seconds
-research                enabled
-GitHub research         enabled
-Reddit research         enabled
-web research            enabled
-```
+The long-term objective is to prevent repeated rediscovery of already solved engineering problems.
 
 ---
 
-# Safety Direction
+# UI / UX Migration
 
-The eventual execution path is:
+## Current State
+
+The current application includes:
+
+```text
+Go/Fyne native Windows UI
+embedded static web UI
+Go HTTP API
+WebSocket activity stream
+```
+
+## Target State
+
+The UI is being migrated toward:
+
+```text
+Node.js
+React
+TypeScript
+Vite
+```
+
+with:
+
+```text
+REST
+WebSocket
+```
+
+connecting to the Go backend.
+
+Target:
+
+```text
+                Node / React
+                    │
+             REST + WebSocket
+                    │
+                    ▼
+                 Go API
+                    │
+                    ▼
+              Runtime Stack
+                    │
+        ┌───────────┼───────────┐
+        ▼           ▼           ▼
+       LLM         LAB       RESEARCH
+```
+
+The Go backend remains the authority for execution and system access.
+
+---
+
+# SVG Workspace
+
+SVG is being promoted to a first-class UI artifact.
+
+Target experience:
+
+```text
+SVG file
+   │
+   ├── visual canvas
+   │      ├── zoom
+   │      ├── pan
+   │      ├── selection
+   │      └── live refresh
+   │
+   └── source editor
+          ├── XML
+          ├── formatting
+          ├── validation
+          └── save
+```
+
+Target workflow:
+
+```text
+AI generation
+     ↓
+Lab file write
+     ↓
+live SVG render
+     ↓
+human visual inspection
+     ↓
+source edit
+     ↓
+instant preview
+     ↓
+verification
+```
+
+The feature is planned, not yet complete.
+
+---
+
+# Security Direction
+
+The intended execution path remains:
 
 ```text
 LLM
@@ -550,180 +872,133 @@ Tool API
  ↓
 Policy
  ↓
-Lab Runner
+Runner
  ↓
 Workspace
  ↓
 Process
 ```
 
-The model should not receive unrestricted direct access to the host.
-
-The future policy layer will be responsible for controlling:
-
-* arbitrary paths
-* destructive shell commands
-* network access
-* package installation
-* privilege escalation
-* process limits
-* workspace boundaries
-
----
-
-# Repository Documentation
-
-The Zeta documentation set consists of:
+Future hardening should address:
 
 ```text
-README.md
-worklog.md
-internal/aicontext/AI-CONTEXT.md
+stronger OS isolation
+resource limits
+network isolation
+package-install restrictions
+process trees
+workspace quotas
+artifact controls
 ```
 
-The README describes the architecture and operating philosophy.
-
-The worklog records implementation history.
-
-AI-CONTEXT describes the runtime environment and agent-facing operating context.
+The existing Lab policy is not treated as a complete security boundary.
 
 ---
 
-# Current State
+# Current Status
 
-## Foundation completed
+## Completed
 
 ```text
-✓ Go application
+✓ Go runtime
 ✓ local LLM support
 ✓ remote OpenAI-compatible provider
-✓ agent orchestrator
+✓ orchestrator
 ✓ tool registry
 ✓ persistent memory
 ✓ recall
 ✓ context management
 ✓ streaming
+✓ abort handling
 ✓ browser automation
 ✓ Git tooling
 ✓ diagnostics
-✓ stress testing
-✓ native GUI
-✓ headless server
+✓ stress infrastructure
 ✓ portable application layout
-✓ Coding Lab workspace foundation
+✓ Lab workspace isolation
+✓ Lab runner
+✓ Lab policy
+✓ Lab task lifecycle
+✓ Lab session registry
+✓ Lab verifier
+✓ Lab tool
+✓ shared stdout/stderr output budgeting
+✓ Lab regression tests
+✓ shared runtime Lab registration
 ```
 
-## Zeta work in progress
+## In progress
 
 ```text
-□ Lab runner
-□ Lab verifier
-□ Lab policy
-□ Lab task lifecycle
-□ Research provider abstraction
-□ GitHub research tools
-□ Reddit research tools
-□ general web research tools
+□ unify API server with shared runtime
+□ autonomous repair controller
+□ research provider abstraction
+□ GitHub research
+□ Reddit research
+□ general web / SearXNG research
 □ research cache
 □ evidence ranking
-□ autonomous repair controller
 □ engineering memory integration
-□ Zeta GUI integration
-□ full end-to-end autonomous coding tests
+□ Node.js + React + TypeScript + Vite UI
+□ live SVG editor/preview
+□ full Lab UI
+□ end-to-end autonomous coding validation
 ```
 
 ---
 
-# Current Change
+# Immediate Engineering Sequence
 
-## Zeta workspace foundation
-
-Added:
+The current sequence is:
 
 ```text
-internal/lab/workspace.go
+1. Unify API + runtime
+        ↓
+2. Harden existing backend functions
+        ↓
+3. Build research provider abstraction
+        ↓
+4. Implement GitHub research
+        ↓
+5. Implement Reddit research
+        ↓
+6. Implement web/SearXNG research
+        ↓
+7. Add research cache + evidence ranking
+        ↓
+8. Build autonomous repair controller
+        ↓
+9. Connect engineering memory
+        ↓
+10. Build Node/React/Vite UI
+        ↓
+11. Build live SVG workspace
+        ↓
+12. Integrate full GUI/Lab flow
+        ↓
+13. Run end-to-end autonomous verification
 ```
-
-The workspace manager currently supports:
-
-```text
-Create()
-Remove()
-PathFor()
-```
-
-and enforces the initial filesystem safety boundary.
 
 ---
 
-# Immediate Next Stage
+# Core Principle
 
-The next implementation file is:
+The defining Version Zeta principle remains:
 
-```text
-internal/lab/runner.go
-```
+> **The language model does not declare its own code correct.**
 
-The runner will become the controlled execution engine used by:
+The system must produce executable evidence.
 
 ```text
-run command
-run tests
-run build
-run lint
-run verifier
+AI proposal
+    ↓
+controlled execution
+    ↓
+objective verification
+    ↓
+evidence
+    ↓
+accepted result
 ```
 
-That component will then be connected to the existing agent tool system.
-
----
-
-# Long-Term Target
-
-The finished Zeta system should make a task like:
-
-```text
-Fix every failing test in this repository.
-Use GitHub and Reddit to research unfamiliar errors.
-Do not modify files outside the project.
-Keep iterating until the test suite and build pass.
-```
-
-operate as:
-
-```text
-USER REQUEST
-     ↓
-LOCAL AI
-     ↓
-REPOSITORY ANALYSIS
-     ↓
-BASELINE TEST
-     ↓
-FAILURE EXTRACTION
-     ↓
-GITHUB / REDDIT / WEB RESEARCH
-     ↓
-CANDIDATE FIX
-     ↓
-PATCH
-     ↓
-TEST
-     ↓
-FAIL?
-  YES ────────────────► RESEARCH AGAIN
-   │
-   NO
-   ↓
-BUILD
-   ↓
-LINT
-   ↓
-REGRESSION
-   ↓
-DIFF REVIEW
-   ↓
-VERIFIED RESULT
-```
-
-That is the defining objective of **SHEYTAN-Local-Agent — Version Zeta**.
+That principle defines **SHEYTAN-Local-Agent — Version Zeta**.
