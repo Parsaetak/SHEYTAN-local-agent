@@ -139,15 +139,16 @@ func (s *Service) ProviderNames() []string {
 	return names
 }
 
-// SetBackend changes the active routing mode.
+// SetBackend changes the default routing mode.
 //
 // "auto" enables bounded multi-provider research.
 // Any other value selects one registered provider explicitly.
+//
+// This changes the service's default behavior only. Per-request backend
+// selection should use SearchWithBackend so concurrent requests do not
+// mutate shared service state.
 func (s *Service) SetBackend(backend string) error {
-	backend = strings.ToLower(strings.TrimSpace(backend))
-	if backend == "" {
-		backend = BackendAuto
-	}
+	backend = normalizeBackend(backend)
 
 	if backend != BackendAuto {
 		s.mu.RLock()
@@ -170,7 +171,7 @@ func (s *Service) SetBackend(backend string) error {
 	return nil
 }
 
-// Backend returns the current routing mode.
+// Backend returns the current default routing mode.
 func (s *Service) Backend() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -178,22 +179,41 @@ func (s *Service) Backend() string {
 	return s.backend
 }
 
-// Search executes one unified research operation.
+// Search executes one unified research operation using the service's
+// currently configured backend.
 //
 // Explicit backends use exactly one provider.
 // Auto mode queries all currently registered providers concurrently and
 // combines their successful results. Provider failures do not discard
 // successful findings from other providers.
-func (s *Service) Search(ctx context.Context, req SearchRequest) (SearchResponse, error) {
+func (s *Service) Search(
+	ctx context.Context,
+	req SearchRequest,
+) (SearchResponse, error) {
+	return s.SearchWithBackend(ctx, s.Backend(), req)
+}
+
+// SearchWithBackend executes one research operation using a request-scoped
+// routing mode.
+//
+// Unlike SetBackend, this method never mutates the service's shared backend.
+// It is therefore safe for concurrent agent requests that need different
+// providers.
+func (s *Service) SearchWithBackend(
+	ctx context.Context,
+	backend string,
+	req SearchRequest,
+) (SearchResponse, error) {
 	req = req.Normalize()
 
 	if err := req.Validate(); err != nil {
 		return SearchResponse{}, err
 	}
 
+	backend = normalizeBackend(backend)
+
 	s.mu.RLock()
 
-	backend := s.backend
 	defaultMaxResults := s.maxResults
 	timeout := s.timeout
 
@@ -224,10 +244,30 @@ func (s *Service) Search(ctx context.Context, req SearchRequest) (SearchResponse
 			)
 		}
 
-		return s.searchProvider(ctx, provider, req, timeout)
+		return s.searchProvider(
+			ctx,
+			provider,
+			req,
+			timeout,
+		)
 	}
 
-	return s.searchAuto(ctx, providers, req, timeout)
+	return s.searchAuto(
+		ctx,
+		providers,
+		req,
+		timeout,
+	)
+}
+
+func normalizeBackend(backend string) string {
+	backend = strings.ToLower(strings.TrimSpace(backend))
+
+	if backend == "" {
+		return BackendAuto
+	}
+
+	return backend
 }
 
 func (s *Service) searchProvider(
@@ -362,13 +402,19 @@ func (s *Service) searchAuto(
 			allResults = append(
 				allResults,
 				collectedResult{
-					result: NormalizeResult(result, providerResult.name),
+					result: NormalizeResult(
+						result,
+						providerResult.name,
+					),
 				},
 			)
 		}
 	}
 
-	merged := mergeResearchResults(allResults, req.MaxResults)
+	merged := mergeResearchResults(
+		allResults,
+		req.MaxResults,
+	)
 
 	response := SearchResponse{
 		Provider: BackendAuto,
