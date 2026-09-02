@@ -1,9 +1,10 @@
 version: "3"
 
 includes:
-  common:
-    taskfile: ./build/Taskfile.yml
-    optional: false
+  common: ./build/Taskfile.yml
+  windows: ./build/Taskfile.windows.yml
+  linux: ./build/Taskfile.linux.yml
+  darwin: ./build/Taskfile.darwin.yml
 
 vars:
   APP_NAME: "SHEYTAN-Local-Agent"
@@ -12,42 +13,56 @@ vars:
 
 tasks:
   build:
-    desc: Build the SHEYTAN Local Agent application
+    desc: Build the application for the current platform
     cmds:
-      - task: common:frontend:build
-      - go build -buildvcs=false -o "{{.BIN_DIR}}/{{.APP_NAME}}{{exeExt}}"
+      - task: "{{OS}}:build"
+
+  package:
+    desc: Package the application for the current platform
+    cmds:
+      - task: "{{OS}}:package"
+
+  run:
+    desc: Run the application for the current platform
+    cmds:
+      - task: "{{OS}}:run"
 
   dev:
-    desc: Run the native Wails development application
+    desc: Run the application in development mode
     cmds:
       - wails3 dev -config ./build/config.yml -port {{.VITE_PORT}}
 
   frontend:install:
     desc: Install frontend dependencies
     cmds:
-      - task: common:frontend:install
+      - task: common:install:frontend:deps
+
+  frontend:dev:
+    desc: Start the frontend development server
+    cmds:
+      - task: common:dev:frontend
 
   frontend:build:
-    desc: Build and synchronize the React frontend
+    desc: Build the production frontend
     cmds:
-      - task: common:frontend:build
+      - task: common:build:frontend
 
   frontend:typecheck:
-    desc: Type-check the React frontend
+    desc: Type-check the frontend
     cmds:
-      - task: common:frontend:typecheck
+      - task: common:typecheck:frontend
 
   frontend:lint:
-    desc: Lint the React frontend
+    desc: Lint the frontend
     cmds:
-      - task: common:frontend:lint
+      - task: common:lint:frontend
 
   frontend:format:
-    desc: Format the React frontend
+    desc: Format the frontend
     cmds:
-      - task: common:frontend:format
+      - task: common:format:frontend
 
   frontend:format-check:
     desc: Verify frontend formatting
     cmds:
-      - task: common:frontend:format-check
+      - task: common:format-check:frontend
