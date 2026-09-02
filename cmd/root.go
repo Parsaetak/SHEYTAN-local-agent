@@ -1,8 +1,3 @@
-// Package cmd holds the CLI subcommands. The root command dispatches based
-// on the first arg: `ask`, `serve`, `doctor`, `setup`, `install`, `sysinfo`,
-// `logs`, `diagnostics`, `license`, `stress`, `version`, `help`. With NO
-// args, runs `defaultFn()` (the desktop GUI on Windows, or a fallback on
-// other platforms).
 package cmd
 
 import (
@@ -10,9 +5,9 @@ import (
 	"os"
 	"runtime"
 
-	"github.com/sheytan/local-agent/internal/brand"
-	"github.com/sheytan/local-agent/internal/config"
-	"github.com/sheytan/local-agent/internal/logging"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/brand"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/logging"
 )
 
 // RunWithDefaultFn dispatches to the right subcommand. If no command is
@@ -35,8 +30,15 @@ func RunWithDefaultFn(defaultFn func() int) int {
 		logging.SetVersion(config.AppVersion)
 		defer mgr.Close()
 	}
-	logging.Default().Info("boot", "%s v%s starting (%s/%s, provider=%s)",
-		brand.FullName, config.AppVersion, runtime.GOOS, runtime.GOARCH, cfg.ProviderKind())
+	logging.Default().Info(
+		"boot",
+		"%s v%s starting (%s/%s, provider=%s)",
+		brand.FullName,
+		config.AppVersion,
+		runtime.GOOS,
+		runtime.GOARCH,
+		cfg.ProviderKind(),
+	)
 
 	// Crash catcher: any panic in a command becomes a crash-*.log file
 	// instead of a silent exit.
@@ -47,7 +49,12 @@ func RunWithDefaultFn(defaultFn func() int) int {
 				buf := make([]byte, 16384)
 				n := runtime.Stack(buf, false)
 				path := logging.Default().Crash(r, buf[:n])
-				fmt.Fprintf(os.Stderr, "panic: %v\n(crash report: %s)\n", r, path)
+				fmt.Fprintf(
+					os.Stderr,
+					"panic: %v\n(crash report: %s)\n",
+					r,
+					path,
+				)
 				exitCode = 1
 			}
 		}()
@@ -60,6 +67,7 @@ func RunWithDefaultFn(defaultFn func() int) int {
 
 func dispatch(cfg *config.Config, defaultFn func() int) int {
 	args := os.Args[1:]
+
 	if len(args) == 0 {
 		if defaultFn != nil {
 			return defaultFn()
@@ -70,42 +78,57 @@ func dispatch(cfg *config.Config, defaultFn func() int) int {
 	switch args[0] {
 	case "ask", "a":
 		return Ask(cfg, args[1:])
+
 	case "serve", "s", "web", "ui":
 		return Serve(cfg, args[1:])
+
 	case "gui", "desktop":
 		if defaultFn != nil {
 			return defaultFn()
 		}
 		return 0
+
 	case "version", "-v", "--version":
 		fmt.Printf("%s v%s\n", config.AppName, config.AppVersion)
 		fmt.Printf("  %s\n", brand.Notice())
 		fmt.Printf("  go: %s\n", goVersion())
 		fmt.Printf("  os: %s/%s\n", osName(), osArch())
 		return 0
+
 	case "doctor":
 		return Doctor(cfg)
+
 	case "install":
 		return Install(cfg)
+
 	case "sysinfo":
 		return Sysinfo(cfg)
+
 	case "setup":
 		return Setup(cfg)
+
 	case "stress":
 		return Stress(cfg)
+
 	case "logs":
 		return Logs(cfg, args[1:])
+
 	case "update":
 		return Update(cfg, args[1:])
+
 	case "diagnostics":
 		return Diagnostics(cfg, args[1:])
+
 	case "license":
 		return License(cfg)
+
 	case "context", "ai-context":
 		return AICtx(cfg)
+
 	case "help", "-h", "--help":
 		printHelp()
 		return 0
+
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", args[0])
 		printHelp()
@@ -120,11 +143,15 @@ func configPath() string {
 }
 
 func printHelp() {
-	fmt.Println(brand.Trademark + " " + config.AppName + " v" + config.AppVersion)
+	fmt.Println(
+		brand.Trademark + " " + config.AppName + " v" + config.AppVersion,
+	)
 	fmt.Println(brand.Notice())
 	fmt.Println()
+
 	fmt.Println("Usage: sheytan-local-agent <command> [options]")
 	fmt.Println()
+
 	fmt.Println("Commands:")
 	fmt.Println("  (no args)    Launch the native Windows desktop GUI (default, Windows-only)")
 	fmt.Println("  ask          Headless agent turn:  ask \"do anything\"")
@@ -141,12 +168,14 @@ func printHelp() {
 	fmt.Println("  stress       Run the stress test suite")
 	fmt.Println("  version      Print version info")
 	fmt.Println("  help         Show this help")
+
 	fmt.Println()
 	fmt.Println("Options:")
 	fmt.Println("  --port N            Override HTTP port (default 8765)")
 	fmt.Println("  --host ADDR         Override bind host (default 127.0.0.1)")
 	fmt.Println("  --no-update-check   Skip the per-launch component diff")
 	fmt.Println("  --base-url URL      Override llama.cpp base URL")
+
 	fmt.Println()
 	fmt.Println("Environment:")
 	fmt.Println("  SHEYTAN_PROVIDER=local|remote        LLM backend selector")
@@ -156,6 +185,14 @@ func printHelp() {
 	fmt.Println("  SHEYTAN_BROWSER_PATH=...             Chrome/Edge executable override")
 }
 
-func goVersion() string { return "go1.27.0" }
-func osName() string    { return runtime.GOOS }
-func osArch() string    { return runtime.GOARCH }
+func goVersion() string {
+	return runtime.Version()
+}
+
+func osName() string {
+	return runtime.GOOS
+}
+
+func osArch() string {
+	return runtime.GOARCH
+}
