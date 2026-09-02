@@ -1,0 +1,29 @@
+version: "3"
+
+vars:
+  APP_NAME: "SHEYTAN-Local-Agent"
+  BIN_DIR: "bin"
+  OUTPUT: "{{.BIN_DIR}}/{{.APP_NAME}}"
+
+tasks:
+  build:
+    desc: Build the Linux native executable
+    deps:
+      - common:build:frontend
+    cmds:
+      - mkdir -p "{{.BIN_DIR}}"
+      - go build -buildvcs=false -o "{{.OUTPUT}}" .
+
+  package:
+    desc: Build the Linux production executable
+    deps:
+      - build
+    cmds:
+      - echo Linux package created at "{{.OUTPUT}}"
+
+  run:
+    desc: Run the Linux native executable
+    deps:
+      - build
+    cmds:
+      - '"{{.OUTPUT}}"'
