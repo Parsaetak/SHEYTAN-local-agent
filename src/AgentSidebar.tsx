@@ -49,90 +49,95 @@ const SessionItem = memo(
 	},
 );
 
-function AgentSidebar() {
-	const sessions = useRuntimeStore(
-		(state) => state.sessions,
-	);
+const AgentSidebar = memo(
+	function AgentSidebar() {
+		const sessions =
+			useRuntimeStore(
+				(state) => state.sessions,
+			);
 
-	const activeSessionId =
-		useRuntimeStore(
-			(state) =>
-				state.activeSessionId,
-		);
+		const activeSessionId =
+			useRuntimeStore(
+				(state) =>
+					state.activeSessionId,
+			);
 
-	const loading = useRuntimeStore(
-		(state) => state.loading,
-	);
+		const loading =
+			useRuntimeStore(
+				(state) => state.loading,
+			);
 
-	const selectSession =
-		useRuntimeStore(
-			(state) => state.selectSession,
-		);
+		const selectSession =
+			useRuntimeStore(
+				(state) => state.selectSession,
+			);
 
-	function requestNewSession() {
-		window.dispatchEvent(
-			new CustomEvent(
-				"sheytan:new-session",
-			),
-		);
-	}
+		function requestNewSession() {
+			window.dispatchEvent(
+				new CustomEvent(
+					"sheytan:new-session",
+				),
+			);
+		}
 
-	return (
-		<>
-			<div className="sidebar-heading sidebar-heading-secondary">
-				<div>
-					<span className="eyebrow">
-						AGENT
-					</span>
+		return (
+			<>
+				<div className="sidebar-heading sidebar-heading-secondary">
+					<div>
+						<span className="eyebrow">
+							AGENT
+						</span>
 
-					<strong>
-						Sessions
-					</strong>
+						<strong>
+							Sessions
+						</strong>
+					</div>
+
+					<button
+						type="button"
+						className="icon-button"
+						onClick={
+							requestNewSession
+						}
+						title="New session"
+						aria-label="New session"
+					>
+						+
+					</button>
 				</div>
 
-				<button
-					type="button"
-					className="icon-button"
-					onClick={
-						requestNewSession
-					}
-					title="New session"
-					aria-label="New session"
-				>
-					+
-				</button>
-			</div>
-
-			<div className="session-list">
-				{sessions.length === 0 &&
-				!loading ? (
-					<div className="empty-sidebar">
-						No sessions yet.
-					</div>
-				) : (
-					sessions.map(
-						(session) => (
-							<SessionItem
-								key={
-									session.id
-								}
-								session={
-									session
-								}
-								active={
-									session.id ===
-									activeSessionId
-								}
-								onSelect={
-									selectSession
-								}
-							/>
-						),
-					)
-				)}
-			</div>
-		</>
-	);
-}
+				<div className="session-list">
+					{sessions.length ===
+						0 &&
+					!loading ? (
+						<div className="empty-sidebar">
+							No sessions yet.
+						</div>
+					) : (
+						sessions.map(
+							(session) => (
+								<SessionItem
+									key={
+										session.id
+									}
+									session={
+										session
+									}
+									active={
+										session.id ===
+										activeSessionId
+									}
+									onSelect={
+										selectSession
+									}
+								/>
+							),
+						)
+					)}
+				</div>
+			</>
+		);
+	},
+);
 
 export default AgentSidebar;
