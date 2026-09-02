@@ -49,9 +49,11 @@ type RunResult struct {
 	ToolsUsed []string // distinct tools executed, in first-use order
 	Elided    int      // older messages compacted out of the prompt
 	Recalled  int      // past-exchange digests injected from recall
+
 	// Perf is the last streaming call's speed HUD line (v1.0.4), e.g.
 	// "41.2 tok/s · first token 0.8s". Empty when telemetry is off.
 	Perf string
+
 	// ContextUsage (v1.0.7): the PEAK prompt pressure observed during the
 	// turn (largest message list actually sent to the engine), measured
 	// against the history token budget. Drives the context meter and the
@@ -147,8 +149,17 @@ func (o *Orchestrator) currentSessionID() string {
 
 // Run executes one agent turn and returns just the final text (compat
 // wrapper around RunDetailed).
-func (o *Orchestrator) Run(ctx context.Context, messages []llm.Message, onActivity func(Activity)) (string, error) {
-	res, err := o.RunDetailed(ctx, messages, onActivity)
+func (o *Orchestrator) Run(
+	ctx context.Context,
+	messages []llm.Message,
+	onActivity func(Activity),
+) (string, error) {
+	res, err := o.RunDetailed(
+		ctx,
+		messages,
+		onActivity,
+	)
+
 	return res.Text, err
 }
 
@@ -159,7 +170,11 @@ func (o *Orchestrator) Run(ctx context.Context, messages []llm.Message, onActivi
 // Cancellation is controlled entirely by the caller-provided context. The API
 // layer creates one context per active session, so canceling one session does
 // not affect any other session.
-func (o *Orchestrator) RunDetailed(ctx context.Context, messages []llm.Message, onActivity func(Activity)) (RunResult, error) {
+func (o *Orchestrator) RunDetailed(
+	ctx context.Context,
+	messages []llm.Message,
+	onActivity func(Activity),
+) (RunResult, error) {
 	o.mu.Lock()
 	recaller := o.recaller
 	o.mu.Unlock()
@@ -171,19 +186,48 @@ func (o *Orchestrator) RunDetailed(ctx context.Context, messages []llm.Message, 
 	// ANY plugged-in model knows where it runs, what tools exist and how to
 	// call them. Skipped when the caller already included it.
 	if !hasAIContext(messages) {
-		ctxContent := aicontext.SystemMessage(o.cfg)
+		registeredToolNames := make(
+			[]string,
+			0,
+			len(o.tools),
+		)
+
+		for name := range o.tools {
+			if o.cfg.ToolEnabled(name) {
+				registeredToolNames = append(
+					registeredToolNames,
+					name,
+				)
+			}
+		}
+
+		ctxContent := aicontext.SystemMessageWithTools(
+			o.cfg,
+			registeredToolNames,
+		)
+
 		// When offline, fold the environment note into the briefing so the
 		// LLM knows which tools cannot work and wastes no iterations on
 		// web calls.
 		if note := netcheck.Note(); note != "" {
 			ctxContent += "\n\n" + note
+
 			onActivity(Activity{
 				Type:      "thinking",
 				Caption:   "Offline mode — web tools disabled, local tools fully available",
 				Timestamp: time.Now(),
 			})
 		}
-		messages = append([]llm.Message{{Role: "system", Content: ctxContent}}, messages...)
+
+		messages = append(
+			[]llm.Message{
+				{
+					Role:    "system",
+					Content: ctxContent,
+				},
+			},
+			messages...,
+		)
 	}
 
 	// v1.0.2 thinking mode: append the <think> nudge to the AI-context
@@ -200,16 +244,32 @@ func (o *Orchestrator) RunDetailed(ctx context.Context, messages []llm.Message, 
 	// turn.
 	if recaller != nil && o.cfg.RecallEnabled {
 		if q := lastUserQuery(messages); q != "" {
-			block := recaller.RelevantBlock(q, o.cfg.EffectiveRecallTopK(), recallBlockTokenBudget)
+			block := recaller.RelevantBlock(
+				q,
+				o.cfg.EffectiveRecallTopK(),
+				recallBlockTokenBudget,
+			)
+
 			if block != "" {
-				messages = insertBeforeLastUser(messages, llm.Message{
-					Role:    "system",
-					Content: block,
-				})
-				result.Recalled = strings.Count(block, "user asked:")
+				messages = insertBeforeLastUser(
+					messages,
+					llm.Message{
+						Role:    "system",
+						Content: block,
+					},
+				)
+
+				result.Recalled = strings.Count(
+					block,
+					"user asked:",
+				)
+
 				onActivity(Activity{
-					Type:      "thinking",
-					Caption:   fmt.Sprintf("Recalled %d relevant past exchange(s) from memory", result.Recalled),
+					Type: "thinking",
+					Caption: fmt.Sprintf(
+						"Recalled %d relevant past exchange(s) from memory",
+						result.Recalled,
+					),
 					Timestamp: time.Now(),
 				})
 			}
@@ -219,41 +279,73 @@ func (o *Orchestrator) RunDetailed(ctx context.Context, messages []llm.Message, 
 	// v1.0.2 history window: compact older messages so the prompt stays
 	// inside a bounded share of num_ctx (leading system messages survive).
 	prefix, body := splitSystemPrefix(messages)
-	windowed, elided := chunking.WindowMessages(body, o.cfg.HistoryWindowTokens())
+
+	windowed, elided := chunking.WindowMessages(
+		body,
+		o.cfg.HistoryWindowTokens(),
+	)
+
 	if elided > 0 {
 		result.Elided = elided
-		logging.Default().Info("agent", "history window: %d messages compacted", elided)
+
+		logging.Default().Info(
+			"agent",
+			"history window: %d messages compacted",
+			elided,
+		)
+
 		onActivity(Activity{
-			Type:      "thinking",
-			Caption:   fmt.Sprintf("Context window: %d older messages compacted — key facts stay recallable", elided),
+			Type: "thinking",
+			Caption: fmt.Sprintf(
+				"Context window: %d older messages compacted — key facts stay recallable",
+				elided,
+			),
 			Timestamp: time.Now(),
 		})
 	}
-	messages = append(append([]llm.Message{}, prefix...), windowed...)
+
+	messages = append(
+		append([]llm.Message{}, prefix...),
+		windowed...,
+	)
 
 	// Build tool specs in DETERMINISTIC (sorted) order, filtered to the
 	// user's enabled set. Map iteration is random per run, which reshuffled
 	// the tool list in the prompt and invalidated llama.cpp's prompt/KV
 	// prefix cache between turns; a stable order lets the cache survive.
 	names := make([]string, 0, len(o.tools))
+
 	for name := range o.tools {
 		if o.cfg.ToolEnabled(name) {
 			names = append(names, name)
 		}
 	}
+
 	sort.Strings(names)
-	toolSpecs := make([]llm.ToolSpec, 0, len(names))
+
+	toolSpecs := make(
+		[]llm.ToolSpec,
+		0,
+		len(names),
+	)
+
 	for _, name := range names {
 		t := o.tools[name]
+
 		spec := llm.ToolSpec{}
 		spec.Type = "function"
 		spec.Function.Name = t.Name()
 		spec.Function.Description = t.Description()
 		spec.Function.Parameters = t.Parameters()
-		toolSpecs = append(toolSpecs, spec)
+
+		toolSpecs = append(
+			toolSpecs,
+			spec,
+		)
 	}
 
 	maxIter := o.cfg.MaxIterations
+
 	if maxIter < 1 {
 		maxIter = 25
 	}
@@ -263,7 +355,10 @@ func (o *Orchestrator) RunDetailed(ctx context.Context, messages []llm.Message, 
 	// v1.0.7: peak prompt pressure across the turn's iterations — the
 	// number the context meter shows after the reply lands.
 	budgetTokens := o.cfg.HistoryWindowTokens()
-	peakUsage := continuum.EstimateUsage(messages, budgetTokens)
+	peakUsage := continuum.EstimateUsage(
+		messages,
+		budgetTokens,
+	)
 
 	for iter := 0; iter < maxIter; iter++ {
 		if err := ctx.Err(); err != nil {
@@ -272,19 +367,32 @@ func (o *Orchestrator) RunDetailed(ctx context.Context, messages []llm.Message, 
 				Caption:   "Aborted by user",
 				Timestamp: time.Now(),
 			})
+
 			return result, nil
 		}
 
 		onActivity(Activity{
-			Type:      "thinking",
-			Caption:   fmt.Sprintf("Iteration %d: planning next step...", iter+1),
+			Type: "thinking",
+			Caption: fmt.Sprintf(
+				"Iteration %d: planning next step...",
+				iter+1,
+			),
 			Timestamp: time.Now(),
 		})
 
-		req := o.client.BuildChatRequest(o.cfg.EffectiveModel(), messages, toolSpecs)
-		if u := continuum.EstimateUsage(messages, budgetTokens); u.EstTokens > peakUsage.EstTokens {
+		req := o.client.BuildChatRequest(
+			o.cfg.EffectiveModel(),
+			messages,
+			toolSpecs,
+		)
+
+		if u := continuum.EstimateUsage(
+			messages,
+			budgetTokens,
+		); u.EstTokens > peakUsage.EstTokens {
 			peakUsage = u
 		}
+
 		var raw strings.Builder    // raw content (may still contain <think> tags)
 		var native strings.Builder // native reasoning_content deltas
 		var lastToolCalls []llm.ToolCall
@@ -295,20 +403,30 @@ func (o *Orchestrator) RunDetailed(ctx context.Context, messages []llm.Message, 
 		// content at emit time (re-parsing the accumulated raw text is
 		// cheap next to the O(n²) it replaced).
 		var lastEmit time.Time
+
 		// v1.0.9: frame-targeted emit cadence (SmoothStream → ~8ms).
 		emitEvery := responseEmitInterval
+
 		if o.cfg.SmoothStream {
 			emitEvery = o.cfg.EffectiveStreamEmitInterval()
 		}
+
 		emitProgress := func(force bool) {
 			reasoning, content := SplitThink(raw.String())
-			if reasoning == "" && content == "" && native.Len() == 0 {
+
+			if reasoning == "" &&
+				content == "" &&
+				native.Len() == 0 {
 				return
 			}
-			if !force && time.Since(lastEmit) < emitEvery {
+
+			if !force &&
+				time.Since(lastEmit) < emitEvery {
 				return
 			}
+
 			lastEmit = time.Now()
+
 			if r := reasoning + native.String(); r != "" {
 				onActivity(Activity{
 					Type:      "reasoning",
@@ -316,6 +434,7 @@ func (o *Orchestrator) RunDetailed(ctx context.Context, messages []llm.Message, 
 					Timestamp: time.Now(),
 				})
 			}
+
 			if content != "" {
 				onActivity(Activity{
 					Type:      "response",
@@ -325,20 +444,28 @@ func (o *Orchestrator) RunDetailed(ctx context.Context, messages []llm.Message, 
 			}
 		}
 
-		perf, err := o.client.StreamChatDetailed(ctx, req, func(ev llm.StreamEvent) error {
-			if ev.Content != "" {
-				raw.WriteString(ev.Content)
-				emitProgress(false)
-			}
-			if ev.Reasoning != "" {
-				native.WriteString(ev.Reasoning)
-				emitProgress(false)
-			}
-			if len(ev.ToolCalls) > 0 {
-				lastToolCalls = ev.ToolCalls
-			}
-			return nil
-		})
+		perf, err := o.client.StreamChatDetailed(
+			ctx,
+			req,
+			func(ev llm.StreamEvent) error {
+				if ev.Content != "" {
+					raw.WriteString(ev.Content)
+					emitProgress(false)
+				}
+
+				if ev.Reasoning != "" {
+					native.WriteString(ev.Reasoning)
+					emitProgress(false)
+				}
+
+				if len(ev.ToolCalls) > 0 {
+					lastToolCalls = ev.ToolCalls
+				}
+
+				return nil
+			},
+		)
+
 		if err != nil {
 			if ctx.Err() != nil {
 				onActivity(Activity{
@@ -346,14 +473,16 @@ func (o *Orchestrator) RunDetailed(ctx context.Context, messages []llm.Message, 
 					Caption:   "Aborted by user",
 					Timestamp: time.Now(),
 				})
+
 				return result, nil
 			}
 
 			onActivity(Activity{
-				Type:      "error",
-				Caption:   "LLM error: " + err.Error(),
+				Type: "error",
+				Caption: "LLM error: " + err.Error(),
 				Timestamp: time.Now(),
 			})
+
 			return result, err
 		}
 
@@ -362,12 +491,16 @@ func (o *Orchestrator) RunDetailed(ctx context.Context, messages []llm.Message, 
 		if hud := perf.String(); hud != "" {
 			result.Perf = hud
 		}
+
 		emitProgress(true) // final flush — consumers always see the full text
 
 		// Split the completed stream into reasoning + clean content.
 		reasoning, content := SplitThink(raw.String())
+
 		if native.Len() > 0 {
-			reasoning = strings.TrimSpace(native.String() + "\n" + reasoning)
+			reasoning = strings.TrimSpace(
+				native.String() + "\n" + reasoning,
+			)
 		}
 
 		// No tool calls → done
@@ -376,11 +509,13 @@ func (o *Orchestrator) RunDetailed(ctx context.Context, messages []llm.Message, 
 			result.Reasoning = reasoning
 			result.ToolsUsed = toolList(toolsUsed)
 			result.ContextUsage = peakUsage
+
 			onActivity(Activity{
 				Type:      "done",
 				Caption:   "Completed",
 				Timestamp: time.Now(),
 			})
+
 			return result, nil
 		}
 
@@ -393,7 +528,11 @@ func (o *Orchestrator) RunDetailed(ctx context.Context, messages []llm.Message, 
 			Reasoning: reasoning,
 			ToolCalls: lastToolCalls,
 		}
-		messages = append(messages, assistantMsg)
+
+		messages = append(
+			messages,
+			assistantMsg,
+		)
 
 		// Execute every tool call sequentially (parallel execution could be added)
 		for _, tc := range lastToolCalls {
@@ -403,10 +542,19 @@ func (o *Orchestrator) RunDetailed(ctx context.Context, messages []llm.Message, 
 					Caption:   "Aborted by user",
 					Timestamp: time.Now(),
 				})
+
 				return result, nil
 			}
 
-			caption := fmt.Sprintf("Calling tool: %s(%s)", tc.Function.Name, truncate(tc.Function.Arguments, 80))
+			caption := fmt.Sprintf(
+				"Calling tool: %s(%s)",
+				tc.Function.Name,
+				truncate(
+					tc.Function.Arguments,
+					80,
+				),
+			)
+
 			onActivity(Activity{
 				Type:      "tool_start",
 				Caption:   caption,
@@ -415,44 +563,77 @@ func (o *Orchestrator) RunDetailed(ctx context.Context, messages []llm.Message, 
 			})
 
 			tool, ok := o.tools[tc.Function.Name]
+
 			var result2 string
-			if ok && !o.cfg.ToolEnabled(tc.Function.Name) {
+
+			if ok &&
+				!o.cfg.ToolEnabled(
+					tc.Function.Name,
+				) {
 				// v1.0.2 tool selection: the model reached for a tool the
 				// user switched off. Tell it plainly so it re-plans instead
 				// of retrying.
 				ok = false
+
 				result2 = fmt.Sprintf(
 					"Error: tool %q is disabled by the user. Enabled tools: %s. Do not call disabled tools — adapt your plan.",
 					tc.Function.Name,
-					strings.Join(names, ", "),
+					strings.Join(
+						names,
+						", ",
+					),
 				)
 			}
-			if !ok && result2 == "" {
+
+			if !ok &&
+				result2 == "" {
 				result2 = fmt.Sprintf(
 					"Error: unknown tool %q. Available: %s",
 					tc.Function.Name,
-					strings.Join(names, ", "),
+					strings.Join(
+						names,
+						", ",
+					),
 				)
 			}
 
 			if result2 != "" {
 				onActivity(Activity{
-					Type:      "tool_end",
-					Caption:   fmt.Sprintf("Tool %s → %s", tc.Function.Name, truncate(result2, 80)),
+					Type: "tool_end",
+					Caption: fmt.Sprintf(
+						"Tool %s → %s",
+						tc.Function.Name,
+						truncate(
+							result2,
+							80,
+						),
+					),
 					Detail:    result2,
 					Timestamp: time.Now(),
 				})
-				messages = append(messages, llm.Message{
-					Role:       "tool",
-					Content:    result2,
-					ToolCallID: tc.ID,
-					Name:       tc.Function.Name,
-				})
+
+				messages = append(
+					messages,
+					llm.Message{
+						Role:       "tool",
+						Content:    result2,
+						ToolCallID: tc.ID,
+						Name:       tc.Function.Name,
+					},
+				)
+
 				continue
 			}
 
 			start := time.Now()
-			result2, err := tool.Run(ctx, json.RawMessage(tc.Function.Arguments))
+
+			result2, err := tool.Run(
+				ctx,
+				json.RawMessage(
+					tc.Function.Arguments,
+				),
+			)
+
 			dur := time.Since(start)
 
 			// v1.0.6 VISION: tools that produce images (screenshot,
@@ -461,7 +642,9 @@ func (o *Orchestrator) RunDetailed(ctx context.Context, messages []llm.Message, 
 			// path rides the tool message's Images field and the client
 			// converts it into an image_url part the vision encoder can
 			// actually see.
-			result2, toolImages := ExtractImageMarkers(result2)
+			result2, toolImages := ExtractImageMarkers(
+				result2,
+			)
 
 			toolsUsed[tc.Function.Name] = true
 
@@ -474,10 +657,12 @@ func (o *Orchestrator) RunDetailed(ctx context.Context, messages []llm.Message, 
 				DurationMs: dur.Milliseconds(),
 				Session:    o.currentSessionID(),
 			}
+
 			if err != nil {
 				rec.Error = err.Error()
 				rec.Result = ""
 			}
+
 			logging.Default().ToolCall(rec)
 
 			if err != nil {
@@ -488,34 +673,56 @@ func (o *Orchestrator) RunDetailed(ctx context.Context, messages []llm.Message, 
 					result2 = fmt.Sprintf(
 						"Error: %v\n\nTool output:\n%s",
 						err,
-						truncate(result2, 4000),
+						truncate(
+							result2,
+							4000,
+						),
 					)
 				} else {
-					result2 = fmt.Sprintf("Error: %v", err)
+					result2 = fmt.Sprintf(
+						"Error: %v",
+						err,
+					)
 				}
 
 				onActivity(Activity{
-					Type:      "tool_end",
-					Caption:   fmt.Sprintf("Tool %s FAILED (%v): %s", tc.Function.Name, dur.Round(time.Millisecond), err.Error()),
+					Type: "tool_end",
+					Caption: fmt.Sprintf(
+						"Tool %s FAILED (%v): %s",
+						tc.Function.Name,
+						dur.Round(time.Millisecond),
+						err.Error(),
+					),
 					Detail:    result2,
 					Timestamp: time.Now(),
 				})
 			} else {
 				onActivity(Activity{
-					Type:      "tool_end",
-					Caption:   fmt.Sprintf("Tool %s done (%v): %s", tc.Function.Name, dur.Round(time.Millisecond), truncate(result2, 80)),
+					Type: "tool_end",
+					Caption: fmt.Sprintf(
+						"Tool %s done (%v): %s",
+						tc.Function.Name,
+						dur.Round(time.Millisecond),
+						truncate(
+							result2,
+							80,
+						),
+					),
 					Detail:    result2,
 					Timestamp: time.Now(),
 				})
 			}
 
-			messages = append(messages, llm.Message{
-				Role:       "tool",
-				Content:    result2,
-				ToolCallID: tc.ID,
-				Name:       tc.Function.Name,
-				Images:     toolImages,
-			})
+			messages = append(
+				messages,
+				llm.Message{
+					Role:       "tool",
+					Content:    result2,
+					ToolCallID: tc.ID,
+					Name:       tc.Function.Name,
+					Images:     toolImages,
+				},
+			)
 
 			if ctx.Err() != nil {
 				onActivity(Activity{
@@ -523,6 +730,7 @@ func (o *Orchestrator) RunDetailed(ctx context.Context, messages []llm.Message, 
 					Caption:   "Aborted by user",
 					Timestamp: time.Now(),
 				})
+
 				return result, nil
 			}
 		}
@@ -530,27 +738,36 @@ func (o *Orchestrator) RunDetailed(ctx context.Context, messages []llm.Message, 
 
 	result.ToolsUsed = toolList(toolsUsed)
 	result.ContextUsage = peakUsage
+
 	onActivity(Activity{
 		Type:      "done",
 		Caption:   "Max iterations reached",
 		Timestamp: time.Now(),
 	})
-	return result, fmt.Errorf("max iterations (%d) reached", maxIter)
+
+	return result, fmt.Errorf(
+		"max iterations (%d) reached",
+		maxIter,
+	)
 }
 
 // imageMarkerPrefix/ExtractImageMarkers implement the v1.0.6 vision bridge
 // between tools and the multimodal client: a tool tags its output with
-// [[IMG:<absolute path>]] and the orchestrator moves those paths onto the
-// tool message's Images field (the client turns them into image_url parts).
-// The marker text itself never reaches the model.
+// [[IMG:path]] and the orchestrator moves those paths onto the tool message's
+// Images field (the client turns them into image_url parts).
 const imageMarkerPrefix = "[[IMG:"
 
 // ExtractImageMarkers pulls every [[IMG:path]] marker out of a tool result,
 // returning the cleaned text (markers stripped, runs of blank lines
 // collapsed) and the image paths in order. Paths are taken verbatim — tools
 // are trusted to emit absolute paths they just wrote.
-func ExtractImageMarkers(s string) (string, []string) {
-	if !strings.Contains(s, imageMarkerPrefix) {
+func ExtractImageMarkers(
+	s string,
+) (string, []string) {
+	if !strings.Contains(
+		s,
+		imageMarkerPrefix,
+	) {
 		return s, nil
 	}
 
@@ -558,32 +775,56 @@ func ExtractImageMarkers(s string) (string, []string) {
 	var b strings.Builder
 
 	for {
-		i := strings.Index(s, imageMarkerPrefix)
+		i := strings.Index(
+			s,
+			imageMarkerPrefix,
+		)
+
 		if i < 0 {
 			b.WriteString(s)
 			break
 		}
 
 		rest := s[i+len(imageMarkerPrefix):]
-		end := strings.Index(rest, "]]")
+
+		end := strings.Index(
+			rest,
+			"]]",
+		)
+
 		if end < 0 {
 			b.WriteString(s)
 			break
 		}
 
 		b.WriteString(s[:i])
-		p := strings.TrimSpace(rest[:end])
+
+		p := strings.TrimSpace(
+			rest[:end],
+		)
+
 		if p != "" {
-			paths = append(paths, p)
+			paths = append(
+				paths,
+				p,
+			)
 		}
+
 		s = rest[end+2:]
 	}
 
 	out := b.String()
 
 	// collapse the blank runs the stripped markers leave behind
-	for strings.Contains(out, "\n\n\n") {
-		out = strings.ReplaceAll(out, "\n\n\n", "\n\n")
+	for strings.Contains(
+		out,
+		"\n\n\n",
+	) {
+		out = strings.ReplaceAll(
+			out,
+			"\n\n\n",
+			"\n\n",
+		)
 	}
 
 	return strings.TrimSpace(out), paths
@@ -597,12 +838,28 @@ func ExtractImageMarkers(s string) (string, []string) {
 // Text without tags returns unchanged — so models that never think are
 // unaffected, and models that spontaneously emit <think> (Qwen3-style) get
 // their trace extracted even when thinking mode is off.
-func SplitThink(raw string) (reasoning, content string) {
-	if !strings.Contains(raw, "<think>") {
+func SplitThink(
+	raw string,
+) (reasoning, content string) {
+	if !strings.Contains(
+		raw,
+		"<think>",
+	) {
 		// No opening tag — but a stray closer may still be noise.
-		if strings.Contains(raw, "</think>") {
-			return "", strings.TrimSpace(strings.ReplaceAll(raw, "</think>", ""))
+		if strings.Contains(
+			raw,
+			"</think>",
+		) {
+			return "",
+				strings.TrimSpace(
+					strings.ReplaceAll(
+						raw,
+						"</think>",
+						"",
+					),
+				)
 		}
+
 		return "", raw
 	}
 
@@ -611,41 +868,88 @@ func SplitThink(raw string) (reasoning, content string) {
 	rest := raw
 
 	for {
-		open := strings.Index(rest, "<think>")
+		open := strings.Index(
+			rest,
+			"<think>",
+		)
+
 		if open < 0 {
 			body.WriteString(rest)
 			break
 		}
 
-		body.WriteString(rest[:open])
-		rest = rest[open+len("<think>"):]
+		body.WriteString(
+			rest[:open],
+		)
 
-		close := strings.Index(rest, "</think>")
+		rest = rest[
+			open+len("<think>"):
+		]
+
+		close := strings.Index(
+			rest,
+			"</think>",
+		)
+
 		if close < 0 {
 			// unclosed: the rest is reasoning (stream interrupted mid-think)
-			think.WriteString(strings.TrimSpace(rest))
+			think.WriteString(
+				strings.TrimSpace(rest),
+			)
 			break
 		}
 
-		think.WriteString(strings.TrimSpace(rest[:close]))
+		think.WriteString(
+			strings.TrimSpace(
+				rest[:close],
+			),
+		)
+
 		think.WriteString("\n")
-		rest = rest[close+len("</think>"):]
+
+		rest = rest[
+			close+len("</think>"):
+		]
 	}
 
-	return strings.TrimSpace(think.String()), strings.TrimSpace(body.String())
+	return strings.TrimSpace(
+			think.String(),
+		),
+		strings.TrimSpace(
+			body.String(),
+		)
 }
 
 // ensureThinkingNudge appends the thinking instructions to the AI-context
 // system message (idempotent).
-func ensureThinkingNudge(messages []llm.Message) []llm.Message {
+func ensureThinkingNudge(
+	messages []llm.Message,
+) []llm.Message {
 	for i := range messages {
-		if messages[i].Role == "system" && strings.Contains(messages[i].Content, aicontext.HeaderSentinel) {
-			if !strings.Contains(messages[i].Content, thinkingNudgeSentinel) {
-				cp := make([]llm.Message, len(messages))
-				copy(cp, messages)
+		if messages[i].Role == "system" &&
+			strings.Contains(
+				messages[i].Content,
+				aicontext.HeaderSentinel,
+			) {
+			if !strings.Contains(
+				messages[i].Content,
+				thinkingNudgeSentinel,
+			) {
+				cp := make(
+					[]llm.Message,
+					len(messages),
+				)
+
+				copy(
+					cp,
+					messages,
+				)
+
 				cp[i].Content += thinkingNudge
+
 				return cp
 			}
+
 			return messages
 		}
 
@@ -660,19 +964,30 @@ func ensureThinkingNudge(messages []llm.Message) []llm.Message {
 
 // lastUserQuery returns the content of the final user message (the incoming
 // question), or "".
-func lastUserQuery(messages []llm.Message) string {
+func lastUserQuery(
+	messages []llm.Message,
+) string {
 	for i := len(messages) - 1; i >= 0; i-- {
 		if messages[i].Role == "user" {
 			return messages[i].Content
 		}
 	}
+
 	return ""
 }
 
 // insertBeforeLastUser splices msg into the list immediately before the
 // final user message (cache-friendly recall position).
-func insertBeforeLastUser(messages []llm.Message, msg llm.Message) []llm.Message {
-	out := make([]llm.Message, 0, len(messages)+1)
+func insertBeforeLastUser(
+	messages []llm.Message,
+	msg llm.Message,
+) []llm.Message {
+	out := make(
+		[]llm.Message,
+		0,
+		len(messages)+1,
+	)
+
 	inserted := false
 	lastUser := -1
 
@@ -685,14 +1000,25 @@ func insertBeforeLastUser(messages []llm.Message, msg llm.Message) []llm.Message
 
 	for i := range messages {
 		if i == lastUser {
-			out = append(out, msg)
+			out = append(
+				out,
+				msg,
+			)
+
 			inserted = true
 		}
-		out = append(out, messages[i])
+
+		out = append(
+			out,
+			messages[i],
+		)
 	}
 
 	if !inserted {
-		out = append(out, msg)
+		out = append(
+			out,
+			msg,
+		)
 	}
 
 	return out
@@ -701,33 +1027,56 @@ func insertBeforeLastUser(messages []llm.Message, msg llm.Message) []llm.Message
 // splitSystemPrefix separates leading system messages from the conversation
 // body. Windowing only compacts the body — the AI-context briefing always
 // travels with the prompt.
-func splitSystemPrefix(messages []llm.Message) (prefix, body []llm.Message) {
+func splitSystemPrefix(
+	messages []llm.Message,
+) (prefix, body []llm.Message) {
 	i := 0
-	for i < len(messages) && messages[i].Role == "system" {
+
+	for i < len(messages) &&
+		messages[i].Role == "system" {
 		i++
 	}
-	return messages[:i], messages[i:]
+
+	return messages[:i],
+		messages[i:]
 }
 
-func toolList(used map[string]bool) []string {
-	out := make([]string, 0, len(used))
+func toolList(
+	used map[string]bool,
+) []string {
+	out := make(
+		[]string,
+		0,
+		len(used),
+	)
+
 	for name := range used {
-		out = append(out, name)
+		out = append(
+			out,
+			name,
+		)
 	}
+
 	sort.Strings(out)
+
 	return out
 }
 
 // hasAIContext reports whether the message list already opens with the
 // SHEYTAN AI-context briefing (guard against double-prepending when a
 // caller pre-assembles it).
-func hasAIContext(messages []llm.Message) bool {
+func hasAIContext(
+	messages []llm.Message,
+) bool {
 	for _, m := range messages {
 		if m.Role != "system" {
 			return false // only system messages precede the conversation
 		}
 
-		if strings.Contains(m.Content, aicontext.HeaderSentinel) {
+		if strings.Contains(
+			m.Content,
+			aicontext.HeaderSentinel,
+		) {
 			return true
 		}
 	}
@@ -735,10 +1084,19 @@ func hasAIContext(messages []llm.Message) bool {
 	return false
 }
 
-func truncate(s string, n int) string {
-	s = strings.ReplaceAll(s, "\n", " ")
+func truncate(
+	s string,
+	n int,
+) string {
+	s = strings.ReplaceAll(
+		s,
+		"\n",
+		" ",
+	)
+
 	if len(s) <= n {
 		return s
 	}
+
 	return s[:n] + "..."
 }
