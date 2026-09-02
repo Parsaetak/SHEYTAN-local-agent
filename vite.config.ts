@@ -1,7 +1,7 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
 	plugins: [react()],
 	server: {
 		host: "127.0.0.1",
@@ -26,14 +26,17 @@ export default defineConfig({
 	},
 	build: {
 		target: "es2022",
-		sourcemap: true,
+		sourcemap: mode !== "production",
 		manifest: true,
 		rollupOptions: {
 			output: {
-				entryFileNames: "assets/[name]-[hash].js",
-				chunkFileNames: "assets/[name]-[hash].js",
-				assetFileNames: "assets/[name]-[hash][extname]",
+				entryFileNames:
+					"assets/[name]-[hash].js",
+				chunkFileNames:
+					"assets/[name]-[hash].js",
+				assetFileNames:
+					"assets/[name]-[hash][extname]",
 			},
 		},
 	},
-});
+}));
