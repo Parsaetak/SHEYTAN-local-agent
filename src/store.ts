@@ -3,9 +3,14 @@ import { create } from "zustand";
 import {
 	activityWebSocketURL,
 	api,
+	type ActivityEvent as APIActivityEvent,
 	type AppState,
+	type LabListResponse,
+	type LabTaskSessionSnapshot,
 	type ModelsResponse,
 	type Preset,
+	type ResearchConfig,
+	type ResearchResponse,
 	type Session,
 	type SysInfo,
 	type ToolInfo,
@@ -42,10 +47,23 @@ type RuntimeState = {
 	activity: ActivityEvent[];
 	running: boolean;
 
+	lab: LabListResponse | null;
+	labLoading: boolean;
+	labError: string | null;
+	activeLabTaskId: string | null;
+	activeLabTask: LabTaskSessionSnapshot | null;
+
+	researchConfig: ResearchConfig | null;
+	research: ResearchResponse | null;
+	researchLoading: boolean;
+	researchError: string | null;
+
 	loadInitialState: () => Promise<void>;
 	refreshModels: () => Promise<void>;
 	refreshSessions: () => Promise<void>;
 	refreshTools: () => Promise<void>;
+	refreshLab: () => Promise<void>;
+	loadLabTask: (id: string) => Promise<void>;
 
 	createSession: () => Promise<Session>;
 	selectSession: (id: string | null) => void;
@@ -53,6 +71,18 @@ type RuntimeState = {
 
 	run: (message: string) => Promise<void>;
 	abort: () => Promise<void>;
+
+	runLabAction: (
+		payload: Record<string, unknown>,
+	) => Promise<unknown>;
+
+	loadResearchConfig: () => Promise<void>;
+	searchResearch: (payload: {
+		query: string;
+		backend?: string;
+		maxResults?: number;
+		timeoutSec?: number;
+	}) => Promise<ResearchResponse>;
 
 	connectActivity: () => void;
 	disconnectActivity: () => void;
@@ -65,6 +95,7 @@ let activitySessionId: string | null = null;
 
 function createActivityID(): string {
 	activitySequence += 1;
+
 	return `${Date.now()}-${activitySequence}`;
 }
 
@@ -82,9 +113,7 @@ function normalizeActivity(
 		if (typeof rawTimestamp === "number") {
 			timestamp = rawTimestamp;
 		} else if (typeof rawTimestamp === "string") {
-			const parsed = Date.parse(
-				rawTimestamp,
-			);
+			const parsed = Date.parse(rawTimestamp);
 
 			if (!Number.isNaN(parsed)) {
 				timestamp = parsed;
@@ -129,6 +158,17 @@ export const useRuntimeStore =
 
 		activity: [],
 		running: false,
+
+		lab: null,
+		labLoading: false,
+		labError: null,
+		activeLabTaskId: null,
+		activeLabTask: null,
+
+		researchConfig: null,
+		research: null,
+		researchLoading: false,
+		researchError: null,
 
 		loadInitialState: async () => {
 			set({
@@ -249,6 +289,80 @@ export const useRuntimeStore =
 						error instanceof Error
 							? error.message
 							: "Failed to refresh tools.",
+				});
+			}
+		},
+
+		refreshLab: async () => {
+			set({
+				labLoading: true,
+				labError: null,
+			});
+
+			try {
+				const lab =
+					await api.lab();
+
+				const activeLabTaskId =
+					get().activeLabTaskId;
+
+				const activeLabTask =
+					activeLabTaskId
+						? lab.tasks.find(
+								(item) =>
+									item.id ===
+									activeLabTaskId,
+							) ?? null
+						: null;
+
+				set({
+					lab,
+					labLoading: false,
+					activeLabTask,
+				});
+			} catch (error) {
+				set({
+					labLoading: false,
+					labError:
+						error instanceof Error
+							? error.message
+							: "Failed to refresh Coding Lab.",
+				});
+			}
+		},
+
+		loadLabTask: async (id) => {
+			const taskId = id.trim();
+
+			if (!taskId) {
+				set({
+					activeLabTaskId: null,
+					activeLabTask: null,
+				});
+				return;
+			}
+
+			set({
+				activeLabTaskId: taskId,
+				labLoading: true,
+				labError: null,
+			});
+
+			try {
+				const activeLabTask =
+					await api.labTask(taskId);
+
+				set({
+					activeLabTask,
+					labLoading: false,
+				});
+			} catch (error) {
+				set({
+					labLoading: false,
+					labError:
+						error instanceof Error
+							? error.message
+							: "Failed to load Coding Lab task.",
 				});
 			}
 		},
@@ -385,6 +499,115 @@ export const useRuntimeStore =
 			}
 		},
 
+		runLabAction: async (payload) => {
+			set({
+				labLoading: true,
+				labError: null,
+			});
+
+			try {
+				const response =
+					await api.labAction(payload);
+
+				if (!response.ok) {
+					throw new Error(
+						response.error ||
+							"Coding Lab action failed.",
+					);
+				}
+
+				await get().refreshLab();
+
+				const activeTaskId =
+					get().activeLabTaskId;
+
+				if (activeTaskId) {
+					await get().loadLabTask(
+						activeTaskId,
+					);
+				}
+
+				return response.result;
+			} catch (error) {
+				const message =
+					error instanceof Error
+						? error.message
+						: "Coding Lab action failed.";
+
+				set({
+					labLoading: false,
+					labError: message,
+				});
+
+				throw error;
+			}
+		},
+
+		loadResearchConfig: async () => {
+			set({
+				researchError: null,
+			});
+
+			try {
+				const researchConfig =
+					await api.researchConfig();
+
+				set({
+					researchConfig,
+				});
+			} catch (error) {
+				set({
+					researchError:
+						error instanceof Error
+							? error.message
+							: "Failed to load research configuration.",
+				});
+			}
+		},
+
+		searchResearch: async (payload) => {
+			const query =
+				payload.query.trim();
+
+			if (!query) {
+				throw new Error(
+					"Research query is required.",
+				);
+			}
+
+			set({
+				researchLoading: true,
+				researchError: null,
+			});
+
+			try {
+				const research =
+					await api.research({
+						...payload,
+						query,
+					});
+
+				set({
+					research,
+					researchLoading: false,
+				});
+
+				return research;
+			} catch (error) {
+				const message =
+					error instanceof Error
+						? error.message
+						: "Research request failed.";
+
+				set({
+					researchLoading: false,
+					researchError: message,
+				});
+
+				throw error;
+			}
+		},
+
 		connectActivity: () => {
 			const sessionId =
 				get().activeSessionId;
@@ -444,7 +667,7 @@ export const useRuntimeStore =
 					const payload =
 						JSON.parse(
 							event.data,
-						) as unknown;
+						) as APIActivityEvent;
 
 					const activity =
 						normalizeActivity(
@@ -513,16 +736,15 @@ export const useRuntimeStore =
 		},
 
 		disconnectActivity: () => {
+			activitySessionId = null;
+
 			if (socket) {
 				socket.close();
 				socket = null;
 			}
 
-			activitySessionId = null;
-
 			set({
-				connection:
-					"disconnected",
+				connection: "idle",
 			});
 		},
 
@@ -532,3 +754,7 @@ export const useRuntimeStore =
 			});
 		},
 	}));
+
+export function getRuntimeState(): RuntimeState {
+	return useRuntimeStore.getState();
+}
