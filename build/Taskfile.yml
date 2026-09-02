@@ -1,56 +1,89 @@
 version: "3"
 
 tasks:
-  default:
-    desc: Build the SHEYTAN Local Agent application
-    deps:
-      - frontend:build
-    cmds:
-      - wails3 build
-
-  frontend:install:
+  install:frontend:deps:
     desc: Install frontend dependencies
     dir: .
     cmds:
       - npm install
 
-  frontend:dev:
-    desc: Start the Vite development server
+  dev:frontend:
+    desc: Start the Vite development server for Wails
     dir: .
     cmds:
-      - npm run dev
+      - npm run dev -- --host 127.0.0.1 --port {{.VITE_PORT}}
 
-  frontend:build:
+  build:frontend:
     desc: Build and synchronize the React frontend
     dir: .
+    deps:
+      - install:frontend:deps
     cmds:
       - npm run build
 
-  frontend:typecheck:
+  typecheck:frontend:
     desc: Type-check the React frontend
     dir: .
+    deps:
+      - install:frontend:deps
     cmds:
       - npm run typecheck
 
-  frontend:lint:
+  lint:frontend:
     desc: Lint the React frontend
     dir: .
+    deps:
+      - install:frontend:deps
     cmds:
       - npm run lint
 
-  frontend:format:
+  format:frontend:
     desc: Format the React frontend
     dir: .
+    deps:
+      - install:frontend:deps
     cmds:
       - npm run format
 
-  frontend:format-check:
+  format-check:frontend:
     desc: Verify frontend formatting
     dir: .
+    deps:
+      - install:frontend:deps
     cmds:
       - npm run format:check
 
-  dev:
-    desc: Run the native Wails development application
+  frontend:build:
+    desc: Compatibility alias for the React frontend build
     cmds:
-      - wails3 dev
+      - task: build:frontend
+
+  frontend:install:
+    desc: Compatibility alias for frontend dependency installation
+    cmds:
+      - task: install:frontend:deps
+
+  frontend:dev:
+    desc: Compatibility alias for the React development server
+    cmds:
+      - task: dev:frontend
+
+  frontend:typecheck:
+    desc: Compatibility alias for frontend type-checking
+    cmds:
+      - task: typecheck:frontend
+
+  frontend:lint:
+    desc: Compatibility alias for frontend linting
+    cmds:
+      - task: lint:frontend
+
+  frontend:format:
+    desc: Compatibility alias for frontend formatting
+    cmds:
+      - task: format:frontend
+
+  frontend:format-check:
+    desc: Compatibility alias for frontend formatting checks
+    cmds:
+      - task: format-check:frontend
