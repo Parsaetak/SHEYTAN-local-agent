@@ -303,19 +303,23 @@ async function request<T>(
 	}
 
 	try {
-		const response = await fetch(`${API_BASE}${path}`, {
-			...init,
-			signal: controller.signal,
-			headers: {
-				Accept: "application/json",
-				...(init?.body
-					? {
-							"Content-Type": "application/json",
-						}
-					: {}),
-				...init?.headers,
+		const response = await fetch(
+			`${API_BASE}${path}`,
+			{
+				...init,
+				signal: controller.signal,
+				headers: {
+					Accept: "application/json",
+					...(init?.body
+						? {
+								"Content-Type":
+									"application/json",
+							}
+						: {}),
+					...init?.headers,
+				},
 			},
-		});
+		);
 
 		if (!response.ok) {
 			const body = await response.text();
@@ -327,7 +331,8 @@ async function request<T>(
 				};
 
 				if (
-					typeof parsed.error === "string" &&
+					typeof parsed.error ===
+						"string" &&
 					parsed.error.trim()
 				) {
 					message = parsed.error;
@@ -460,7 +465,9 @@ export const api = {
 		return request<LabListResponse>("/lab");
 	},
 
-	labTask(id: string): Promise<LabTaskSessionSnapshot> {
+	labTask(
+		id: string,
+	): Promise<LabTaskSessionSnapshot> {
 		return request<LabTaskSessionSnapshot>(
 			`/lab/${encodeURIComponent(id)}`,
 		);
@@ -528,7 +535,9 @@ export function createSession(): Promise<Session> {
 	return api.createSession();
 }
 
-export function deleteSession(id: string): Promise<void> {
+export function deleteSession(
+	id: string,
+): Promise<void> {
 	return api.deleteSession(id);
 }
 
@@ -546,12 +555,16 @@ export function abortAgent(
 
 export function connectActivity(
 	onEvent: (event: ActivityEvent) => void,
-	onStateChange?: (state: ConnectionState) => void,
+	onStateChange?: (
+		state: ConnectionState,
+	) => void,
 	sessionId?: string | null,
 ): () => void {
 	let socket: WebSocket | undefined;
 	let stopped = false;
-	let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+	let reconnectTimer:
+		| ReturnType<typeof setTimeout>
+		| undefined;
 
 	const connect = () => {
 		if (stopped) {
@@ -564,41 +577,63 @@ export function connectActivity(
 			activityWebSocketURL(sessionId),
 		);
 
-		socket.addEventListener("open", () => {
-			onStateChange?.("connected");
-		});
+		socket.addEventListener(
+			"open",
+			() => {
+				onStateChange?.("connected");
+			},
+		);
 
-		socket.addEventListener("message", (message) => {
-			try {
-				const event = JSON.parse(
-					message.data,
-				) as ActivityEvent;
+		socket.addEventListener(
+			"message",
+			(message) => {
+				try {
+					const event =
+						JSON.parse(
+							message.data,
+						) as ActivityEvent;
 
-				onEvent(event);
-			} catch {
-				onEvent({
-					type: "message",
-					message: String(message.data),
-				});
-			}
-		});
+					onEvent(event);
+				} catch {
+					onEvent({
+						type: "message",
+						message: String(
+							message.data,
+						),
+					});
+				}
+			},
+		);
 
-		socket.addEventListener("close", () => {
-			socket = undefined;
+		socket.addEventListener(
+			"close",
+			() => {
+				socket = undefined;
 
-			if (stopped) {
+				if (stopped) {
+					onStateChange?.(
+						"disconnected",
+					);
+					return;
+				}
+
 				onStateChange?.("disconnected");
-				return;
-			}
 
-			onStateChange?.("disconnected");
+				reconnectTimer = setTimeout(
+					connect,
+					1500,
+				);
+			},
+		);
 
-			reconnectTimer = setTimeout(connect, 1500);
-		});
-
-		socket.addEventListener("error", () => {
-			onStateChange?.("disconnected");
-		});
+		socket.addEventListener(
+			"error",
+			() => {
+				onStateChange?.(
+					"disconnected",
+				);
+			},
+		);
 	};
 
 	connect();
