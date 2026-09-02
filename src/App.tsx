@@ -57,10 +57,16 @@ function App() {
 	const activityEndRef = useRef<HTMLDivElement | null>(null);
 
 	useEffect(() => {
-		void loadInitialState();
-		connectActivity();
+		let cancelled = false;
+
+		void loadInitialState().then(() => {
+			if (!cancelled) {
+				connectActivity();
+			}
+		});
 
 		return () => {
+			cancelled = true;
 			disconnectActivity();
 		};
 	}, [connectActivity, disconnectActivity, loadInitialState]);
