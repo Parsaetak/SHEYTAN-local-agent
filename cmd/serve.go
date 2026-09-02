@@ -1,10 +1,15 @@
 package cmd
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
+	"os/signal"
 	"runtime"
+	"syscall"
+	"time"
 
 	"github.com/sheytan/local-agent/internal/api"
 	"github.com/sheytan/local-agent/internal/config"
@@ -13,26 +18,33 @@ import (
 
 // Serve starts the HTTP server and (optionally) opens the browser.
 func Serve(cfg *config.Config, args []string) int {
-	// Parse simple flags
+	openBrowserEnabled := true
+
+	// Parse simple flags.
 	for i := 0; i < len(args); i++ {
-		a := args[i]
-		switch a {
+		switch args[i] {
 		case "--port":
 			if i+1 < len(args) {
 				var p int
-				_, _ = fmt.Sscanf(args[i+1], "%d", &p)
-				if p > 0 {
+
+				if _, err := fmt.Sscanf(args[i+1], "%d", &p); err == nil && p > 0 {
 					cfg.Port = p
 				}
+
 				i++
 			}
+
 		case "--host":
 			if i+1 < len(args) {
-				cfg.Host = args[i+1]
+				if args[i+1] != "" {
+					cfg.Host = args[i+1]
+				}
+
 				i++
 			}
+
 		case "--no-browser":
-			// Skip auto-open
+			openBrowserEnabled = false
 		}
 	}
 
@@ -41,14 +53,26 @@ func Serve(cfg *config.Config, args []string) int {
 		fmt.Fprintln(os.Stderr, "init server:", err)
 		return 1
 	}
+
+	// Any failure after api.New owns a live runtime stack, so make sure the
+	// stack is released before returning.
+	setupComplete := false
+	defer func() {
+		if !setupComplete {
+			srv.Close()
+		}
+	}()
+
 	if err := srv.EnsureSetup(); err != nil {
 		fmt.Fprintln(os.Stderr, "setup:", err)
 		return 1
 	}
 
 	addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
+
 	url := fmt.Sprintf("http://%s/", addr)
-	if cfg.Host == "0.0.0.0" || cfg.Host == "127.0.0.1" || cfg.Host == "localhost" {
+	switch cfg.Host {
+	case "0.0.0.0", "127.0.0.1", "localhost":
 		url = fmt.Sprintf("http://localhost:%d/", cfg.Port)
 	}
 
@@ -61,22 +85,80 @@ func Serve(cfg *config.Config, args []string) int {
 	fmt.Println("Open the URL above in your browser. Ctrl-C to stop.")
 	fmt.Println()
 
-	go openBrowser(url)
+	if openBrowserEnabled {
+		go openBrowser(url)
+	}
 
-	if err := http.ListenAndServe(addr, srv.Handler()); err != nil {
+	httpServer := &http.Server{
+		Addr:              addr,
+		Handler:           srv.Handler(),
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+
+	// Graceful shutdown is triggered by SIGINT/SIGTERM.
+	shutdownCtx, stopSignal := signal.NotifyContext(
+		context.Background(),
+		os.Interrupt,
+		syscall.SIGTERM,
+	)
+	defer stopSignal()
+
+	shutdownDone := make(chan struct{})
+
+	go func() {
+		defer close(shutdownDone)
+
+		<-shutdownCtx.Done()
+
+		ctx, cancel := context.WithTimeout(
+			context.Background(),
+			10*time.Second,
+		)
+		defer cancel()
+
+		if err := httpServer.Shutdown(ctx); err != nil {
+			fmt.Fprintln(os.Stderr, "shutdown:", err)
+
+			// Force-close the listening socket if graceful shutdown could
+			// not complete within the deadline.
+			_ = httpServer.Close()
+		}
+	}()
+
+	setupComplete = true
+
+	err = httpServer.ListenAndServe()
+
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
 		fmt.Fprintln(os.Stderr, "server:", err)
+		srv.Close()
+		<-shutdownDone
 		return 1
 	}
+
+	<-shutdownDone
+
+	// Shutdown the runtime only after the HTTP server has stopped accepting
+	// requests and active handlers have had a chance to finish.
+	srv.Close()
+
 	return 0
 }
 
 func openBrowser(url string) {
-	// v1.0.4: hidden-console launch via internal/proc.
+	// Hidden-console launch via internal/proc.
 	switch runtime.GOOS {
 	case "darwin":
 		_ = proc.Command("open", url).Start()
+
 	case "windows":
-		_ = proc.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
+		_ = proc.Command(
+			"rundll32",
+			"url.dll,FileProtocolHandler",
+			url,
+		).Start()
+
 	default:
 		_ = proc.Command("xdg-open", url).Start()
 	}
