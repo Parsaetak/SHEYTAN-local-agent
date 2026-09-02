@@ -1,0 +1,53 @@
+version: "3"
+
+includes:
+  common:
+    taskfile: ./build/Taskfile.yml
+    optional: false
+
+vars:
+  APP_NAME: "SHEYTAN-Local-Agent"
+  BIN_DIR: "bin"
+  VITE_PORT: "{{.WAILS_VITE_PORT | default 9245}}"
+
+tasks:
+  build:
+    desc: Build the SHEYTAN Local Agent application
+    cmds:
+      - task: common:frontend:build
+      - go build -buildvcs=false -o "{{.BIN_DIR}}/{{.APP_NAME}}{{exeExt}}"
+
+  dev:
+    desc: Run the native Wails development application
+    cmds:
+      - wails3 dev -config ./build/config.yml -port {{.VITE_PORT}}
+
+  frontend:install:
+    desc: Install frontend dependencies
+    cmds:
+      - task: common:frontend:install
+
+  frontend:build:
+    desc: Build and synchronize the React frontend
+    cmds:
+      - task: common:frontend:build
+
+  frontend:typecheck:
+    desc: Type-check the React frontend
+    cmds:
+      - task: common:frontend:typecheck
+
+  frontend:lint:
+    desc: Lint the React frontend
+    cmds:
+      - task: common:frontend:lint
+
+  frontend:format:
+    desc: Format the React frontend
+    cmds:
+      - task: common:frontend:format
+
+  frontend:format-check:
+    desc: Verify frontend formatting
+    cmds:
+      - task: common:frontend:format-check
