@@ -153,7 +153,8 @@ function App() {
 	const activeSession = useMemo(
 		() =>
 			sessions.find(
-				(session) => session.id === activeSessionId,
+				(session) =>
+					session.id === activeSessionId,
 			) ?? null,
 		[sessions, activeSessionId],
 	);
@@ -186,7 +187,7 @@ function App() {
 		try {
 			await createSession();
 		} catch {
-			// The existing error state remains authoritative.
+			// The store exposes the error state.
 		}
 	}
 
@@ -198,7 +199,7 @@ function App() {
 		try {
 			await deleteSession(activeSessionId);
 		} catch {
-			// The existing error state remains authoritative.
+			// The store exposes the error state.
 		}
 	}
 
@@ -255,7 +256,9 @@ function App() {
 				</div>
 
 				<div className="topbar-meta">
-					<span>{app?.appVersion ?? "ZETA"}</span>
+					<span>
+						{app?.appVersion ?? "ZETA"}
+					</span>
 				</div>
 			</header>
 
@@ -266,6 +269,7 @@ function App() {
 							<span className="eyebrow">
 								WORKSPACE
 							</span>
+
 							<strong>Navigation</strong>
 						</div>
 					</div>
@@ -274,34 +278,47 @@ function App() {
 						className="app-navigation"
 						aria-label="Workspace"
 					>
-						{WORKSPACE_LAYERS.map((layer) => (
-							<button
-								type="button"
-								key={layer.id}
-								className={`app-navigation-item ${
-									view === layer.id
-										? "active"
-										: ""
-								}`}
-								onClick={() =>
-									changeView(layer.id)
-								}
-								aria-pressed={
-									view === layer.id
-								}
-							>
-								<span className="app-navigation-icon">
-									{layer.icon}
-								</span>
-
-								<span className="app-navigation-copy">
-									<strong>{layer.label}</strong>
-									<span>
-										{layer.description}
+						{WORKSPACE_LAYERS.map(
+							(layer) => (
+								<button
+									type="button"
+									key={layer.id}
+									className={`app-navigation-item ${
+										view ===
+										layer.id
+											? "active"
+											: ""
+									}`}
+									onClick={() =>
+										changeView(
+											layer.id,
+										)
+									}
+									aria-pressed={
+										view ===
+										layer.id
+									}
+								>
+									<span className="app-navigation-icon">
+										{layer.icon}
 									</span>
-								</span>
-							</button>
-						))}
+
+									<span className="app-navigation-copy">
+										<strong>
+											{
+												layer.label
+											}
+										</strong>
+
+										<span>
+											{
+												layer.description
+											}
+										</span>
+									</span>
+								</button>
+							),
+						)}
 					</nav>
 
 					{view === "agent" ? (
@@ -311,7 +328,10 @@ function App() {
 									<span className="eyebrow">
 										AGENT
 									</span>
-									<strong>Sessions</strong>
+
+									<strong>
+										Sessions
+									</strong>
 								</div>
 
 								<button
@@ -328,14 +348,19 @@ function App() {
 							</div>
 
 							<div className="session-list">
-								{sessions.length === 0 &&
+								{sessions.length ===
+									0 &&
 								!loading ? (
 									<div className="empty-sidebar">
-										No sessions yet.
+										No
+										sessions
+										yet.
 									</div>
 								) : (
 									sessions.map(
-										(session) => (
+										(
+											session,
+										) => (
 											<button
 												type="button"
 												key={
@@ -359,8 +384,10 @@ function App() {
 
 												<span className="session-copy">
 													<strong>
-														{session.title ||
-															"Untitled session"}
+														{
+															session.title ||
+															"Untitled session"
+														}
 													</strong>
 
 													<span>
@@ -387,9 +414,10 @@ function App() {
 							</strong>
 
 							<span>
-								Only the active workspace
-								loads its domain UI and
-								data.
+								Only the active
+								workspace loads
+								its domain UI
+								and data.
 							</span>
 						</div>
 					)}
@@ -404,7 +432,9 @@ function App() {
 					<section className="workspace-header">
 						<div>
 							<span className="eyebrow">
-								{activeLayer.eyebrow}
+								{
+									activeLayer.eyebrow
+								}
 							</span>
 
 							<h1>{viewTitle}</h1>
@@ -470,7 +500,9 @@ function App() {
 										<button
 											type="button"
 											className="text-button"
-											onClick={clearActivity}
+											onClick={
+												clearActivity
+											}
 											disabled={
 												activity.length ===
 												0
@@ -481,29 +513,43 @@ function App() {
 									</div>
 
 									<div className="activity-stream">
-										{activity.length === 0 ? (
+										{activity.length ===
+										0 ? (
 											<div className="activity-empty">
 												<div className="activity-empty-mark">
 													✦
 												</div>
 
 												<strong>
-													Awaiting the
-													first operation
+													Awaiting
+													the
+													first
+													operation
 												</strong>
 
 												<span>
-													Send a task below
-													to begin a local
-													agent run.
+													Send
+													a
+													task
+													below
+													to
+													begin
+													a
+													local
+													agent
+													run.
 												</span>
 											</div>
 										) : (
 											activity.map(
-												(item) => (
+												(
+													item,
+												) => (
 													<article
 														className="activity-item"
-														key={item.id}
+														key={
+															item.id
+														}
 													>
 														<div className="activity-marker">
 															<span />
@@ -568,6 +614,7 @@ function App() {
 											<span>
 												Sessions
 											</span>
+
 											<strong>
 												{
 													sessions.length
@@ -577,8 +624,10 @@ function App() {
 
 										<div className="metric-card">
 											<span>
-												Local models
+												Local
+												models
 											</span>
+
 											<strong>
 												{
 													localModels.length
@@ -590,6 +639,7 @@ function App() {
 											<span>
 												Loaded
 											</span>
+
 											<strong>
 												{
 													loadedModels.length
@@ -601,6 +651,7 @@ function App() {
 											<span>
 												Events
 											</span>
+
 											<strong>
 												{
 													activity.length
@@ -676,9 +727,13 @@ function App() {
 								<div className="composer-shell">
 									<textarea
 										value={message}
-										onChange={(event) =>
+										onChange={(
+											event,
+										) =>
 											setMessage(
-												event.target.value,
+												event
+													.target
+													.value,
 											)
 										}
 										placeholder={
@@ -691,7 +746,9 @@ function App() {
 											running
 										}
 										rows={3}
-										onKeyDown={(event) => {
+										onKeyDown={(
+											event,
+										) => {
 											if (
 												event.key ===
 													"Enter" &&
@@ -699,6 +756,7 @@ function App() {
 													event.metaKey)
 											) {
 												event.preventDefault();
+
 												event.currentTarget.form?.requestSubmit();
 											}
 										}}
@@ -743,7 +801,9 @@ function App() {
 									className="error-banner"
 									role="alert"
 								>
-									<span>{error}</span>
+									<span>
+										{error}
+									</span>
 								</div>
 							) : null}
 						</>
