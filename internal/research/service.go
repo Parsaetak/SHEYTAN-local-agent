@@ -15,7 +15,7 @@ const (
 	BackendGitHub     = "github"
 	BackendReddit     = "reddit"
 	BackendWeb        = "web"
-	BackendSearXNG     = "searxng"
+	BackendSearXNG    = "searxng"
 	BackendDuckDuckGo = "duckduckgo"
 )
 
@@ -192,11 +192,12 @@ func (s *Service) Search(ctx context.Context, req SearchRequest) (SearchResponse
 	}
 
 	s.mu.RLock()
+
 	backend := s.backend
 	defaultMaxResults := s.maxResults
 	timeout := s.timeout
-	providers := make(map[string]Provider, len(s.providers))
 
+	providers := make(map[string]Provider, len(s.providers))
 	for name, provider := range s.providers {
 		providers[name] = provider
 	}
@@ -266,6 +267,10 @@ type providerSearchResult struct {
 	err      error
 }
 
+type collectedResult struct {
+	result Result
+}
+
 func (s *Service) searchAuto(
 	ctx context.Context,
 	providers map[string]Provider,
@@ -309,10 +314,7 @@ func (s *Service) searchAuto(
 		go func() {
 			defer wg.Done()
 
-			response, err := provider.Search(
-				ctx,
-				req,
-			)
+			response, err := provider.Search(ctx, req)
 
 			resultsCh <- providerSearchResult{
 				name:     name,
@@ -324,10 +326,6 @@ func (s *Service) searchAuto(
 
 	wg.Wait()
 	close(resultsCh)
-
-	type collectedResult struct {
-		result Result
-	}
 
 	allResults := make([]collectedResult, 0)
 
@@ -400,12 +398,10 @@ func (s *Service) searchAuto(
 }
 
 func mergeResearchResults(
-	input []struct {
-		result Result
-	},
+	input []collectedResult,
 	maxResults int,
 ) []Result {
-	if len(input) == 0 {
+	if len(input) == 0 || maxResults <= 0 {
 		return nil
 	}
 
@@ -417,10 +413,15 @@ func mergeResearchResults(
 	ranked := make([]rankedResult, 0, len(input))
 
 	for index, item := range input {
+		result := NormalizeResult(
+			item.result,
+			item.result.Provider,
+		)
+
 		ranked = append(
 			ranked,
 			rankedResult{
-				result: NormalizeResult(item.result, item.result.Provider),
+				result: result,
 				index:  index,
 			},
 		)
@@ -444,11 +445,8 @@ func mergeResearchResults(
 			return leftAuthority > rightAuthority
 		}
 
-		leftPublished := left.PublishedAt
-		rightPublished := right.PublishedAt
-
-		if !leftPublished.Equal(rightPublished) {
-			return leftPublished.After(rightPublished)
+		if !left.PublishedAt.Equal(right.PublishedAt) {
+			return left.PublishedAt.After(right.PublishedAt)
 		}
 
 		leftURL := left.URL
@@ -465,18 +463,9 @@ func mergeResearchResults(
 	results := make([]Result, 0, minInt(maxResults, len(ranked)))
 
 	for _, item := range ranked {
-		result := NormalizeResult(item.result, item.result.Provider)
+		result := item.result
 
-		key := result.ContentHash
-		if key == "" {
-			key = strings.ToLower(strings.TrimSpace(result.URL))
-		}
-		if key == "" {
-			key = strings.ToLower(
-				strings.TrimSpace(result.Title + "\x00" + result.Snippet),
-			)
-		}
-
+		key := researchResultKey(result)
 		if key == "" {
 			continue
 		}
@@ -496,19 +485,40 @@ func mergeResearchResults(
 	return results
 }
 
+func researchResultKey(result Result) string {
+	if hash := strings.TrimSpace(result.ContentHash); hash != "" {
+		return "hash:" + strings.ToLower(hash)
+	}
+
+	if rawURL := strings.TrimSpace(result.URL); rawURL != "" {
+		return "url:" + strings.ToLower(rawURL)
+	}
+
+	title := strings.ToLower(strings.TrimSpace(result.Title))
+	snippet := strings.ToLower(strings.TrimSpace(result.Snippet))
+
+	if title == "" && snippet == "" {
+		return ""
+	}
+
+	return "content:" + title + "\x00" + snippet
+}
+
 func combinedResearchScore(result Result) float64 {
 	match := result.MatchScore
+
 	if match < 0 {
 		match = 0
 	}
+
 	if match > 1 {
 		match = 1
 	}
 
 	authority := result.Authority.Rank()
 
-	// Relevance is intentionally weighted more heavily than authority.
-	// Authority remains an important secondary signal.
+	// Relevance is weighted more heavily than authority.
+	// Authority remains a secondary trust signal.
 	return (match * 0.70) + (authority * 0.30)
 }
 
@@ -518,4 +528,4 @@ func minInt(left, right int) int {
 	}
 
 	return right
-} 
+}
