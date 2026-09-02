@@ -36,16 +36,13 @@ dev_mode:
     git_ignore: true
 
   executes:
-    - cmd: npm install
+    - cmd: wails3 task common:install:frontend:deps
       type: once
 
-    - cmd: npm run dev -- --host 127.0.0.1
+    - cmd: wails3 task common:dev:frontend
       type: background
 
     - cmd: go mod tidy
-      type: blocking
-
-    - cmd: npm run build
       type: blocking
 
     - cmd: wails3 task build
