@@ -267,20 +267,27 @@ export interface ResearchConfig {
 	providers: string[];
 }
 
-const REQUEST_TIMEOUT_MS = 15_000;
+const DEFAULT_TIMEOUT_MS = 15_000;
+const LONG_OPERATION_TIMEOUT_MS = 5 * 60_000;
+const RESEARCH_TIMEOUT_MS = 30_000;
 
 async function request<T>(
 	path: string,
 	init?: RequestInit,
+	timeoutMs = DEFAULT_TIMEOUT_MS,
 ): Promise<T> {
-	const controller = new AbortController();
+	const controller =
+		new AbortController();
 
 	let timeoutTriggered = false;
 
-	const timeout = window.setTimeout(() => {
-		timeoutTriggered = true;
-		controller.abort();
-	}, REQUEST_TIMEOUT_MS);
+	const timeout = window.setTimeout(
+		() => {
+			timeoutTriggered = true;
+			controller.abort();
+		},
+		timeoutMs,
+	);
 
 	const callerSignal =
 		init?.signal;
@@ -359,7 +366,9 @@ async function request<T>(
 	} catch (error) {
 		if (timeoutTriggered) {
 			throw new Error(
-				`Request timed out after ${REQUEST_TIMEOUT_MS / 1000} seconds.`,
+				`Request timed out after ${Math.round(
+					timeoutMs / 1000,
+				)} seconds.`,
 			);
 		}
 
@@ -401,7 +410,9 @@ export const api = {
 		return request<Session[]>("/sessions");
 	},
 
-	session(id: string): Promise<Session> {
+	session(
+		id: string,
+	): Promise<Session> {
 		return request<Session>(
 			`/sessions/${encodeURIComponent(id)}`,
 		);
@@ -413,7 +424,9 @@ export const api = {
 		});
 	},
 
-	deleteSession(id: string): Promise<void> {
+	deleteSession(
+		id: string,
+	): Promise<void> {
 		return request<void>(
 			`/sessions/${encodeURIComponent(id)}`,
 			{
@@ -425,21 +438,30 @@ export const api = {
 	run(
 		payload: RunRequest,
 	): Promise<RunResponse> {
-		return request<RunResponse>("/run", {
-			method: "POST",
-			body: JSON.stringify(payload),
-		});
+		return request<RunResponse>(
+			"/run",
+			{
+				method: "POST",
+				body: JSON.stringify(
+					payload,
+				),
+			},
+			LONG_OPERATION_TIMEOUT_MS,
+		);
 	},
 
 	abort(
 		sessionId: string,
 	): Promise<AbortResponse> {
-		return request<AbortResponse>("/abort", {
-			method: "POST",
-			body: JSON.stringify({
-				sessionId,
-			}),
-		});
+		return request<AbortResponse>(
+			"/abort",
+			{
+				method: "POST",
+				body: JSON.stringify({
+					sessionId,
+				}),
+			},
+		);
 	},
 
 	updateSession(
@@ -458,13 +480,17 @@ export const api = {
 			`/sessions/${encodeURIComponent(id)}`,
 			{
 				method: "PUT",
-				body: JSON.stringify(payload),
+				body: JSON.stringify(
+					payload,
+				),
 			},
 		);
 	},
 
 	lab(): Promise<LabListResponse> {
-		return request<LabListResponse>("/lab");
+		return request<LabListResponse>(
+			"/lab",
+		);
 	},
 
 	labTask(
@@ -478,10 +504,16 @@ export const api = {
 	labAction(
 		payload: Record<string, unknown>,
 	): Promise<LabActionResponse> {
-		return request<LabActionResponse>("/lab", {
-			method: "POST",
-			body: JSON.stringify(payload),
-		});
+		return request<LabActionResponse>(
+			"/lab",
+			{
+				method: "POST",
+				body: JSON.stringify(
+					payload,
+				),
+			},
+			LONG_OPERATION_TIMEOUT_MS,
+		);
 	},
 
 	researchConfig(): Promise<ResearchConfig> {
@@ -502,8 +534,11 @@ export const api = {
 			"/research",
 			{
 				method: "POST",
-				body: JSON.stringify(payload),
+				body: JSON.stringify(
+					payload,
+				),
 			},
+			RESEARCH_TIMEOUT_MS,
 		);
 	},
 };
@@ -575,12 +610,19 @@ export function connectActivity(
 		onStateChange?.("connecting");
 
 		socket = new WebSocket(
-			activityWebSocketURL(sessionId),
+			activityWebSocketURL(
+				sessionId,
+			),
 		);
 
-		socket.addEventListener("open", () => {
-			onStateChange?.("connected");
-		});
+		socket.addEventListener(
+			"open",
+			() => {
+				onStateChange?.(
+					"connected",
+				);
+			},
+		);
 
 		socket.addEventListener(
 			"message",
@@ -603,31 +645,38 @@ export function connectActivity(
 			},
 		);
 
-		socket.addEventListener("close", () => {
-			socket = undefined;
+		socket.addEventListener(
+			"close",
+			() => {
+				socket = undefined;
 
-			if (stopped) {
+				if (stopped) {
+					onStateChange?.(
+						"disconnected",
+					);
+					return;
+				}
+
 				onStateChange?.(
 					"disconnected",
 				);
-				return;
-			}
 
-			onStateChange?.(
-				"disconnected",
-			);
+				reconnectTimer =
+					setTimeout(
+						connect,
+						1500,
+					);
+			},
+		);
 
-			reconnectTimer = setTimeout(
-				connect,
-				1500,
-			);
-		});
-
-		socket.addEventListener("error", () => {
-			onStateChange?.(
-				"disconnected",
-			);
-		});
+		socket.addEventListener(
+			"error",
+			() => {
+				onStateChange?.(
+					"disconnected",
+				);
+			},
+		);
 	};
 
 	connect();
