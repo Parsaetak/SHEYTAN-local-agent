@@ -1,11 +1,10 @@
+// Package desktop provides the native cross-platform desktop shell.
 package desktop
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io/fs"
-	"net"
 	"net/http"
 	"time"
 
@@ -16,20 +15,18 @@ import (
 )
 
 const (
-	defaultWidth     = 1440
-	defaultHeight    = 900
-	minimumWidth     = 1024
-	minimumHeight    = 680
-	serverStopPeriod = 10 * time.Second
+	defaultWidth  = 1440
+	defaultHeight = 900
+	minimumWidth  = 1024
+	minimumHeight = 680
 )
 
 // Run starts the SHEYTAN native desktop application and blocks until the
 // desktop application exits.
 //
-// The React production assets are served from the embedded web.StaticFS by
-// Wails. The Go API remains available locally on cfg.Host/cfg.Port, while the
-// UI itself does not require a browser tab or a separately running frontend
-// server.
+// The React production assets and the Go API are served through a single
+// in-process HTTP handler owned by the Wails asset layer. No external browser,
+// localhost listener, or frontend server is required in production.
 func Run(cfg *config.Config) int {
 	if cfg == nil {
 		fmt.Println("desktop: missing configuration")
@@ -48,38 +45,21 @@ func Run(cfg *config.Config) int {
 		return 1
 	}
 
-	addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
-
-	listener, err := net.Listen("tcp", addr)
-	if err != nil {
-		fmt.Printf("desktop: listen on %s: %v\n", addr, err)
-		return 1
-	}
-
-	httpServer := &http.Server{
-		Handler:           srv.Handler(),
-		ReadHeaderTimeout: 10 * time.Second,
-		IdleTimeout:       60 * time.Second,
-	}
-
-	serveErr := make(chan error, 1)
-
-	go func() {
-		serveErr <- httpServer.Serve(listener)
-	}()
-
 	staticFS, err := fs.Sub(web.StaticFS, "static")
 	if err != nil {
 		fmt.Println("desktop: embedded frontend:", err)
-		_ = listener.Close()
 		return 1
 	}
+
+	assetHandler := application.AssetFileServerFS(staticFS)
+	apiHandler := srv.Handler()
+	combinedHandler := desktopHandler(assetHandler, apiHandler)
 
 	app := application.New(application.Options{
 		Name:        config.AppName,
 		Description: "SHEYTAN Local Agent",
 		Assets: application.AssetOptions{
-			Handler: application.AssetFileServerFS(staticFS),
+			Handler: combinedHandler,
 		},
 	})
 
@@ -99,39 +79,31 @@ func Run(cfg *config.Config) int {
 	window.Center()
 	window.Show()
 
-	runErr := app.Run()
-
-	shutdownErr := shutdownHTTPServer(httpServer)
-	if shutdownErr != nil && !errors.Is(shutdownErr, http.ErrServerClosed) {
-		fmt.Println("desktop: HTTP shutdown:", shutdownErr)
-	}
-
-	select {
-	case err := <-serveErr:
-		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			fmt.Println("desktop: HTTP server:", err)
-			return 1
-		}
-	default:
-	}
-
-	if runErr != nil {
-		fmt.Println("desktop: application:", runErr)
+	if err := app.Run(); err != nil {
+		fmt.Println("desktop: application:", err)
 		return 1
 	}
 
 	return 0
 }
 
-func shutdownHTTPServer(server *http.Server) error {
-	if server == nil {
-		return nil
-	}
+// desktopHandler routes application API traffic to the Go backend and all
+// other traffic to Wails' embedded asset server.
+//
+// Keeping both paths in one handler is what allows the production executable
+// to remain completely self-contained while preserving the existing REST and
+// WebSocket API contract used by the React frontend.
+func desktopHandler(assetHandler http.Handler, apiHandler http.Handler) http.Handler {
+	mux := http.NewServeMux()
 
-	forceClose := time.AfterFunc(serverStopPeriod, func() {
-		_ = server.Close()
-	})
-	defer forceClose.Stop()
+	mux.Handle("/api/", apiHandler)
+	mux.Handle("/ws/", apiHandler)
+	mux.Handle("/", assetHandler)
 
-	return server.Shutdown(context.Background())
+	return mux
 }
+
+// Keep this symbol referenced so future desktop lifecycle additions can use a
+// common shutdown duration without reintroducing a network server.
+var _ = errors.Is
+var _ = time.Second
