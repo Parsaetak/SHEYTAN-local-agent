@@ -73,13 +73,25 @@ function SidebarLayerLoading() {
 }
 
 function App() {
-	const {
-		app,
-		sessions,
-		activeSessionId,
-		connection,
-		running,
-	} = useRuntimeStore();
+	const appVersion = useRuntimeStore(
+		(state) => state.app?.appVersion ?? null,
+	);
+
+	const sessions = useRuntimeStore(
+		(state) => state.sessions,
+	);
+
+	const activeSessionId = useRuntimeStore(
+		(state) => state.activeSessionId,
+	);
+
+	const connection = useRuntimeStore(
+		(state) => state.connection,
+	);
+
+	const running = useRuntimeStore(
+		(state) => state.running,
+	);
 
 	const [view, setView] =
 		useState<WorkspaceView>(() =>
@@ -148,6 +160,10 @@ function App() {
 			sessions,
 			activeSessionId,
 		],
+	);
+
+	const selectSession = useRuntimeStore(
+		(state) => state.selectSession,
 	);
 
 	function changeView(
@@ -222,7 +238,7 @@ function App() {
 
 				<div className="topbar-meta">
 					<span>
-						{app?.appVersion ??
+						{appVersion ??
 							"ZETA"}
 					</span>
 				</div>
