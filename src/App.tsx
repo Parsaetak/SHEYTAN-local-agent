@@ -1,4 +1,6 @@
 import {
+	Suspense,
+	lazy,
 	type FormEvent,
 	useEffect,
 	useMemo,
@@ -6,10 +8,11 @@ import {
 	useState,
 } from "react";
 
-import LabPanel from "./LabPanel";
-import ResearchPanel from "./ResearchPanel";
 import type { ActivityEvent } from "./store";
 import { useRuntimeStore } from "./store";
+
+const LabPanel = lazy(() => import("./LabPanel"));
+const ResearchPanel = lazy(() => import("./ResearchPanel"));
 
 type AppView = "agent" | "lab" | "research";
 
@@ -33,6 +36,16 @@ function formatActivity(activity: ActivityEvent): string {
 	}
 
 	return activity.type;
+}
+
+function PanelLoading({ label }: { label: string }) {
+	return (
+		<div className="panel-loading">
+			<div className="panel-loading-mark">✦</div>
+			<strong>Loading {label}</strong>
+			<span>Initializing this workspace layer…</span>
+		</div>
+	);
 }
 
 function App() {
@@ -136,6 +149,14 @@ function App() {
 		}
 	}
 
+	function changeView(nextView: AppView) {
+		if (nextView === view) {
+			return;
+		}
+
+		setView(nextView);
+	}
+
 	const statusLabel =
 		connection === "connected"
 			? "Connected"
@@ -144,6 +165,20 @@ function App() {
 				: connection === "error"
 					? "Connection error"
 					: "Offline";
+
+	const viewLabel =
+		view === "agent"
+			? "AGENT"
+			: view === "lab"
+				? "CODING LAB"
+				: "RESEARCH";
+
+	const viewTitle =
+		view === "agent"
+			? activeSession?.title || "Forge a new task"
+			: view === "lab"
+				? "Autonomous engineering"
+				: "External intelligence";
 
 	return (
 		<div className="app-shell">
@@ -176,54 +211,157 @@ function App() {
 					<div className="sidebar-heading">
 						<div>
 							<span className="eyebrow">WORKSPACE</span>
-							<strong>Sessions</strong>
+							<strong>Navigation</strong>
 						</div>
+					</div>
+
+					<nav className="app-navigation" aria-label="Workspace">
+						<button
+							type="button"
+							className={`app-navigation-item ${
+								view === "agent" ? "active" : ""
+							}`}
+							onClick={() => changeView("agent")}
+							aria-pressed={view === "agent"}
+						>
+							<span className="app-navigation-icon">
+								◈
+							</span>
+
+							<span className="app-navigation-copy">
+								<strong>Agent</strong>
+								<span>
+									Interactive local intelligence
+								</span>
+							</span>
+						</button>
 
 						<button
 							type="button"
-							className="icon-button"
-							onClick={() => void handleNewSession()}
-							title="New session"
-							aria-label="New session"
+							className={`app-navigation-item ${
+								view === "lab" ? "active" : ""
+							}`}
+							onClick={() => changeView("lab")}
+							aria-pressed={view === "lab"}
 						>
-							+
-						</button>
-					</div>
+							<span className="app-navigation-icon">
+								◆
+							</span>
 
-					<div className="session-list">
-						{sessions.length === 0 && !loading ? (
-							<div className="empty-sidebar">
-								No sessions yet.
-							</div>
-						) : (
-							sessions.map((session) => (
+							<span className="app-navigation-copy">
+								<strong>Coding Lab</strong>
+								<span>
+									Execute, verify, and repair
+								</span>
+							</span>
+						</button>
+
+						<button
+							type="button"
+							className={`app-navigation-item ${
+								view === "research" ? "active" : ""
+							}`}
+							onClick={() => changeView("research")}
+							aria-pressed={view === "research"}
+						>
+							<span className="app-navigation-icon">
+								⌕
+							</span>
+
+							<span className="app-navigation-copy">
+								<strong>Research</strong>
+								<span>
+									External evidence and sources
+								</span>
+							</span>
+						</button>
+					</nav>
+
+					{view === "agent" ? (
+						<>
+							<div className="sidebar-heading sidebar-heading-secondary">
+								<div>
+									<span className="eyebrow">
+										AGENT
+									</span>
+									<strong>Sessions</strong>
+								</div>
+
 								<button
 									type="button"
-									key={session.id}
-									className={`session-item ${
-										session.id === activeSessionId
-											? "active"
-											: ""
-									}`}
+									className="icon-button"
 									onClick={() =>
-										selectSession(session.id)
+										void handleNewSession()
 									}
+									title="New session"
+									aria-label="New session"
 								>
-									<span className="session-icon">◈</span>
-
-									<span className="session-copy">
-										<strong>
-											{session.title ||
-												"Untitled session"}
-										</strong>
-										<span>
-											{session.id.slice(0, 8)}
-										</span>
-									</span>
+									+
 								</button>
-							))
-						)}
-					</div>
+							</div>
+
+							<div className="session-list">
+								{sessions.length === 0 && !loading ? (
+									<div className="empty-sidebar">
+										No sessions yet.
+									</div>
+								) : (
+									sessions.map((session) => (
+										<button
+											type="button"
+											key={session.id}
+											className={`session-item ${
+												session.id ===
+												activeSessionId
+													? "active"
+													: ""
+											}`}
+											onClick={() =>
+												selectSession(
+													session.id,
+												)
+											}
+										>
+											<span className="session-icon">
+												◈
+											</span>
+
+											<span className="session-copy">
+												<strong>
+													{session.title ||
+														"Untitled session"}
+												</strong>
+
+												<span>
+													{session.id.slice(
+														0,
+														8,
+													)}
+												</span>
+											</span>
+										</button>
+									))
+								)}
+							</div>
+						</>
+					) : (
+						<div className="sidebar-layer-info">
+							<span className="eyebrow">
+								LAYER
+							</span>
+
+							<strong>
+								{view === "lab"
+									? "Coding Laboratory"
+									: "Research Engine"}
+							</strong>
+
+							<span>
+								Only the active workspace loads its
+								domain UI and data.
+							</span>
+						</div>
+					)}
 
 					<div className="sidebar-footer">
 						<span>Native runtime</span>
@@ -234,58 +372,12 @@ function App() {
 				<main className="workspace">
 					<section className="workspace-header">
 						<div>
-							<span className="eyebrow">
-								{view === "agent"
-									? "AGENT"
-									: view === "lab"
-										? "CODING LAB"
-										: "RESEARCH"}
-							</span>
+							<span className="eyebrow">{viewLabel}</span>
 
-							<h1>
-								{view === "agent"
-									? activeSession?.title ||
-										"Forge a new task"
-									: view === "lab"
-										? "Autonomous engineering"
-										: "External intelligence"}
-							</h1>
+							<h1>{viewTitle}</h1>
 						</div>
 
 						<div className="header-actions">
-							<button
-								type="button"
-								className={`secondary-button ${
-									view === "agent" ? "active" : ""
-								}`}
-								onClick={() => setView("agent")}
-								aria-pressed={view === "agent"}
-							>
-								Agent
-							</button>
-
-							<button
-								type="button"
-								className={`secondary-button ${
-									view === "lab" ? "active" : ""
-								}`}
-								onClick={() => setView("lab")}
-								aria-pressed={view === "lab"}
-							>
-								Coding Lab
-							</button>
-
-							<button
-								type="button"
-								className={`secondary-button ${
-									view === "research" ? "active" : ""
-								}`}
-								onClick={() => setView("research")}
-								aria-pressed={view === "research"}
-							>
-								Research
-							</button>
-
 							{view === "agent" ? (
 								<>
 									<span className="runtime-pill">
@@ -308,9 +400,21 @@ function App() {
 					</section>
 
 					{view === "lab" ? (
-						<LabPanel />
+						<Suspense
+							fallback={
+								<PanelLoading label="Coding Lab" />
+							}
+						>
+							<LabPanel />
+						</Suspense>
 					) : view === "research" ? (
-						<ResearchPanel />
+						<Suspense
+							fallback={
+								<PanelLoading label="Research" />
+							}
+						>
+							<ResearchPanel />
+						</Suspense>
 					) : (
 						<>
 							<section className="workspace-content">
@@ -320,6 +424,7 @@ function App() {
 											<span className="eyebrow">
 												LIVE
 											</span>
+
 											<strong>Activity</strong>
 										</div>
 
@@ -343,12 +448,13 @@ function App() {
 												</div>
 
 												<strong>
-													Awaiting the first operation
+													Awaiting the first
+													operation
 												</strong>
 
 												<span>
-													Send a task below to begin a
-													local agent run.
+													Send a task below to begin
+													a local agent run.
 												</span>
 											</div>
 										) : (
@@ -374,8 +480,10 @@ function App() {
 																	[],
 																	{
 																		hour: "2-digit",
-																		minute: "2-digit",
-																		second: "2-digit",
+																		minute:
+																			"2-digit",
+																		second:
+																			"2-digit",
 																	},
 																)}
 															</time>
@@ -401,6 +509,7 @@ function App() {
 											<span className="eyebrow">
 												RUNTIME
 											</span>
+
 											<strong>System</strong>
 										</div>
 									</div>
@@ -472,6 +581,7 @@ function App() {
 
 										<div className="session-detail">
 											<span>ID</span>
+
 											<strong>
 												{activeSessionId
 													? activeSessionId.slice(
@@ -484,6 +594,7 @@ function App() {
 
 										<div className="session-detail">
 											<span>MODEL</span>
+
 											<strong>
 												{activeSession?.model ||
 													"Automatic"}
@@ -521,6 +632,7 @@ function App() {
 													event.metaKey)
 											) {
 												event.preventDefault();
+
 												event.currentTarget.form?.requestSubmit();
 											}
 										}}
