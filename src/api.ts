@@ -1,132 +1,219 @@
-export type AppState = {
-	appName: string;
-	appVersion: string;
-	state: string;
-};
+import { API_BASE, WS_BASE } from "./config";
 
-export type SysInfo = Record<string, unknown>;
+export type ConnectionState = "connected" | "connecting" | "disconnected";
 
-export type Preset = Record<string, unknown>;
+export interface AppState {
+	app_name: string;
+	version: string;
+	status: string;
+	uptime_seconds: number;
+}
 
-export type ModelsResponse = {
-	local: unknown[];
-	loaded: unknown[];
-	llamaRunning: boolean;
-};
+export interface SystemInfo {
+	os: string;
+	arch: string;
+	cpu: string;
+	cpu_count: number;
+	memory_total: number;
+	memory_available: number;
+	hostname: string;
+}
 
-export type Session = {
+export interface Preset {
 	id: string;
-	title?: string;
-	model?: string;
-	context?: Record<string, unknown>;
-	messages?: unknown[];
-};
-
-export type ToolInfo = {
 	name: string;
-	description: string;
-};
+	description?: string;
+	model?: string;
+	temperature?: number;
+	max_tokens?: number;
+}
 
-export type RunRequest = {
-	sessionId: string;
-	message: string;
-};
+export interface Model {
+	id: string;
+	name: string;
+	provider?: string;
+	path?: string;
+	size_bytes?: number;
+	loaded?: boolean;
+}
 
-const API_PREFIX = "/api";
+export interface Tool {
+	name: string;
+	description?: string;
+	enabled?: boolean;
+}
+
+export interface Session {
+	id: string;
+	title: string;
+	created_at: string;
+	updated_at: string;
+}
+
+export interface ActivityEvent {
+	id?: string;
+	type: string;
+	message?: string;
+	timestamp?: string;
+	session_id?: string;
+	data?: unknown;
+}
+
+export interface RunRequest {
+	session_id: string;
+	prompt: string;
+	model?: string;
+}
+
+export interface RunResponse {
+	run_id?: string;
+	session_id?: string;
+	status?: string;
+}
+
+export interface AbortResponse {
+	status?: string;
+}
 
 async function request<T>(
 	path: string,
 	init?: RequestInit,
 ): Promise<T> {
-	const response = await fetch(`${API_PREFIX}${path}`, {
+	const response = await fetch(`${API_BASE}${path}`, {
 		...init,
 		headers: {
-			"Content-Type": "application/json",
-			...(init?.headers ?? {}),
+			Accept: "application/json",
+			...(init?.body ? { "Content-Type": "application/json" } : {}),
+			...init?.headers,
 		},
 	});
 
 	if (!response.ok) {
-		let message = `Request failed with HTTP ${response.status}`;
+		const body = await response.text();
+		throw new Error(
+			body || `Request failed with HTTP ${response.status}`,
+		);
+	}
 
-		try {
-			const body = (await response.json()) as {
-				error?: string;
-				message?: string;
-			};
-
-			message = body.error ?? body.message ?? message;
-		} catch {
-			// Keep the HTTP fallback message.
-		}
-
-		throw new Error(message);
+	if (response.status === 204) {
+		return undefined as T;
 	}
 
 	return (await response.json()) as T;
 }
 
-export const api = {
-	state(): Promise<AppState> {
-		return request<AppState>("/state");
-	},
+export function getState(): Promise<AppState> {
+	return request<AppState>("/state");
+}
 
-	sysinfo(): Promise<SysInfo> {
-		return request<SysInfo>("/sysinfo");
-	},
+export function getSystemInfo(): Promise<SystemInfo> {
+	return request<SystemInfo>("/sysinfo");
+}
 
-	presets(): Promise<Preset[]> {
-		return request<Preset[]>("/presets");
-	},
+export function getPresets(): Promise<Preset[]> {
+	return request<Preset[]>("/presets");
+}
 
-	models(): Promise<ModelsResponse> {
-		return request<ModelsResponse>("/models");
-	},
+export function getModels(): Promise<Model[]> {
+	return request<Model[]>("/models");
+}
 
-	sessions(): Promise<Session[]> {
-		return request<Session[]>("/sessions");
-	},
+export function getTools(): Promise<Tool[]> {
+	return request<Tool[]>("/tools");
+}
 
-	session(id: string): Promise<Session> {
-		return request<Session>(`/sessions/${encodeURIComponent(id)}`);
-	},
+export function getSessions(): Promise<Session[]> {
+	return request<Session[]>("/sessions");
+}
 
-	createSession(): Promise<Session> {
-		return request<Session>("/sessions", {
-			method: "POST",
-			body: JSON.stringify({}),
+export function createSession(title = "New Session"): Promise<Session> {
+	return request<Session>("/sessions", {
+		method: "POST",
+		body: JSON.stringify({ title }),
+	});
+}
+
+export function deleteSession(id: string): Promise<void> {
+	return request<void>(`/sessions/${encodeURIComponent(id)}`, {
+		method: "DELETE",
+	});
+}
+
+export function runAgent(payload: RunRequest): Promise<RunResponse> {
+	return request<RunResponse>("/run", {
+		method: "POST",
+		body: JSON.stringify(payload),
+	});
+}
+
+export function abortAgent(runId?: string): Promise<AbortResponse> {
+	return request<AbortResponse>("/abort", {
+		method: "POST",
+		body: JSON.stringify(runId ? { run_id: runId } : {}),
+	});
+}
+
+export function connectActivity(
+	onEvent: (event: ActivityEvent) => void,
+	onStateChange?: (state: ConnectionState) => void,
+): () => void {
+	let socket: WebSocket | undefined;
+	let stopped = false;
+	let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+
+	const connect = () => {
+		if (stopped) {
+			return;
+		}
+
+		onStateChange?.("connecting");
+
+		socket = new WebSocket(`${WS_BASE}/activity`);
+
+		socket.addEventListener("open", () => {
+			onStateChange?.("connected");
 		});
-	},
 
-	deleteSession(id: string): Promise<{ ok: boolean }> {
-		return request<{ ok: boolean }>(
-			`/sessions/${encodeURIComponent(id)}`,
-			{
-				method: "DELETE",
-			},
-		);
-	},
-
-	tools(): Promise<ToolInfo[]> {
-		return request<ToolInfo[]>("/tools");
-	},
-
-	run(payload: RunRequest): Promise<unknown> {
-		return request<unknown>("/run", {
-			method: "POST",
-			body: JSON.stringify(payload),
+		socket.addEventListener("message", (message) => {
+			try {
+				const event = JSON.parse(message.data) as ActivityEvent;
+				onEvent(event);
+			} catch {
+				onEvent({
+					type: "message",
+					message: String(message.data),
+				});
+			}
 		});
-	},
 
-	abort(): Promise<unknown> {
-		return request<unknown>("/abort", {
-			method: "POST",
-			body: JSON.stringify({}),
+		socket.addEventListener("close", () => {
+			socket = undefined;
+
+			if (stopped) {
+				onStateChange?.("disconnected");
+				return;
+			}
+
+			onStateChange?.("disconnected");
+
+			reconnectTimer = setTimeout(connect, 1500);
 		});
-	},
-};
 
-export function activityWebSocketURL(): string {
-	const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-	return `${protocol}//${window.location.host}/ws/activity`;
+		socket.addEventListener("error", () => {
+			onStateChange?.("disconnected");
+		});
+	};
+
+	connect();
+
+	return () => {
+		stopped = true;
+
+		if (reconnectTimer !== undefined) {
+			clearTimeout(reconnectTimer);
+		}
+
+		socket?.close();
+		socket = undefined;
+	};
 }
