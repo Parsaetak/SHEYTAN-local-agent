@@ -150,28 +150,49 @@ export interface LabCommand {
 }
 
 export interface LabCommandResult {
-	command?: string;
-	exitCode?: number;
-	output?: string;
-	error?: string;
-	startedAt?: string;
-	finishedAt?: string;
-	duration?: number;
+	command: string;
+	workingDir: string;
+	stdout: string;
+	stderr: string;
+	output: string;
+	exitCode: number;
+	duration: number;
+	startedAt: string;
+	finishedAt: string;
+	timedOut: boolean;
+	canceled: boolean;
+	outputLimit: boolean;
+	success: boolean;
 }
 
+export type LabVerificationStatus =
+	| "passed"
+	| "failed"
+	| "canceled"
+	| "skipped";
+
 export interface LabVerificationResult {
-	name?: string;
-	passed?: boolean;
-	result?: LabCommandResult;
+	name: string;
+	status: LabVerificationStatus;
+	result: LabCommandResult;
 	error?: string;
+	startedAt: string;
+	finishedAt: string;
 }
 
 export interface LabVerificationSummary {
 	passed: boolean;
-	results?: LabVerificationResult[];
-	startedAt?: string;
-	finishedAt?: string;
-	duration?: number;
+	requiredTotal: number;
+	requiredPassed: number;
+	requiredFailed: number;
+	optionalTotal: number;
+	optionalPassed: number;
+	optionalFailed: number;
+	results: LabVerificationResult[];
+	duration: number;
+	startedAt: string;
+	finishedAt: string;
+	error?: string;
 }
 
 export type LabTaskStatus =
