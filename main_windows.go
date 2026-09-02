@@ -3,13 +3,18 @@
 package main
 
 import (
-	"github.com/sheytan/local-agent/internal/ui"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/desktop"
 )
 
 func init() {
-	// On Windows with no subcommand, launch the native desktop GUI.
+	// On Windows with no subcommand, launch the single native Wails window.
 	runDefault = func() int {
-		ui.RunDesktop()
-		return 0
+		cfg, err := config.Load(config.DefaultPath())
+		if err != nil {
+			return 1
+		}
+
+		return desktop.Run(cfg)
 	}
 }
