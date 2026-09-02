@@ -62,15 +62,7 @@ func ResolvePath(p string) string {
 }
 
 // ResolvePathChecked resolves p and guarantees that the resulting path stays
-// inside BaseDir().
-//
-// Absolute paths are rejected unless they are already inside BaseDir().
-// Relative paths are resolved beneath BaseDir(). Home-directory expansion
-// is deliberately not supported because "~" can otherwise escape the tool
-// jail.
-//
-// This function is the security boundary for the generic filesystem-facing
-// tools.
+// inside BaseDir(), including through existing symlinks.
 func ResolvePathChecked(p string) (string, error) {
 	p = strings.TrimSpace(p)
 
@@ -90,9 +82,7 @@ func ResolvePathChecked(p string) (string, error) {
 
 	baseAbs = filepath.Clean(baseAbs)
 
-	// Normalize Windows separators before validation so ../ and ..\ are
-	// treated identically.
-	normalized := strings.ReplaceAll(p, "\\", string(filepath.Separator))
+	normalized := normalizePathSeparators(p)
 
 	// Reject tilde expansion rather than silently reaching outside the base.
 	if normalized == "~" ||
@@ -100,11 +90,9 @@ func ResolvePathChecked(p string) (string, error) {
 		return "", ErrPathOutsideBase
 	}
 
-	var candidate string
+	candidate := normalized
 
-	if filepath.IsAbs(normalized) {
-		candidate = normalized
-	} else {
+	if !filepath.IsAbs(normalized) {
 		candidate = filepath.Join(baseAbs, normalized)
 	}
 
@@ -117,6 +105,51 @@ func ResolvePathChecked(p string) (string, error) {
 
 	if !pathWithinBase(candidateAbs, baseAbs) {
 		return "", ErrPathOutsideBase
+	}
+
+	// Resolve the real base where possible. This prevents a symlinked
+	// BaseDir itself from becoming an escape hatch.
+	realBase, err := existingRealPath(baseAbs)
+	if err != nil {
+		return "", err
+	}
+
+	// Validate the complete existing portion of the candidate path. This
+	// catches:
+	//
+	//   base/link/file
+	//
+	// when "link" points outside BaseDir, even if "file" does not exist yet.
+	realExistingPrefix, err := resolveExistingPrefix(candidateAbs)
+	if err != nil {
+		return "", err
+	}
+
+	if !pathWithinBase(realExistingPrefix, realBase) {
+		return "", ErrPathOutsideBase
+	}
+
+	// When the final path already exists, resolve it completely as a
+	// defense-in-depth check for a final symlink target.
+	if _, statErr := os.Lstat(candidateAbs); statErr == nil {
+		realCandidate, evalErr := filepath.EvalSymlinks(candidateAbs)
+		if evalErr != nil {
+			return "", evalErr
+		}
+
+		realCandidateAbs, absErr := filepath.Abs(realCandidate)
+		if absErr != nil {
+			return "", absErr
+		}
+
+		if !pathWithinBase(
+			filepath.Clean(realCandidateAbs),
+			realBase,
+		) {
+			return "", ErrPathOutsideBase
+		}
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return "", statErr
 	}
 
 	return candidateAbs, nil
@@ -144,7 +177,7 @@ func ResolvePathWithinBase(base, p string) (string, error) {
 
 	baseAbs = filepath.Clean(baseAbs)
 
-	normalized := strings.ReplaceAll(p, "\\", string(filepath.Separator))
+	normalized := normalizePathSeparators(p)
 
 	if normalized == "~" ||
 		strings.HasPrefix(normalized, "~"+string(filepath.Separator)) {
@@ -168,6 +201,41 @@ func ResolvePathWithinBase(base, p string) (string, error) {
 
 	if !pathWithinBase(candidateAbs, baseAbs) {
 		return "", ErrPathOutsideBase
+	}
+
+	realBase, err := existingRealPath(baseAbs)
+	if err != nil {
+		return "", err
+	}
+
+	realExistingPrefix, err := resolveExistingPrefix(candidateAbs)
+	if err != nil {
+		return "", err
+	}
+
+	if !pathWithinBase(realExistingPrefix, realBase) {
+		return "", ErrPathOutsideBase
+	}
+
+	if _, statErr := os.Lstat(candidateAbs); statErr == nil {
+		realCandidate, evalErr := filepath.EvalSymlinks(candidateAbs)
+		if evalErr != nil {
+			return "", evalErr
+		}
+
+		realCandidateAbs, absErr := filepath.Abs(realCandidate)
+		if absErr != nil {
+			return "", absErr
+		}
+
+		if !pathWithinBase(
+			filepath.Clean(realCandidateAbs),
+			realBase,
+		) {
+			return "", ErrPathOutsideBase
+		}
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return "", statErr
 	}
 
 	return candidateAbs, nil
@@ -198,6 +266,87 @@ func pathWithinBase(path, base string) bool {
 		)
 }
 
+// normalizePathSeparators converts Windows-style separators before path
+// validation. This makes traversal attempts behave consistently across
+// platforms.
+func normalizePathSeparators(p string) string {
+	return strings.ReplaceAll(
+		p,
+		"\\",
+		string(filepath.Separator),
+	)
+}
+
+// existingRealPath resolves a path through symlinks when it exists.
+// The unresolved lexical path is retained only when the path itself does
+// not exist yet.
+func existingRealPath(path string) (string, error) {
+	real, err := filepath.EvalSymlinks(path)
+	if err == nil {
+		abs, absErr := filepath.Abs(real)
+		if absErr != nil {
+			return "", absErr
+		}
+
+		return filepath.Clean(abs), nil
+	}
+
+	if errors.Is(err, os.ErrNotExist) {
+		abs, absErr := filepath.Abs(path)
+		if absErr != nil {
+			return "", absErr
+		}
+
+		return filepath.Clean(abs), nil
+	}
+
+	return "", err
+}
+
+// resolveExistingPrefix finds the nearest existing ancestor of path and
+// resolves all symlinks in that ancestor. The remaining non-existent suffix
+// is intentionally ignored for containment purposes.
+//
+// Example:
+//
+//   base/link/new.txt
+//
+// If base/link is a symlink to /outside, the returned prefix is /outside and
+// containment fails before anything can be created there.
+func resolveExistingPrefix(path string) (string, error) {
+	current := filepath.Clean(path)
+
+	for {
+		_, err := os.Lstat(current)
+
+		if err == nil {
+			real, evalErr := filepath.EvalSymlinks(current)
+			if evalErr != nil {
+				return "", evalErr
+			}
+
+			abs, absErr := filepath.Abs(real)
+			if absErr != nil {
+				return "", absErr
+			}
+
+			return filepath.Clean(abs), nil
+		}
+
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", err
+		}
+
+		parent := filepath.Dir(current)
+
+		if parent == current {
+			return "", ErrPathOutsideBase
+		}
+
+		current = parent
+	}
+}
+
 // SafeJoin is a convenience wrapper for code that needs to construct a path
 // from several user-controlled relative components while retaining the same
 // jail guarantee.
@@ -215,44 +364,14 @@ func SafeJoin(parts ...string) (string, error) {
 	return ResolvePathWithinBase(base, joined)
 }
 
-// SafeExistingPath resolves a path and verifies that the final filesystem
-// object still remains inside the canonical base.
-//
-// Symlink targets are checked as well when the target exists, preventing a
-// seemingly safe path such as "logs/current" from escaping through a symlink.
+// SafeExistingPath resolves a path and verifies that the filesystem object
+// remains inside the canonical base, including intermediate symlinks.
 func SafeExistingPath(p string) (string, error) {
-	resolved, err := ResolvePathChecked(p)
-	if err != nil {
-		return "", err
-	}
-
-	info, statErr := os.Lstat(resolved)
-	if statErr != nil {
-		if errors.Is(statErr, os.ErrNotExist) {
-			// The path itself is still safe even when it does not exist yet.
-			return resolved, nil
-		}
-
-		return "", statErr
-	}
-
-	if info.Mode()&os.ModeSymlink != 0 {
-		target, err := filepath.EvalSymlinks(resolved)
-		if err != nil {
-			return "", err
-		}
-
-		if !pathWithinBase(target, BaseDir()) {
-			return "", ErrPathOutsideBase
-		}
-	}
-
-	return resolved, nil
+	return ResolvePathChecked(p)
 }
 
 // UnsafeAbsolutePath reports whether p is an absolute filesystem path outside
-// the canonical tool base. It is intentionally small so existing tools can
-// use it when deciding whether an explicitly supplied destination is safe.
+// the canonical tool base.
 func UnsafeAbsolutePath(p string) bool {
 	p = strings.TrimSpace(p)
 
