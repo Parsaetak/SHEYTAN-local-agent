@@ -32,7 +32,7 @@ import (
         "sync"
         "time"
 
-        "github.com/sheytan/local-agent/internal/llm"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
 )
 
 // Context carries per-session user settings: the system prompt override,
