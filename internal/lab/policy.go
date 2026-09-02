@@ -468,7 +468,7 @@ func containsNetworkTokens(tokens []shellToken) bool {
 		}
 
 		if name == "npm" &&
-			hasSubcommand(words, "install", "-") {
+			hasSubcommand(words, "install") {
 			return true
 		}
 
