@@ -1574,8 +1574,16 @@ func TestServiceSearchErrorWrapping(t *testing.T) {
 	}
 }
 
-func TestServiceImplementsProvider(t *testing.T) {
-	var _ Provider = (*Service)(nil)
+func TestServiceDoesNotRequireProviderIdentity(t *testing.T) {
+	service := NewService(ServiceConfig{})
+
+	if service == nil {
+		t.Fatal("expected service")
+	}
+
+	if service.Backend() != BackendAuto {
+		t.Fatalf("expected default backend %q, got %q", BackendAuto, service.Backend())
+	}
 }
 
 func TestServiceSearchNormalizesRequestedQuery(t *testing.T) {
