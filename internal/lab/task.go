@@ -89,13 +89,15 @@ func NewTaskManager(
 		Workspaces:      workspaces,
 		Runner:          runner,
 		Policy:          policy,
-		KeepWorkspaces:  keepWorkspaces,
+		KeepWorkspaces: keepWorkspaces,
 	}, nil
 }
 
 // NewTask creates a pending task.
 //
-// The source repository is copied only when Start is called.
+// The definitive runtime ID is assigned when Start creates the isolated
+// workspace. The workspace manager already uses a cryptographically random
+// identifier, and that identifier becomes the task/session identifier too.
 func (m *TaskManager) NewTask(title, description string) *Task {
 	now := time.Now().UTC()
 
@@ -143,6 +145,11 @@ func (m *TaskManager) Start(
 		task.Error = err.Error()
 		return err
 	}
+
+	// Workspace IDs are the authoritative random runtime IDs. Reuse the exact
+	// same value for Task/session correlation instead of maintaining two
+	// independent identifiers.
+	task.ID = workspace.ID
 
 	now := time.Now().UTC()
 
