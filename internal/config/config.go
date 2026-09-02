@@ -16,8 +16,9 @@ import (
 )
 
 const (
-	AppName    = "SHEYTAN-Local-Agent"
-	AppVersion = "Zeta"
+	AppName     = "SHEYTAN-Local-Agent"
+	AppVersion  = "1.1.0"
+	AppCodename = "Zeta"
 )
 
 // Provider kinds.
@@ -314,15 +315,15 @@ func Default() *Config {
 		LabAllowNetwork:      false,
 
 		// Version Zeta — research defaults.
-		ResearchEnabled:      true,
-		ResearchBackend:      "auto",
-		ResearchMaxResults:  8,
-		ResearchTimeoutSec:   20,
+		ResearchEnabled:    true,
+		ResearchBackend:    "auto",
+		ResearchMaxResults: 8,
+		ResearchTimeoutSec: 20,
 		ResearchCacheTTLMin: 60,
-		ResearchGitHub:      true,
-		ResearchReddit:      true,
-		ResearchWeb:         true,
-		ResearchUserAgent:   "SHEYTAN-Local-Agent/Version-Zeta",
+		ResearchGitHub:     true,
+		ResearchReddit:     true,
+		ResearchWeb:        true,
+		ResearchUserAgent:  AppName + "/" + AppVersion,
 	}
 }
 
@@ -363,7 +364,7 @@ func Load(path string) (*Config, error) {
 		cfg.LabWorkspaceRoot = filepath.Join(cfg.DataDir, "lab", "workspaces")
 	}
 	if cfg.ResearchUserAgent == "" {
-		cfg.ResearchUserAgent = "SHEYTAN-Local-Agent/Version-Zeta"
+		cfg.ResearchUserAgent = AppName + "/" + AppVersion
 	}
 
 	applyEnv(cfg)
@@ -1052,7 +1053,7 @@ func (c *Config) EffectiveResearchCacheTTL() time.Duration {
 // EffectiveResearchUserAgent returns the configured research User-Agent.
 func (c *Config) EffectiveResearchUserAgent() string {
 	if strings.TrimSpace(c.ResearchUserAgent) == "" {
-		return "SHEYTAN-Local-Agent/Version-Zeta"
+		return AppName + "/" + AppVersion
 	}
 	return c.ResearchUserAgent
 }
