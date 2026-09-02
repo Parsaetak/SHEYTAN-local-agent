@@ -1,0 +1,521 @@
+package research
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+)
+
+const (
+	BackendAuto       = "auto"
+	BackendGitHub     = "github"
+	BackendReddit     = "reddit"
+	BackendWeb        = "web"
+	BackendSearXNG     = "searxng"
+	BackendDuckDuckGo = "duckduckgo"
+)
+
+// ServiceConfig controls the unified research service.
+type ServiceConfig struct {
+	Backend    string
+	MaxResults int
+	Timeout    time.Duration
+}
+
+// DefaultServiceConfig returns conservative Version Zeta research defaults.
+func DefaultServiceConfig() ServiceConfig {
+	return ServiceConfig{
+		Backend:    BackendAuto,
+		MaxResults: 8,
+		Timeout:    20 * time.Second,
+	}
+}
+
+// Service is the unified research orchestration layer.
+//
+// Providers are registered independently so GitHub, Reddit, SearXNG,
+// DuckDuckGo, and future web providers can share one stable interface.
+type Service struct {
+	mu         sync.RWMutex
+	providers  map[string]Provider
+	backend    string
+	maxResults int
+	timeout    time.Duration
+}
+
+// NewService constructs a research service from the supplied configuration.
+func NewService(cfg ServiceConfig) *Service {
+	defaults := DefaultServiceConfig()
+
+	backend := strings.ToLower(strings.TrimSpace(cfg.Backend))
+	if backend == "" {
+		backend = defaults.Backend
+	}
+
+	maxResults := cfg.MaxResults
+	if maxResults <= 0 {
+		maxResults = defaults.MaxResults
+	}
+	if maxResults > 50 {
+		maxResults = 50
+	}
+
+	timeout := cfg.Timeout
+	if timeout <= 0 {
+		timeout = defaults.Timeout
+	}
+
+	return &Service{
+		providers:  make(map[string]Provider),
+		backend:    backend,
+		maxResults: maxResults,
+		timeout:    timeout,
+	}
+}
+
+// Register adds or replaces a provider by its canonical name.
+func (s *Service) Register(provider Provider) error {
+	if provider == nil {
+		return fmt.Errorf("%w: nil provider", ErrProviderUnavailable)
+	}
+
+	name := strings.ToLower(strings.TrimSpace(provider.Name()))
+	if name == "" {
+		return fmt.Errorf("%w: provider name is empty", ErrProviderUnavailable)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.providers[name] = provider
+
+	return nil
+}
+
+// Unregister removes a provider from the service.
+func (s *Service) Unregister(name string) {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" {
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	delete(s.providers, name)
+}
+
+// Provider returns a registered provider by name.
+func (s *Service) Provider(name string) (Provider, bool) {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" {
+		return nil, false
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	provider, ok := s.providers[name]
+	return provider, ok
+}
+
+// ProviderNames returns all registered providers in deterministic order.
+func (s *Service) ProviderNames() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	names := make([]string, 0, len(s.providers))
+
+	for name := range s.providers {
+		names = append(names, name)
+	}
+
+	sort.Strings(names)
+
+	return names
+}
+
+// SetBackend changes the active routing mode.
+//
+// "auto" enables bounded multi-provider research.
+// Any other value selects one registered provider explicitly.
+func (s *Service) SetBackend(backend string) error {
+	backend = strings.ToLower(strings.TrimSpace(backend))
+	if backend == "" {
+		backend = BackendAuto
+	}
+
+	if backend != BackendAuto {
+		s.mu.RLock()
+		_, exists := s.providers[backend]
+		s.mu.RUnlock()
+
+		if !exists {
+			return fmt.Errorf(
+				"%w: provider %q is not registered",
+				ErrProviderUnavailable,
+				backend,
+			)
+		}
+	}
+
+	s.mu.Lock()
+	s.backend = backend
+	s.mu.Unlock()
+
+	return nil
+}
+
+// Backend returns the current routing mode.
+func (s *Service) Backend() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return s.backend
+}
+
+// Search executes one unified research operation.
+//
+// Explicit backends use exactly one provider.
+// Auto mode queries all currently registered providers concurrently and
+// combines their successful results. Provider failures do not discard
+// successful findings from other providers.
+func (s *Service) Search(ctx context.Context, req SearchRequest) (SearchResponse, error) {
+	req = req.Normalize()
+
+	if err := req.Validate(); err != nil {
+		return SearchResponse{}, err
+	}
+
+	s.mu.RLock()
+	backend := s.backend
+	defaultMaxResults := s.maxResults
+	timeout := s.timeout
+	providers := make(map[string]Provider, len(s.providers))
+
+	for name, provider := range s.providers {
+		providers[name] = provider
+	}
+
+	s.mu.RUnlock()
+
+	maxResults := req.MaxResults
+	if maxResults <= 0 {
+		maxResults = defaultMaxResults
+	}
+	if maxResults > 50 {
+		maxResults = 50
+	}
+
+	req.MaxResults = maxResults
+
+	if backend != BackendAuto {
+		provider, ok := providers[backend]
+		if !ok {
+			return SearchResponse{}, fmt.Errorf(
+				"%w: provider %q is not registered",
+				ErrProviderUnavailable,
+				backend,
+			)
+		}
+
+		return s.searchProvider(ctx, provider, req, timeout)
+	}
+
+	return s.searchAuto(ctx, providers, req, timeout)
+}
+
+func (s *Service) searchProvider(
+	ctx context.Context,
+	provider Provider,
+	req SearchRequest,
+	timeout time.Duration,
+) (SearchResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	started := time.Now()
+
+	response, err := provider.Search(ctx, req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return SearchResponse{}, ctx.Err()
+		}
+
+		return response, err
+	}
+
+	response = NormalizeResponse(response)
+	response.Provider = provider.Name()
+	response.Duration = time.Since(started)
+
+	if err := response.Validate(); err != nil {
+		return response, err
+	}
+
+	return response, nil
+}
+
+type providerSearchResult struct {
+	name     string
+	response SearchResponse
+	err      error
+}
+
+func (s *Service) searchAuto(
+	ctx context.Context,
+	providers map[string]Provider,
+	req SearchRequest,
+	timeout time.Duration,
+) (SearchResponse, error) {
+	started := time.Now()
+
+	if len(providers) == 0 {
+		return SearchResponse{
+			Provider: BackendAuto,
+			Query:    req.Query,
+			Duration: time.Since(started),
+		}, fmt.Errorf(
+			"%w: no research providers are registered",
+			ErrProviderUnavailable,
+		)
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	names := make([]string, 0, len(providers))
+
+	for name := range providers {
+		names = append(names, name)
+	}
+
+	sort.Strings(names)
+
+	resultsCh := make(chan providerSearchResult, len(names))
+
+	var wg sync.WaitGroup
+
+	for _, name := range names {
+		name := name
+		provider := providers[name]
+
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			response, err := provider.Search(
+				ctx,
+				req,
+			)
+
+			resultsCh <- providerSearchResult{
+				name:     name,
+				response: response,
+				err:      err,
+			}
+		}()
+	}
+
+	wg.Wait()
+	close(resultsCh)
+
+	type collectedResult struct {
+		result Result
+	}
+
+	allResults := make([]collectedResult, 0)
+
+	var providerErrors []error
+	var successfulProviders int
+
+	for providerResult := range resultsCh {
+		if providerResult.err != nil {
+			if !errors.Is(providerResult.err, ErrNoResults) &&
+				!errors.Is(providerResult.err, context.Canceled) &&
+				!errors.Is(providerResult.err, context.DeadlineExceeded) {
+				providerErrors = append(
+					providerErrors,
+					fmt.Errorf(
+						"%s: %w",
+						providerResult.name,
+						providerResult.err,
+					),
+				)
+			}
+
+			continue
+		}
+
+		response := NormalizeResponse(providerResult.response)
+
+		if len(response.Results) == 0 {
+			continue
+		}
+
+		successfulProviders++
+
+		for _, result := range response.Results {
+			allResults = append(
+				allResults,
+				collectedResult{
+					result: NormalizeResult(result, providerResult.name),
+				},
+			)
+		}
+	}
+
+	merged := mergeResearchResults(allResults, req.MaxResults)
+
+	response := SearchResponse{
+		Provider: BackendAuto,
+		Query:    req.Query,
+		Results:  merged,
+		Duration: time.Since(started),
+	}
+
+	if len(response.Results) > 0 {
+		response = NormalizeResponse(response)
+		return response, nil
+	}
+
+	if ctx.Err() != nil {
+		return response, ctx.Err()
+	}
+
+	if successfulProviders == 0 && len(providerErrors) > 0 {
+		return response, fmt.Errorf(
+			"%w: all providers failed: %v",
+			ErrProviderUnavailable,
+			errors.Join(providerErrors...),
+		)
+	}
+
+	return response, ErrNoResults
+}
+
+func mergeResearchResults(
+	input []struct {
+		result Result
+	},
+	maxResults int,
+) []Result {
+	if len(input) == 0 {
+		return nil
+	}
+
+	type rankedResult struct {
+		result Result
+		index  int
+	}
+
+	ranked := make([]rankedResult, 0, len(input))
+
+	for index, item := range input {
+		ranked = append(
+			ranked,
+			rankedResult{
+				result: NormalizeResult(item.result, item.result.Provider),
+				index:  index,
+			},
+		)
+	}
+
+	sort.SliceStable(ranked, func(i, j int) bool {
+		left := ranked[i].result
+		right := ranked[j].result
+
+		leftScore := combinedResearchScore(left)
+		rightScore := combinedResearchScore(right)
+
+		if leftScore != rightScore {
+			return leftScore > rightScore
+		}
+
+		leftAuthority := left.Authority.Rank()
+		rightAuthority := right.Authority.Rank()
+
+		if leftAuthority != rightAuthority {
+			return leftAuthority > rightAuthority
+		}
+
+		leftPublished := left.PublishedAt
+		rightPublished := right.PublishedAt
+
+		if !leftPublished.Equal(rightPublished) {
+			return leftPublished.After(rightPublished)
+		}
+
+		leftURL := left.URL
+		rightURL := right.URL
+
+		if leftURL != rightURL {
+			return leftURL < rightURL
+		}
+
+		return ranked[i].index < ranked[j].index
+	})
+
+	seen := make(map[string]struct{}, len(ranked))
+	results := make([]Result, 0, minInt(maxResults, len(ranked)))
+
+	for _, item := range ranked {
+		result := NormalizeResult(item.result, item.result.Provider)
+
+		key := result.ContentHash
+		if key == "" {
+			key = strings.ToLower(strings.TrimSpace(result.URL))
+		}
+		if key == "" {
+			key = strings.ToLower(
+				strings.TrimSpace(result.Title + "\x00" + result.Snippet),
+			)
+		}
+
+		if key == "" {
+			continue
+		}
+
+		if _, exists := seen[key]; exists {
+			continue
+		}
+
+		seen[key] = struct{}{}
+		results = append(results, result)
+
+		if len(results) >= maxResults {
+			break
+		}
+	}
+
+	return results
+}
+
+func combinedResearchScore(result Result) float64 {
+	match := result.MatchScore
+	if match < 0 {
+		match = 0
+	}
+	if match > 1 {
+		match = 1
+	}
+
+	authority := result.Authority.Rank()
+
+	// Relevance is intentionally weighted more heavily than authority.
+	// Authority remains an important secondary signal.
+	return (match * 0.70) + (authority * 0.30)
+}
+
+func minInt(left, right int) int {
+	if left < right {
+		return left
+	}
+
+	return right
+} 
