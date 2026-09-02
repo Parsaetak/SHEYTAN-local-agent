@@ -122,21 +122,10 @@ func (t *Tool) Run(
 	}
 
 	request.Query = strings.TrimSpace(request.Query)
+	request.Backend = strings.TrimSpace(request.Backend)
 
 	if request.Query == "" {
 		return "", ErrInvalidQuery
-	}
-
-	originalBackend := t.Service.Backend()
-
-	if strings.TrimSpace(request.Backend) != "" {
-		if err := t.Service.SetBackend(request.Backend); err != nil {
-			return "", err
-		}
-
-		defer func() {
-			_ = t.Service.SetBackend(originalBackend)
-		}()
 	}
 
 	searchContext := ctx
@@ -152,8 +141,9 @@ func (t *Tool) Run(
 		defer cancel()
 	}
 
-	response, err := t.Service.Search(
+	response, err := t.Service.SearchWithBackend(
 		searchContext,
+		request.Backend,
 		SearchRequest{
 			Query:      request.Query,
 			MaxResults: request.MaxResults,
@@ -191,9 +181,9 @@ type researchRequest struct {
 }
 
 type researchParameters struct {
-	Type       string                         `json:"type"`
-	Properties map[string]researchParameter   `json:"properties"`
-	Required   []string                       `json:"required"`
+	Type       string                       `json:"type"`
+	Properties map[string]researchParameter `json:"properties"`
+	Required   []string                     `json:"required"`
 }
 
 type researchParameter struct {
@@ -203,12 +193,12 @@ type researchParameter struct {
 }
 
 type researchToolResponse struct {
-	OK       bool            `json:"ok"`
-	Provider string          `json:"provider"`
-	Query    string          `json:"query"`
-	Duration time.Duration   `json:"duration"`
+	OK       bool                 `json:"ok"`
+	Provider string               `json:"provider"`
+	Query    string               `json:"query"`
+	Duration time.Duration        `json:"duration"`
 	Results  []researchToolResult `json:"results"`
-	Error    string          `json:"error,omitempty"`
+	Error    string               `json:"error,omitempty"`
 }
 
 type researchToolResult struct {
