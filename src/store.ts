@@ -92,9 +92,16 @@ type RuntimeState = {
 	clearActivity: () => void;
 };
 
+const MAX_ACTIVITY_EVENTS = 500;
+
 let socket: WebSocket | null = null;
 let activitySequence = 0;
 let activitySessionId: string | null = null;
+
+let activityFlushFrame: number | null = null;
+let pendingActivity: ActivityEvent[] = [];
+let flushingActivity: ActivityEvent[] = [];
+let pendingRunning: boolean | undefined;
 
 function createActivityID(): string {
 	activitySequence += 1;
@@ -164,6 +171,125 @@ function resolveActiveSessionID(
 	}
 
 	return sessions[0]?.id ?? null;
+}
+
+function resetPendingActivity(): void {
+	if (activityFlushFrame !== null) {
+		cancelAnimationFrame(
+			activityFlushFrame,
+		);
+
+		activityFlushFrame = null;
+	}
+
+	pendingActivity.length = 0;
+	flushingActivity.length = 0;
+	pendingRunning = undefined;
+}
+
+function flushActivity(): void {
+	activityFlushFrame = null;
+
+	if (
+		pendingActivity.length === 0 &&
+		pendingRunning === undefined
+	) {
+		return;
+	}
+
+	const batch = pendingActivity;
+
+	pendingActivity = flushingActivity;
+	flushingActivity = batch;
+
+	const running = pendingRunning;
+	pendingRunning = undefined;
+
+	if (
+		!activitySessionId ||
+		activitySessionId !==
+			useRuntimeStore.getState()
+				.activeSessionId
+	) {
+		flushingActivity.length = 0;
+
+		return;
+	}
+
+	setActivityBatch(
+		batch,
+		running,
+	);
+
+	batch.length = 0;
+}
+
+function scheduleActivityFlush(): void {
+	if (activityFlushFrame !== null) {
+		return;
+	}
+
+	activityFlushFrame =
+		requestAnimationFrame(
+			flushActivity,
+		);
+}
+
+function queueActivity(
+	activity: ActivityEvent,
+): void {
+	pendingActivity.push(activity);
+
+	const running = activity.data.running;
+
+	if (typeof running === "boolean") {
+		pendingRunning = running;
+	}
+
+	scheduleActivityFlush();
+}
+
+function setActivityBatch(
+	batch: ActivityEvent[],
+	running: boolean | undefined,
+): void {
+	useRuntimeStore.setState((state) => {
+		let activity = state.activity;
+
+		if (batch.length > 0) {
+			if (batch.length >= MAX_ACTIVITY_EVENTS) {
+				activity = batch.slice(-MAX_ACTIVITY_EVENTS);
+			} else if (
+				state.activity.length + batch.length <=
+				MAX_ACTIVITY_EVENTS
+			) {
+				activity = [
+					...state.activity,
+					...batch,
+				];
+			} else {
+				const keep =
+					MAX_ACTIVITY_EVENTS -
+					batch.length;
+
+				activity = [
+					...state.activity.slice(-keep),
+					...batch,
+				];
+			}
+		}
+
+		if (running === undefined) {
+			return {
+				activity,
+			};
+		}
+
+		return {
+			activity,
+			running,
+		};
+	});
 }
 
 export const useRuntimeStore =
@@ -376,7 +502,9 @@ export const useRuntimeStore =
 
 			try {
 				const activeLabTask =
-					await api.labTask(taskId);
+					await api.labTask(
+						taskId,
+					);
 
 				set({
 					activeLabTask,
@@ -658,6 +786,8 @@ export const useRuntimeStore =
 				return;
 			}
 
+			resetPendingActivity();
+
 			if (socket) {
 				socket.close();
 				socket = null;
@@ -709,38 +839,11 @@ export const useRuntimeStore =
 							event.data,
 						) as APIActivityEvent;
 
-					const activity =
+					queueActivity(
 						normalizeActivity(
 							payload,
-						);
-
-					set((state) => ({
-						activity:
-							state.activity
-								.length >=
-								500
-								? [
-										...state.activity.slice(
-											-499,
-										),
-										activity,
-									]
-								: [
-										...state.activity,
-										activity,
-									],
-						running:
-							typeof activity
-								.data
-								.running ===
-							"boolean"
-								? Boolean(
-										activity
-											.data
-											.running,
-									)
-								: state.running,
-					}));
+						),
+					);
 				} catch {
 					// Ignore malformed activity frames.
 				}
@@ -781,6 +884,8 @@ export const useRuntimeStore =
 		disconnectActivity: () => {
 			activitySessionId = null;
 
+			resetPendingActivity();
+
 			if (socket) {
 				socket.close();
 				socket = null;
@@ -792,6 +897,8 @@ export const useRuntimeStore =
 		},
 
 		clearActivity: () => {
+			resetPendingActivity();
+
 			set({
 				activity: [],
 			});
