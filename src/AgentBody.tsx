@@ -114,11 +114,17 @@ function AgentBody() {
 	useEffect(() => {
 		let cancelled = false;
 
-		void initializeAgent().then(() => {
-			if (!cancelled) {
-				connectActivity();
-			}
-		});
+		void initializeAgent()
+			.then(() => {
+				if (!cancelled) {
+					connectActivity();
+				}
+			})
+			.catch(() => {
+				// The initialization routine
+				// already records the error
+				// in the runtime store.
+			});
 
 		return () => {
 			cancelled = true;
@@ -436,7 +442,9 @@ function AgentBody() {
 						</div>
 
 						<div className="session-detail">
-							<span>MODEL</span>
+							<span>
+								MODEL
+							</span>
 
 							<strong>
 								{activeSession?.model ||
@@ -556,7 +564,9 @@ function AgentBody() {
 					className="error-banner"
 					role="alert"
 				>
-					<span>{error}</span>
+					<span>
+						{error}
+					</span>
 				</div>
 			) : null}
 		</>
