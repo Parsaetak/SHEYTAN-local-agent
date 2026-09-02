@@ -1,10 +1,3 @@
-// Package lab contains the autonomous coding-laboratory runtime.
-//
-// runner.go provides the process-execution layer used by the Coding Lab.
-// It deliberately does not decide whether a command is permitted; command
-// policy belongs to the policy layer. The runner's responsibility is to
-// execute a permitted command inside a validated workspace and return a
-// bounded, structured result.
 package lab
 
 import (
@@ -16,13 +9,22 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 )
 
+// Package lab contains the autonomous coding-laboratory runtime.
+//
+// runner.go provides the process-execution layer used by the Coding Lab.
+// It deliberately does not decide whether a command is permitted; command
+// policy belongs to the policy layer. The runner's responsibility is to
+// execute a permitted command inside a validated workspace and return a
+// bounded, structured result.
+
 var (
-	ErrCommandEmpty = errors.New("lab: command is empty")
-	ErrOutputLimit  = errors.New("lab: command output exceeded configured limit")
-	ErrCommandTimedOut = errors.New("lab: command timed out")
+	ErrCommandEmpty     = errors.New("lab: command is empty")
+	ErrOutputLimit      = errors.New("lab: command output exceeded configured limit")
+	ErrCommandTimedOut  = errors.New("lab: command timed out")
 )
 
 // Command describes one process execution requested by the Coding Lab.
@@ -66,7 +68,7 @@ type CommandResult struct {
 
 // Runner executes commands inside Coding Lab workspaces.
 type Runner struct {
-	DefaultTimeout      time.Duration
+	DefaultTimeout       time.Duration
 	DefaultMaxOutputBytes int64
 }
 
@@ -84,13 +86,17 @@ func NewRunner(timeout time.Duration, maxOutputBytes int64) *Runner {
 	}
 
 	return &Runner{
-		DefaultTimeout:       timeout,
+		DefaultTimeout:        timeout,
 		DefaultMaxOutputBytes: maxOutputBytes,
 	}
 }
 
 // Run executes one command inside the given workspace.
-func (r *Runner) Run(ctx context.Context, workspace *Workspace, command Command) (CommandResult, error) {
+func (r *Runner) Run(
+	ctx context.Context,
+	workspace *Workspace,
+	command Command,
+) (CommandResult, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -100,19 +106,29 @@ func (r *Runner) Run(ctx context.Context, workspace *Workspace, command Command)
 	}
 
 	command.Command = strings.TrimSpace(command.Command)
+
 	if command.Command == "" {
 		return CommandResult{}, ErrCommandEmpty
 	}
 
 	workingDir, err := workspace.PathFor(command.WorkingDir)
 	if err != nil {
-		return CommandResult{}, fmt.Errorf("lab: resolve command working directory: %w", err)
+		return CommandResult{}, fmt.Errorf(
+			"lab: resolve command working directory: %w",
+			err,
+		)
 	}
 
 	if info, statErr := os.Stat(workingDir); statErr != nil {
-		return CommandResult{}, fmt.Errorf("lab: stat command working directory: %w", statErr)
+		return CommandResult{}, fmt.Errorf(
+			"lab: stat command working directory: %w",
+			statErr,
+		)
 	} else if !info.IsDir() {
-		return CommandResult{}, fmt.Errorf("lab: command working directory is not a directory: %s", workingDir)
+		return CommandResult{}, fmt.Errorf(
+			"lab: command working directory is not a directory: %s",
+			workingDir,
+		)
 	}
 
 	timeout := command.Timeout
@@ -125,33 +141,43 @@ func (r *Runner) Run(ctx context.Context, workspace *Workspace, command Command)
 		maxOutput = r.defaultMaxOutputBytes()
 	}
 
+	if maxOutput <= 0 {
+		maxOutput = 2 * 1024 * 1024
+	}
+
 	runCtx := ctx
 	cancel := func() {}
+
 	if timeout > 0 {
 		runCtx, cancel = context.WithTimeout(ctx, timeout)
 	}
 	defer cancel()
 
 	cmd := buildShellCommand(runCtx, command.Command)
-
 	cmd.Dir = workingDir
 
 	env := os.Environ()
+
 	if len(command.Environment) > 0 {
 		env = mergeEnvironment(env, command.Environment)
 	}
+
 	cmd.Env = env
 
-	// Make command execution deterministic for tooling that checks terminal
-	// behavior. stdin is intentionally disconnected: autonomous runs should
-	// not hang waiting for interactive input.
+	// stdin is intentionally disconnected: autonomous runs must never hang
+	// waiting for interactive input.
 	cmd.Stdin = nil
 
+	// stdout and stderr share ONE output budget. This makes MaxOutputBytes a
+	// true combined output limit rather than an independent limit per stream.
+	budget := newOutputBudget(maxOutput)
+
 	stdoutBuffer := &boundedBuffer{
-		Limit: maxOutput,
+		budget: budget,
 	}
+
 	stderrBuffer := &boundedBuffer{
-		Limit: maxOutput,
+		budget: budget,
 	}
 
 	cmd.Stdout = stdoutBuffer
@@ -162,28 +188,39 @@ func (r *Runner) Run(ctx context.Context, workspace *Workspace, command Command)
 	startErr := cmd.Start()
 	if startErr != nil {
 		finished := time.Now().UTC()
+
 		result := buildCommandResult(
 			command,
 			workingDir,
 			stdoutBuffer.String(),
 			stderrBuffer.String(),
-			stdoutBuffer.Truncated || stderrBuffer.Truncated,
+			budget.Exceeded(),
 			started,
 			finished,
 			startErr,
 			false,
 			false,
 		)
-		return result, fmt.Errorf("lab: start command: %w", startErr)
+
+		return result, fmt.Errorf(
+			"lab: start command: %w",
+			startErr,
+		)
 	}
 
 	waitErr := cmd.Wait()
 	finished := time.Now().UTC()
 
-	timedOut := errors.Is(runCtx.Err(), context.DeadlineExceeded)
-	canceled := !timedOut && errors.Is(runCtx.Err(), context.Canceled)
+	timedOut := errors.Is(
+		runCtx.Err(),
+		context.DeadlineExceeded,
+	)
+	canceled := !timedOut && errors.Is(
+		runCtx.Err(),
+		context.Canceled,
+	)
 
-	outputLimited := stdoutBuffer.Truncated || stderrBuffer.Truncated
+	outputLimited := budget.Exceeded()
 
 	result := buildCommandResult(
 		command,
@@ -200,38 +237,55 @@ func (r *Runner) Run(ctx context.Context, workspace *Workspace, command Command)
 
 	if timedOut {
 		if outputLimited {
-			return result, errors.Join(ErrCommandTimedOut, ErrOutputLimit)
+			return result, errors.Join(
+				ErrCommandTimedOut,
+				ErrOutputLimit,
+			)
 		}
+
 		return result, ErrCommandTimedOut
 	}
 
 	if canceled {
 		if outputLimited {
-			return result, errors.Join(context.Canceled, ErrOutputLimit)
+			return result, errors.Join(
+				context.Canceled,
+				ErrOutputLimit,
+			)
 		}
+
 		return result, context.Canceled
 	}
 
 	if outputLimited {
 		if waitErr != nil {
-			return result, errors.Join(waitErr, ErrOutputLimit)
+			return result, errors.Join(
+				waitErr,
+				ErrOutputLimit,
+			)
 		}
+
 		return result, ErrOutputLimit
 	}
 
 	if waitErr != nil {
-		return result, fmt.Errorf("lab: command failed: %w", waitErr)
+		return result, fmt.Errorf(
+			"lab: command failed: %w",
+			waitErr,
+		)
 	}
 
 	return result, nil
 }
 
-func buildShellCommand(ctx context.Context, command string) *exec.Cmd {
+func buildShellCommand(
+	ctx context.Context,
+	command string,
+) *exec.Cmd {
 	switch runtime.GOOS {
 	case "windows":
-		// cmd.exe is deliberately used instead of PowerShell so the command
-		// syntax stays predictable for common build/test tooling and matches
-		// the user's normal Windows terminal environment.
+		// cmd.exe is deliberately used instead of PowerShell so command syntax
+		// stays predictable for common Windows build/test tooling.
 		return exec.CommandContext(
 			ctx,
 			"cmd.exe",
@@ -240,9 +294,10 @@ func buildShellCommand(ctx context.Context, command string) *exec.Cmd {
 			"/c",
 			command,
 		)
+
 	default:
-		// `sh -lc` provides shell pipelines, redirection, &&, environment
-		// expansion, and other standard Unix build-tool behavior.
+		// sh -lc provides pipelines, redirection, &&, environment expansion,
+		// and other standard Unix build-tool behavior.
 		return exec.CommandContext(
 			ctx,
 			"/bin/sh",
@@ -252,7 +307,10 @@ func buildShellCommand(ctx context.Context, command string) *exec.Cmd {
 	}
 }
 
-func mergeEnvironment(base, extra []string) []string {
+func mergeEnvironment(
+	base,
+	extra []string,
+) []string {
 	if len(extra) == 0 {
 		return base
 	}
@@ -261,6 +319,7 @@ func mergeEnvironment(base, extra []string) []string {
 
 	for i, item := range base {
 		key := envKey(item)
+
 		if key != "" {
 			index[key] = i
 		}
@@ -270,6 +329,7 @@ func mergeEnvironment(base, extra []string) []string {
 
 	for _, item := range extra {
 		key := envKey(item)
+
 		if key == "" {
 			continue
 		}
@@ -288,6 +348,7 @@ func mergeEnvironment(base, extra []string) []string {
 
 func envKey(value string) string {
 	index := strings.IndexByte(value, '=')
+
 	if index <= 0 {
 		return ""
 	}
@@ -308,7 +369,12 @@ func buildCommandResult(
 	canceled bool,
 ) CommandResult {
 	exitCode := 0
-	success := runErr == nil && !timedOut && !canceled && !outputLimited
+
+	success :=
+		runErr == nil &&
+		!timedOut &&
+		!canceled &&
+		!outputLimited
 
 	if runErr != nil {
 		exitCode = exitCodeFromError(runErr)
@@ -318,7 +384,7 @@ func buildCommandResult(
 
 	return CommandResult{
 		Command:     command.Command,
-		WorkingDir:  workingDir,
+		WorkingDir: workingDir,
 		Stdout:      stdout,
 		Stderr:      stderr,
 		Output:      output,
@@ -339,6 +405,7 @@ func exitCodeFromError(err error) int {
 	}
 
 	var exitErr *exec.ExitError
+
 	if errors.As(err, &exitErr) {
 		return exitErr.ExitCode()
 	}
@@ -350,27 +417,82 @@ func combineOutput(stdout, stderr string) string {
 	switch {
 	case stdout == "":
 		return stderr
+
 	case stderr == "":
 		return stdout
+
 	default:
 		var b strings.Builder
+
 		b.Grow(len(stdout) + len(stderr) + 16)
 		b.WriteString("[stdout]\n")
 		b.WriteString(stdout)
 		b.WriteString("\n[stderr]\n")
 		b.WriteString(stderr)
+
 		return b.String()
 	}
 }
 
-// boundedBuffer captures at most Limit bytes.
-//
-// Once the limit is reached, additional bytes are discarded and Truncated is
-// set. The implementation deliberately preserves the beginning of output,
-// because compiler/test diagnostics usually explain the root cause near the
-// start of the stream.
+// outputBudget provides one thread-safe byte budget shared by stdout and
+// stderr. cmd.Wait may receive output from both pipes concurrently.
+type outputBudget struct {
+	mu        sync.Mutex
+	remaining int64
+	exceeded  bool
+}
+
+func newOutputBudget(limit int64) *outputBudget {
+	if limit <= 0 {
+		limit = 2 * 1024 * 1024
+	}
+
+	return &outputBudget{
+		remaining: limit,
+	}
+}
+
+// reserve grants up to len(p) bytes from the shared budget.
+func (b *outputBudget) reserve(length int) int {
+	if b == nil || length <= 0 {
+		return 0
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.remaining <= 0 {
+		b.exceeded = true
+		return 0
+	}
+
+	allowed := int64(length)
+
+	if allowed > b.remaining {
+		allowed = b.remaining
+		b.exceeded = true
+	}
+
+	b.remaining -= allowed
+
+	return int(allowed)
+}
+
+func (b *outputBudget) Exceeded() bool {
+	if b == nil {
+		return false
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	return b.exceeded
+}
+
+// boundedBuffer captures bytes from one output stream while using the shared
+// process output budget.
 type boundedBuffer struct {
-	Limit     int64
+	budget    *outputBudget
 	Written   int64
 	Truncated bool
 	buffer    bytes.Buffer
@@ -381,34 +503,30 @@ func (b *boundedBuffer) Write(p []byte) (int, error) {
 		return len(p), nil
 	}
 
-	if b.Limit <= 0 {
+	if len(p) == 0 {
+		return 0, nil
+	}
+
+	allowed := b.budget.reserve(len(p))
+
+	if allowed <= 0 {
 		b.Truncated = true
 		return len(p), nil
 	}
 
-	remaining := b.Limit - b.Written
-
-	if remaining <= 0 {
-		b.Truncated = true
-		return len(p), nil
-	}
-
-	if int64(len(p)) <= remaining {
-		n, err := b.buffer.Write(p)
-		b.Written += int64(n)
-		return n, err
-	}
-
-	n, err := b.buffer.Write(p[:remaining])
+	n, err := b.buffer.Write(p[:allowed])
 	b.Written += int64(n)
-	b.Truncated = true
+
+	if allowed < len(p) {
+		b.Truncated = true
+	}
 
 	if err != nil {
 		return n, err
 	}
 
-	// Returning len(p) tells os/exec that the writer intentionally consumed
-	// the input even though only the bounded prefix was retained.
+	// Returning len(p) tells os/exec the writer consumed the complete input
+	// even though only the bounded prefix was retained.
 	return len(p), nil
 }
 
@@ -424,6 +542,7 @@ func (b *boundedBuffer) String() string {
 	}
 
 	const marker = "\n\n[LAB OUTPUT TRUNCATED]\n"
+
 	return value + marker
 }
 
@@ -431,6 +550,7 @@ func (r *Runner) defaultTimeout() time.Duration {
 	if r == nil || r.DefaultTimeout <= 0 {
 		return 5 * time.Minute
 	}
+
 	return r.DefaultTimeout
 }
 
@@ -438,5 +558,6 @@ func (r *Runner) defaultMaxOutputBytes() int64 {
 	if r == nil || r.DefaultMaxOutputBytes <= 0 {
 		return 2 * 1024 * 1024
 	}
+
 	return r.DefaultMaxOutputBytes
 }
