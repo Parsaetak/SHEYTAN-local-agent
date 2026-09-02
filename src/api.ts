@@ -276,21 +276,15 @@ async function request<T>(
 	init?: RequestInit,
 	timeoutMs = DEFAULT_TIMEOUT_MS,
 ): Promise<T> {
-	const controller =
-		new AbortController();
-
+	const controller = new AbortController();
 	let timeoutTriggered = false;
 
-	const timeout = window.setTimeout(
-		() => {
-			timeoutTriggered = true;
-			controller.abort();
-		},
-		timeoutMs,
-	);
+	const timeout = window.setTimeout(() => {
+		timeoutTriggered = true;
+		controller.abort();
+	}, timeoutMs);
 
-	const callerSignal =
-		init?.signal;
+	const callerSignal = init?.signal;
 
 	const abortFromCaller = () => {
 		controller.abort();
@@ -309,44 +303,34 @@ async function request<T>(
 	}
 
 	try {
-		const response = await fetch(
-			`${API_BASE}${path}`,
-			{
-				...init,
-				signal: controller.signal,
-				headers: {
-					Accept:
-						"application/json",
-					...(init?.body
-						? {
-								"Content-Type":
-									"application/json",
-							}
-						: {}),
-					...init?.headers,
-				},
+		const response = await fetch(`${API_BASE}${path}`, {
+			...init,
+			signal: controller.signal,
+			headers: {
+				Accept: "application/json",
+				...(init?.body
+					? {
+							"Content-Type": "application/json",
+						}
+					: {}),
+				...init?.headers,
 			},
-		);
+		});
 
 		if (!response.ok) {
-			const body =
-				await response.text();
-
+			const body = await response.text();
 			let message = body;
 
 			try {
-				const parsed =
-					JSON.parse(body) as {
-						error?: string;
-					};
+				const parsed = JSON.parse(body) as {
+					error?: string;
+				};
 
 				if (
-					typeof parsed.error ===
-						"string" &&
+					typeof parsed.error === "string" &&
 					parsed.error.trim()
 				) {
-					message =
-						parsed.error;
+					message = parsed.error;
 				}
 			} catch {
 				// Preserve the raw response body.
@@ -410,9 +394,7 @@ export const api = {
 		return request<Session[]>("/sessions");
 	},
 
-	session(
-		id: string,
-	): Promise<Session> {
+	session(id: string): Promise<Session> {
 		return request<Session>(
 			`/sessions/${encodeURIComponent(id)}`,
 		);
@@ -424,9 +406,7 @@ export const api = {
 		});
 	},
 
-	deleteSession(
-		id: string,
-	): Promise<void> {
+	deleteSession(id: string): Promise<void> {
 		return request<void>(
 			`/sessions/${encodeURIComponent(id)}`,
 			{
@@ -435,33 +415,24 @@ export const api = {
 		);
 	},
 
-	run(
-		payload: RunRequest,
-	): Promise<RunResponse> {
+	run(payload: RunRequest): Promise<RunResponse> {
 		return request<RunResponse>(
 			"/run",
 			{
 				method: "POST",
-				body: JSON.stringify(
-					payload,
-				),
+				body: JSON.stringify(payload),
 			},
 			LONG_OPERATION_TIMEOUT_MS,
 		);
 	},
 
-	abort(
-		sessionId: string,
-	): Promise<AbortResponse> {
-		return request<AbortResponse>(
-			"/abort",
-			{
-				method: "POST",
-				body: JSON.stringify({
-					sessionId,
-				}),
-			},
-		);
+	abort(sessionId: string): Promise<AbortResponse> {
+		return request<AbortResponse>("/abort", {
+			method: "POST",
+			body: JSON.stringify({
+				sessionId,
+			}),
+		});
 	},
 
 	updateSession(
@@ -480,22 +451,16 @@ export const api = {
 			`/sessions/${encodeURIComponent(id)}`,
 			{
 				method: "PUT",
-				body: JSON.stringify(
-					payload,
-				),
+				body: JSON.stringify(payload),
 			},
 		);
 	},
 
 	lab(): Promise<LabListResponse> {
-		return request<LabListResponse>(
-			"/lab",
-		);
+		return request<LabListResponse>("/lab");
 	},
 
-	labTask(
-		id: string,
-	): Promise<LabTaskSessionSnapshot> {
+	labTask(id: string): Promise<LabTaskSessionSnapshot> {
 		return request<LabTaskSessionSnapshot>(
 			`/lab/${encodeURIComponent(id)}`,
 		);
@@ -508,35 +473,27 @@ export const api = {
 			"/lab",
 			{
 				method: "POST",
-				body: JSON.stringify(
-					payload,
-				),
+				body: JSON.stringify(payload),
 			},
 			LONG_OPERATION_TIMEOUT_MS,
 		);
 	},
 
 	researchConfig(): Promise<ResearchConfig> {
-		return request<ResearchConfig>(
-			"/research",
-		);
+		return request<ResearchConfig>("/research");
 	},
 
-	research(
-		payload: {
-			query: string;
-			backend?: string;
-			maxResults?: number;
-			timeoutSec?: number;
-		},
-	): Promise<ResearchResponse> {
+	research(payload: {
+		query: string;
+		backend?: string;
+		maxResults?: number;
+		timeoutSec?: number;
+	}): Promise<ResearchResponse> {
 		return request<ResearchResponse>(
 			"/research",
 			{
 				method: "POST",
-				body: JSON.stringify(
-					payload,
-				),
+				body: JSON.stringify(payload),
 			},
 			RESEARCH_TIMEOUT_MS,
 		);
@@ -571,9 +528,7 @@ export function createSession(): Promise<Session> {
 	return api.createSession();
 }
 
-export function deleteSession(
-	id: string,
-): Promise<void> {
+export function deleteSession(id: string): Promise<void> {
 	return api.deleteSession(id);
 }
 
@@ -591,16 +546,12 @@ export function abortAgent(
 
 export function connectActivity(
 	onEvent: (event: ActivityEvent) => void,
-	onStateChange?: (
-		state: ConnectionState,
-	) => void,
+	onStateChange?: (state: ConnectionState) => void,
 	sessionId?: string | null,
 ): () => void {
 	let socket: WebSocket | undefined;
 	let stopped = false;
-	let reconnectTimer:
-		| ReturnType<typeof setTimeout>
-		| undefined;
+	let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 
 	const connect = () => {
 		if (stopped) {
@@ -610,73 +561,44 @@ export function connectActivity(
 		onStateChange?.("connecting");
 
 		socket = new WebSocket(
-			activityWebSocketURL(
-				sessionId,
-			),
+			activityWebSocketURL(sessionId),
 		);
 
-		socket.addEventListener(
-			"open",
-			() => {
-				onStateChange?.(
-					"connected",
-				);
-			},
-		);
+		socket.addEventListener("open", () => {
+			onStateChange?.("connected");
+		});
 
-		socket.addEventListener(
-			"message",
-			(message) => {
-				try {
-					const event =
-						JSON.parse(
-							message.data,
-						) as ActivityEvent;
+		socket.addEventListener("message", (message) => {
+			try {
+				const event = JSON.parse(
+					message.data,
+				) as ActivityEvent;
 
-					onEvent(event);
-				} catch {
-					onEvent({
-						type: "message",
-						message: String(
-							message.data,
-						),
-					});
-				}
-			},
-		);
+				onEvent(event);
+			} catch {
+				onEvent({
+					type: "message",
+					message: String(message.data),
+				});
+			}
+		});
 
-		socket.addEventListener(
-			"close",
-			() => {
-				socket = undefined;
+		socket.addEventListener("close", () => {
+			socket = undefined;
 
-				if (stopped) {
-					onStateChange?.(
-						"disconnected",
-					);
-					return;
-				}
+			if (stopped) {
+				onStateChange?.("disconnected");
+				return;
+			}
 
-				onStateChange?.(
-					"disconnected",
-				);
+			onStateChange?.("disconnected");
 
-				reconnectTimer =
-					setTimeout(
-						connect,
-						1500,
-					);
-			},
-		);
+			reconnectTimer = setTimeout(connect, 1500);
+		});
 
-		socket.addEventListener(
-			"error",
-			() => {
-				onStateChange?.(
-					"disconnected",
-				);
-			},
-		);
+		socket.addEventListener("error", () => {
+			onStateChange?.("disconnected");
+		});
 	};
 
 	connect();
@@ -684,13 +606,8 @@ export function connectActivity(
 	return () => {
 		stopped = true;
 
-		if (
-			reconnectTimer !==
-			undefined
-		) {
-			clearTimeout(
-				reconnectTimer,
-			);
+		if (reconnectTimer !== undefined) {
+			clearTimeout(reconnectTimer);
 		}
 
 		socket?.close();
