@@ -22,9 +22,9 @@ import (
         "time"
         "unicode/utf8"
 
-        "github.com/sheytan/local-agent/internal/logging"
-        "github.com/sheytan/local-agent/internal/netcheck"
-        "github.com/sheytan/local-agent/internal/proc"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/logging"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/netcheck"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/proc"
 )
 
 // OnFileCreated is the optional v1.0.4 artifact hook: the GUI installs a
@@ -49,46 +49,80 @@ func (Shell) Parameters() any {
         }{}
 }
 func (Shell) Run(ctx context.Context, args json.RawMessage) (string, error) {
-        var p struct {
-                Command string `json:"command"`
-                Cwd     string `json:"cwd"`
-                Timeout int    `json:"timeout"`
-        }
-        if err := json.Unmarshal(args, &p); err != nil {
-                return "", fmt.Errorf("bad args: %w", err)
-        }
-        if p.Command == "" {
-                return "", fmt.Errorf("command is required")
-        }
-        timeout := 60
-        if p.Timeout > 0 {
-                timeout = p.Timeout
-        }
-        cctx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
-        defer cancel()
+	var p struct {
+		Command string `json:"command"`
+		Cwd     string `json:"cwd"`
+		Timeout int    `json:"timeout"`
+	}
 
-        var cmd *exec.Cmd
-        if runtime.GOOS == "windows" {
-                // v1.0.4: hidden console — cmd.exe would otherwise flash a
-                // terminal window for every shell tool call.
-                cmd = proc.CommandContext(cctx, "cmd", "/c", p.Command)
-        } else {
-                cmd = proc.CommandContext(cctx, "bash", "-c", p.Command)
-        }
-        if p.Cwd != "" {
-                cmd.Dir = ResolvePath(p.Cwd)
-        } else {
-                // Canonical base = the app folder, so relative paths mean the
-                // same thing here as in the files/dataAnalysis tools.
-                if base := BaseDir(); base != "" {
-                        cmd.Dir = base
-                }
-        }
-        out, err := cmd.CombinedOutput()
-        if err != nil && cctx.Err() == context.DeadlineExceeded {
-                return string(out) + "\n[timeout]", nil
-        }
-        return string(out), err
+	if err := json.Unmarshal(args, &p); err != nil {
+		return "", fmt.Errorf("bad args: %w", err)
+	}
+
+	p.Command = strings.TrimSpace(p.Command)
+
+	if p.Command == "" {
+		return "", fmt.Errorf("command is required")
+	}
+
+	timeout := 60
+
+	if p.Timeout > 0 {
+		timeout = p.Timeout
+	}
+
+	cctx, cancel := context.WithTimeout(
+		ctx,
+		time.Duration(timeout)*time.Second,
+	)
+	defer cancel()
+
+	var workingDir string
+
+	if strings.TrimSpace(p.Cwd) != "" {
+		resolved, err := ResolvePathChecked(p.Cwd)
+		if err != nil {
+			return "", fmt.Errorf("invalid cwd: %w", err)
+		}
+
+		workingDir = resolved
+	} else {
+		workingDir = BaseDir()
+
+		if workingDir == "" {
+			return "", ErrBaseDirUnset
+		}
+	}
+
+	var cmd *exec.Cmd
+
+	if runtime.GOOS == "windows" {
+		cmd = proc.CommandContext(
+			cctx,
+			"cmd",
+			"/d",
+			"/c",
+			p.Command,
+		)
+	} else {
+		cmd = proc.CommandContext(
+			cctx,
+			"bash",
+			"-c",
+			p.Command,
+		)
+	}
+
+	cmd.Dir = workingDir
+
+	out, err := cmd.CombinedOutput()
+
+	if err != nil &&
+		cctx.Err() == context.DeadlineExceeded {
+		return string(out) + "\n[timeout]", nil
+	}
+
+	return string(out), err
 }
 
 // --- Files (v2 — v1.0.9 TURBINE) ---
@@ -1016,27 +1050,144 @@ func (Git) Parameters() any {
         }{}
 }
 func (Git) Run(ctx context.Context, args json.RawMessage) (string, error) {
-        var p struct {
-                Repo string `json:"repo"`
-                Args string `json:"args"`
-        }
-        if err := json.Unmarshal(args, &p); err != nil {
-                return "", fmt.Errorf("bad args: %w", err)
-        }
-        if p.Args == "" {
-                return "", fmt.Errorf("args is required")
-        }
-        argList := strings.Fields(p.Args)
-        cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-        defer cancel()
-        cmd := proc.CommandContext(cctx, "git", argList...)
-        if p.Repo != "" {
-                cmd.Dir = ResolvePath(p.Repo)
-        } else if base := BaseDir(); base != "" {
-                cmd.Dir = base
-        }
-        out, err := cmd.CombinedOutput()
-        return string(out), err
+	var p struct {
+		Repo string `json:"repo"`
+		Args string `json:"args"`
+	}
+
+	if err := json.Unmarshal(args, &p); err != nil {
+		return "", fmt.Errorf("bad args: %w", err)
+	}
+
+	p.Repo = strings.TrimSpace(p.Repo)
+	p.Args = strings.TrimSpace(p.Args)
+
+	if p.Args == "" {
+		return "", fmt.Errorf("args is required")
+	}
+
+	argList := strings.Fields(p.Args)
+
+	if err := validateGitArgs(argList); err != nil {
+		return "", err
+	}
+
+	workingDir := BaseDir()
+
+	if workingDir == "" {
+		return "", ErrBaseDirUnset
+	}
+
+	if p.Repo != "" {
+		resolved, err := ResolvePathChecked(p.Repo)
+		if err != nil {
+			return "", fmt.Errorf("invalid repo: %w", err)
+		}
+
+		workingDir = resolved
+	}
+
+	cctx, cancel := context.WithTimeout(
+		ctx,
+		30*time.Second,
+	)
+	defer cancel()
+
+	cmd := proc.CommandContext(
+		cctx,
+		"git",
+		argList...,
+	)
+
+	cmd.Dir = workingDir
+
+	out, err := cmd.CombinedOutput()
+
+	if err != nil &&
+		cctx.Err() == context.DeadlineExceeded {
+		return string(out) + "\n[timeout]", nil
+	}
+
+	return string(out), err
+}
+
+func validateGitArgs(args []string) error {
+	for _, arg := range args {
+		token := strings.TrimSpace(arg)
+
+		if token == "" {
+			continue
+		}
+
+		lower := strings.ToLower(token)
+
+		// Git's -C option changes the working directory and therefore can
+		// bypass the repo jail.
+		if lower == "-c" {
+	                return fmt.Errorf(
+		                "git: -C is blocked because it can escape the repository jail",
+	                )
+                }
+
+		if lower == "--git-dir" ||
+			lower == "--work-tree" ||
+			lower == "--separate-git-dir" {
+			return fmt.Errorf(
+				"git: path-changing option %q is blocked",
+				token,
+			)
+		}
+
+		for _, prefix := range []string{
+			"-C=",
+			"--git-dir=",
+			"--work-tree=",
+			"--separate-git-dir=",
+			"gitdir:",
+		} {
+			if strings.HasPrefix(lower, prefix) {
+				return fmt.Errorf(
+					"git: path-changing option %q is blocked",
+					token,
+				)
+			}
+		}
+
+		normalized := normalizePathSeparators(token)
+
+		if filepath.IsAbs(normalized) {
+			return fmt.Errorf(
+				"git: absolute paths are blocked: %q",
+				token,
+			)
+		}
+
+		cleaned := filepath.Clean(normalized)
+
+		if cleaned == ".." ||
+			strings.HasPrefix(
+				cleaned,
+				".."+string(filepath.Separator),
+			) {
+			return fmt.Errorf(
+				"git: parent-directory traversal is blocked: %q",
+				token,
+			)
+		}
+
+		// Git's file:// transport can access arbitrary local paths despite
+		// the repository working directory being jailed.
+		if strings.HasPrefix(
+			lower,
+			"file://",
+		) {
+			return fmt.Errorf(
+				"git: file:// URLs are blocked",
+			)
+		}
+	}
+
+	return nil
 }
 
 // pythonBin resolves the Python interpreter across platforms
