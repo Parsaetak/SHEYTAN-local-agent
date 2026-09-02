@@ -1,4 +1,5 @@
 import {
+	type FormEvent,
 	useEffect,
 	useMemo,
 	useState,
@@ -285,6 +286,7 @@ function CommandHistory({
 					<span className="eyebrow">
 						EXECUTION
 					</span>
+
 					<strong>
 						Command history
 					</strong>
@@ -412,6 +414,7 @@ function VerificationPanel({
 							<span>
 								Required
 							</span>
+
 							<strong>
 								{
 									verification.requiredPassed
@@ -427,6 +430,7 @@ function VerificationPanel({
 							<span>
 								Required failed
 							</span>
+
 							<strong>
 								{
 									verification.requiredFailed
@@ -438,6 +442,7 @@ function VerificationPanel({
 							<span>
 								Optional
 							</span>
+
 							<strong>
 								{
 									verification.optionalPassed
@@ -453,6 +458,7 @@ function VerificationPanel({
 							<span>
 								Duration
 							</span>
+
 							<strong>
 								{formatDuration(
 									verification.duration,
@@ -507,6 +513,20 @@ function VerificationPanel({
 							),
 						)}
 					</div>
+
+					{verification.error ? (
+						<div className="lab-error">
+							<span className="eyebrow">
+								VERIFICATION ERROR
+							</span>
+
+							<p>
+								{
+									verification.error
+								}
+							</p>
+						</div>
+					) : null}
 				</>
 			) : (
 				<div className="lab-empty">
@@ -533,17 +553,22 @@ function LabActions({
 	const verified =
 		task.task.verificationPassed;
 
-	const canRun =
-		status === "running";
-
 	const canVerify =
 		status === "running";
 
 	const canPromote =
-		status === "running" && verified;
+		status === "running" &&
+		verified;
 
 	const canFinish =
-		status === "running" && verified;
+		status === "running" &&
+		verified;
+
+	const canCancel =
+		status === "running";
+
+	const canBlock =
+		status === "running";
 
 	const canClose =
 		status !== "pending" &&
@@ -564,24 +589,6 @@ function LabActions({
 			</div>
 
 			<div className="lab-actions">
-				<button
-					type="button"
-					className="secondary-button"
-					disabled={
-						loading || !canRun
-					}
-					onClick={() =>
-						void onAction(
-							actionPayload(
-								"run",
-								task.id,
-							),
-						)
-					}
-				>
-					Run
-				</button>
-
 				<button
 					type="button"
 					className="secondary-button"
@@ -644,7 +651,7 @@ function LabActions({
 					className="secondary-button"
 					disabled={
 						loading ||
-						status !== "running"
+						!canCancel
 					}
 					onClick={() =>
 						void onAction(
@@ -663,7 +670,7 @@ function LabActions({
 					className="secondary-button"
 					disabled={
 						loading ||
-						status !== "running"
+						!canBlock
 					}
 					onClick={() =>
 						void onAction(
@@ -719,7 +726,7 @@ function StartTaskForm({
 		useState("");
 
 	async function handleSubmit(
-		event: React.FormEvent<HTMLFormElement>,
+		event: FormEvent<HTMLFormElement>,
 	) {
 		event.preventDefault();
 
