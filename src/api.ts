@@ -267,55 +267,113 @@ export interface ResearchConfig {
 	providers: string[];
 }
 
+const REQUEST_TIMEOUT_MS = 15_000;
+
 async function request<T>(
 	path: string,
 	init?: RequestInit,
 ): Promise<T> {
-	const response = await fetch(`${API_BASE}${path}`, {
-		...init,
-		headers: {
-			Accept: "application/json",
-			...(init?.body
-				? {
-						"Content-Type":
-							"application/json",
-					}
-				: {}),
-			...init?.headers,
-		},
-	});
+	const controller = new AbortController();
 
-	if (!response.ok) {
-		const body = await response.text();
+	let timeoutTriggered = false;
 
-		let message = body;
+	const timeout = window.setTimeout(() => {
+		timeoutTriggered = true;
+		controller.abort();
+	}, REQUEST_TIMEOUT_MS);
 
-		try {
-			const parsed = JSON.parse(body) as {
-				error?: string;
-			};
+	const callerSignal =
+		init?.signal;
 
-			if (
-				typeof parsed.error === "string" &&
-				parsed.error.trim()
-			) {
-				message = parsed.error;
+	const abortFromCaller = () => {
+		controller.abort();
+	};
+
+	if (callerSignal) {
+		if (callerSignal.aborted) {
+			controller.abort();
+		} else {
+			callerSignal.addEventListener(
+				"abort",
+				abortFromCaller,
+				{ once: true },
+			);
+		}
+	}
+
+	try {
+		const response = await fetch(
+			`${API_BASE}${path}`,
+			{
+				...init,
+				signal: controller.signal,
+				headers: {
+					Accept:
+						"application/json",
+					...(init?.body
+						? {
+								"Content-Type":
+									"application/json",
+							}
+						: {}),
+					...init?.headers,
+				},
+			},
+		);
+
+		if (!response.ok) {
+			const body =
+				await response.text();
+
+			let message = body;
+
+			try {
+				const parsed =
+					JSON.parse(body) as {
+						error?: string;
+					};
+
+				if (
+					typeof parsed.error ===
+						"string" &&
+					parsed.error.trim()
+				) {
+					message =
+						parsed.error;
+				}
+			} catch {
+				// Preserve the raw response body.
 			}
-		} catch {
-			// Preserve the raw response body.
+
+			throw new Error(
+				message ||
+					`Request failed with HTTP ${response.status}`,
+			);
 		}
 
-		throw new Error(
-			message ||
-				`Request failed with HTTP ${response.status}`,
-		);
-	}
+		if (response.status === 204) {
+			return undefined as T;
+		}
 
-	if (response.status === 204) {
-		return undefined as T;
-	}
+		return (await response.json()) as T;
+	} catch (error) {
+		if (timeoutTriggered) {
+			throw new Error(
+				`Request timed out after ${REQUEST_TIMEOUT_MS / 1000} seconds.`,
+			);
+		}
 
-	return (await response.json()) as T;
+		throw error;
+	} finally {
+		window.clearTimeout(timeout);
+
+		if (callerSignal) {
+			callerSignal.removeEventListener(
+				"abort",
+				abortFromCaller,
+			);
+		}
+	}
 }
 
 export const api = {
@@ -364,20 +422,24 @@ export const api = {
 		);
 	},
 
-	run(payload: RunRequest): Promise<RunResponse> {
+	run(
+		payload: RunRequest,
+	): Promise<RunResponse> {
 		return request<RunResponse>("/run", {
 			method: "POST",
 			body: JSON.stringify(payload),
 		});
 	},
 
-	abort(sessionId: string): Promise<AbortResponse> {
+	abort(
+		sessionId: string,
+	): Promise<AbortResponse> {
 		return request<AbortResponse>("/abort", {
 			method: "POST",
 			body: JSON.stringify({
 				sessionId,
 			}),
-		);
+		});
 	},
 
 	updateSession(
@@ -405,7 +467,9 @@ export const api = {
 		return request<LabListResponse>("/lab");
 	},
 
-	labTask(id: string): Promise<LabTaskSessionSnapshot> {
+	labTask(
+		id: string,
+	): Promise<LabTaskSessionSnapshot> {
 		return request<LabTaskSessionSnapshot>(
 			`/lab/${encodeURIComponent(id)}`,
 		);
@@ -421,7 +485,9 @@ export const api = {
 	},
 
 	researchConfig(): Promise<ResearchConfig> {
-		return request<ResearchConfig>("/research");
+		return request<ResearchConfig>(
+			"/research",
+		);
 	},
 
 	research(
@@ -432,10 +498,13 @@ export const api = {
 			timeoutSec?: number;
 		},
 	): Promise<ResearchResponse> {
-		return request<ResearchResponse>("/research", {
-			method: "POST",
-			body: JSON.stringify(payload),
-		});
+		return request<ResearchResponse>(
+			"/research",
+			{
+				method: "POST",
+				body: JSON.stringify(payload),
+			},
+		);
 	},
 };
 
@@ -555,7 +624,9 @@ export function connectActivity(
 		});
 
 		socket.addEventListener("error", () => {
-			onStateChange?.("disconnected");
+			onStateChange?.(
+				"disconnected",
+			);
 		});
 	};
 
@@ -564,8 +635,13 @@ export function connectActivity(
 	return () => {
 		stopped = true;
 
-		if (reconnectTimer !== undefined) {
-			clearTimeout(reconnectTimer);
+		if (
+			reconnectTimer !==
+			undefined
+		) {
+			clearTimeout(
+				reconnectTimer,
+			);
 		}
 
 		socket?.close();
@@ -573,4 +649,7 @@ export function connectActivity(
 	};
 }
 
-export { API_BASE, WS_BASE };
+export {
+	API_BASE,
+	WS_BASE,
+};
