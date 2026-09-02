@@ -1,26 +1,65 @@
-import { api } from "./api";
+import {
+	api,
+	type Session,
+} from "./api";
 import { useRuntimeStore } from "./store";
 
-export async function initializeAgent(): Promise<void> {
-	const store = useRuntimeStore.getState();
+let initializationPromise:
+	| Promise<void>
+	| null = null;
 
+function resolveActiveSessionID(
+	sessions: Session[],
+	currentID: string | null,
+): string | null {
+	if (
+		currentID &&
+		sessions.some(
+			(session) =>
+				session.id === currentID,
+		)
+	) {
+		return currentID;
+	}
+
+	return sessions[0]?.id ?? null;
+}
+
+async function initializeAgentOnce(): Promise<void> {
 	useRuntimeStore.setState({
 		loading: true,
 		error: null,
 	});
 
 	try {
-		const [app] = await Promise.all([
+		const [
+			app,
+			sessions,
+		] = await Promise.all([
 			api.state(),
-			store.refreshSessions(),
+			api.sessions(),
 		]);
+
+		const current =
+			useRuntimeStore.getState()
+				.activeSessionId;
+
+		const activeSessionId =
+			resolveActiveSessionID(
+				sessions,
+				current,
+			);
 
 		useRuntimeStore.setState({
 			app,
+			sessions,
+			activeSessionId,
 			loading: false,
 		});
 
-		void store.refreshModels();
+		void useRuntimeStore
+			.getState()
+			.refreshModels();
 	} catch (error) {
 		useRuntimeStore.setState({
 			loading: false,
@@ -29,5 +68,23 @@ export async function initializeAgent(): Promise<void> {
 					? error.message
 					: "Failed to initialize Agent.",
 		});
+
+		throw error;
 	}
+}
+
+export function initializeAgent(): Promise<void> {
+	if (!initializationPromise) {
+		initializationPromise =
+			initializeAgentOnce().catch(
+				(error) => {
+					initializationPromise =
+						null;
+
+					throw error;
+				},
+			);
+	}
+
+	return initializationPromise;
 }
