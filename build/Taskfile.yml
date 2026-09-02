@@ -1,0 +1,56 @@
+version: "3"
+
+tasks:
+  default:
+    desc: Build the SHEYTAN Local Agent application
+    deps:
+      - frontend:build
+    cmds:
+      - wails3 build
+
+  frontend:install:
+    desc: Install frontend dependencies
+    dir: .
+    cmds:
+      - npm install
+
+  frontend:dev:
+    desc: Start the Vite development server
+    dir: .
+    cmds:
+      - npm run dev
+
+  frontend:build:
+    desc: Build and synchronize the React frontend
+    dir: .
+    cmds:
+      - npm run build
+
+  frontend:typecheck:
+    desc: Type-check the React frontend
+    dir: .
+    cmds:
+      - npm run typecheck
+
+  frontend:lint:
+    desc: Lint the React frontend
+    dir: .
+    cmds:
+      - npm run lint
+
+  frontend:format:
+    desc: Format the React frontend
+    dir: .
+    cmds:
+      - npm run format
+
+  frontend:format-check:
+    desc: Verify frontend formatting
+    dir: .
+    cmds:
+      - npm run format:check
+
+  dev:
+    desc: Run the native Wails development application
+    cmds:
+      - wails3 dev
