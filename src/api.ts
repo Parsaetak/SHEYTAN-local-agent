@@ -135,6 +135,117 @@ export type ConnectionState =
 	| "connecting"
 	| "disconnected";
 
+export interface LabWorkspace {
+	id: string;
+	source: string;
+	path: string;
+	createdAt: string;
+}
+
+export interface LabCommand {
+	command: string;
+	workingDir?: string;
+	timeout?: number;
+	maxOutputBytes?: number;
+}
+
+export interface LabCommandResult {
+	command?: string;
+	exitCode?: number;
+	output?: string;
+	error?: string;
+	startedAt?: string;
+	finishedAt?: string;
+	duration?: number;
+}
+
+export interface LabVerificationResult {
+	name?: string;
+	passed?: boolean;
+	result?: LabCommandResult;
+	error?: string;
+}
+
+export interface LabVerificationSummary {
+	passed: boolean;
+	results?: LabVerificationResult[];
+	startedAt?: string;
+	finishedAt?: string;
+	duration?: number;
+}
+
+export type LabTaskStatus =
+	| "pending"
+	| "running"
+	| "succeeded"
+	| "failed"
+	| "canceled"
+	| "blocked";
+
+export interface LabTaskSnapshot {
+	id: string;
+	title: string;
+	description: string;
+	status: LabTaskStatus;
+	workspace?: LabWorkspace;
+	commands?: LabCommand[];
+	results?: LabCommandResult[];
+	metadata?: Record<string, string>;
+	lastVerification?: LabVerificationSummary;
+	verificationPassed: boolean;
+	verifiedAt?: string;
+	createdAt: string;
+	startedAt?: string;
+	finishedAt?: string;
+	error?: string;
+}
+
+export interface LabTaskSessionSnapshot {
+	id: string;
+	createdAt: string;
+	updatedAt: string;
+	task: LabTaskSnapshot;
+}
+
+export interface LabListResponse {
+	tasks: LabTaskSessionSnapshot[];
+}
+
+export interface LabActionResponse {
+	ok: boolean;
+	result?: unknown;
+	error?: string;
+}
+
+export interface ResearchResult {
+	title: string;
+	url: string;
+	snippet?: string;
+	source: string;
+	provider: string;
+	publishedAt?: string;
+	authority: string;
+	matchScore: number;
+	contentHash?: string;
+	metadata?: Record<string, unknown>;
+}
+
+export interface ResearchResponse {
+	ok: boolean;
+	provider: string;
+	query: string;
+	duration: number;
+	results: ResearchResult[];
+	error?: string;
+	providers?: string[];
+	backend?: string;
+}
+
+export interface ResearchConfig {
+	backend: string;
+	providers: string[];
+}
+
 async function request<T>(
 	path: string,
 	init?: RequestInit,
@@ -267,6 +378,43 @@ export const api = {
 				body: JSON.stringify(payload),
 			},
 		);
+	},
+
+	lab(): Promise<LabListResponse> {
+		return request<LabListResponse>("/lab");
+	},
+
+	labTask(id: string): Promise<LabTaskSessionSnapshot> {
+		return request<LabTaskSessionSnapshot>(
+			`/lab/${encodeURIComponent(id)}`,
+		);
+	},
+
+	labAction(
+		payload: Record<string, unknown>,
+	): Promise<LabActionResponse> {
+		return request<LabActionResponse>("/lab", {
+			method: "POST",
+			body: JSON.stringify(payload),
+		});
+	},
+
+	researchConfig(): Promise<ResearchConfig> {
+		return request<ResearchConfig>("/research");
+	},
+
+	research(
+		payload: {
+			query: string;
+			backend?: string;
+			maxResults?: number;
+			timeoutSec?: number;
+		},
+	): Promise<ResearchResponse> {
+		return request<ResearchResponse>("/research", {
+			method: "POST",
+			body: JSON.stringify(payload),
+		});
 	},
 };
 
