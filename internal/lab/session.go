@@ -14,14 +14,39 @@ var (
 
 // Session owns one active Coding Lab task.
 //
-// A Session is the runtime handle used by the tool layer. The Task itself
-// remains the serializable state object; Session supplies synchronized access
-// to that state.
+// The registry mutex protects the collection of sessions. The per-session
+// mutex below protects operations that mutate the Task belonging to this
+// session, preventing concurrent run/verify/lifecycle operations from acting
+// on the same workspace at the same time.
 type Session struct {
 	ID        string
 	Task      *Task
 	CreatedAt time.Time
 	UpdatedAt time.Time
+
+	mu sync.Mutex
+}
+
+// Lock serializes mutation of this session's task.
+//
+// Callers must pair Lock with Unlock. The mutex is deliberately unexported;
+// the methods provide the only synchronization surface exposed to the tool
+// layer.
+func (s *Session) Lock() {
+	if s == nil {
+		return
+	}
+
+	s.mu.Lock()
+}
+
+// Unlock releases the session's task serialization lock.
+func (s *Session) Unlock() {
+	if s == nil {
+		return
+	}
+
+	s.mu.Unlock()
 }
 
 // SessionRegistry stores active Coding Lab sessions.
@@ -94,6 +119,10 @@ func (r *SessionRegistry) Get(taskID string) (*Session, error) {
 }
 
 // GetTask returns the active Task associated with a task ID.
+//
+// This method remains intentionally lock-free with respect to task execution.
+// Callers that mutate or inspect the task as part of a multi-step operation
+// should acquire the corresponding Session lock through Get + Lock.
 func (r *SessionRegistry) GetTask(taskID string) (*Task, error) {
 	session, err := r.Get(taskID)
 	if err != nil {
@@ -103,21 +132,54 @@ func (r *SessionRegistry) GetTask(taskID string) (*Task, error) {
 	return session.Task, nil
 }
 
+// WithTask serializes one complete task operation.
+//
+// The callback executes while the session mutex is held. This is the preferred
+// helper for tool-layer operations that need to perform multiple task state
+// transitions atomically.
+func (r *SessionRegistry) WithTask(
+	taskID string,
+	fn func(*Task) error,
+) error {
+	if r == nil {
+		return errors.New("lab: session registry is nil")
+	}
+
+	if fn == nil {
+		return errors.New("lab: session callback is nil")
+	}
+
+	session, err := r.Get(taskID)
+	if err != nil {
+		return err
+	}
+
+	session.Lock()
+	defer session.Unlock()
+
+	return fn(session.Task)
+}
+
 // Touch updates the session's activity timestamp.
 func (r *SessionRegistry) Touch(taskID string) error {
 	if r == nil {
 		return errors.New("lab: session registry is nil")
 	}
 
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
+	r.mu.RLock()
 	session, ok := r.sessions[taskID]
+	r.mu.RUnlock()
+
 	if !ok || session == nil {
 		return fmt.Errorf("%w: %s", ErrSessionNotFound, taskID)
 	}
 
+	session.Lock()
+	defer session.Unlock()
+
+	r.mu.Lock()
 	session.UpdatedAt = time.Now().UTC()
+	r.mu.Unlock()
 
 	return nil
 }
@@ -168,8 +230,7 @@ func (r *SessionRegistry) List() []*Session {
 			continue
 		}
 
-		copySession := *session
-		result = append(result, &copySession)
+		result = append(result, session)
 	}
 
 	return result
@@ -211,13 +272,26 @@ func (r *SessionRegistry) RemoveCompleted(taskID string) error {
 		return err
 	}
 
+	session.Lock()
+	defer session.Unlock()
+
 	if session.Task == nil {
 		return fmt.Errorf("%w: %s", ErrTaskNotFoundForCleanup(), taskID)
 	}
 
 	switch session.Task.Status {
 	case TaskSucceeded, TaskFailed, TaskCanceled, TaskBlocked:
-		return r.Delete(taskID)
+		r.mu.Lock()
+		defer r.mu.Unlock()
+
+		if _, ok := r.sessions[taskID]; !ok {
+			return fmt.Errorf("%w: %s", ErrSessionNotFound, taskID)
+		}
+
+		delete(r.sessions, taskID)
+
+		return nil
+
 	default:
 		return fmt.Errorf(
 			"lab: task %q is still active with status %s",
