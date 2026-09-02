@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/sheytan/local-agent/internal/config"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
 )
 
 // Tool exposes the Coding Lab through the orchestrator's generic tool system.
@@ -99,13 +101,16 @@ Lifecycle:
 1. start_task
 2. run one or more commands
 3. verify the project
-4. finish only after successful verification
-5. close when retained workspace cleanup is required
+4. export_patch and/or promote explicitly
+5. finish only after successful verification and promotion
+6. close when retained workspace cleanup is required
 
 Available actions:
 - start_task
 - run
 - verify
+- export_patch
+- promote
 - finish
 - fail
 - cancel
@@ -116,7 +121,10 @@ Important:
 - Command success does not mean the project is correct.
 - Use verify before declaring a coding task complete.
 - Network access is disabled by default.
-- Dangerous, interactive, and workspace-escaping commands are blocked by policy.`
+- Dangerous, interactive, and workspace-escaping commands are blocked by policy.
+- Promotion snapshots the original source before any source mutation.
+- The Lab workspace is not implicitly promoted by finish.
+- export_patch never mutates the source repository.`
 }
 
 // Parameters implements the agent.Tool interface.
@@ -131,6 +139,8 @@ func (t *Tool) Parameters() any {
 					"start_task",
 					"run",
 					"verify",
+					"export_patch",
+					"promote",
 					"finish",
 					"fail",
 					"cancel",
@@ -179,11 +189,11 @@ func (t *Tool) Parameters() any {
 			},
 			"buildCommand": {
 				Type:        "string",
-				Description: "Required build command used by standard verification.",
+				Description: "Optional build command used by standard verification.",
 			},
 			"testCommand": {
 				Type:        "string",
-				Description: "Required test command used by standard verification.",
+				Description: "Optional test command used by standard verification.",
 			},
 			"checks": {
 				Type:        "array",
@@ -241,6 +251,12 @@ func (t *Tool) Run(
 	case "verify":
 		return t.verifyTask(ctx, request)
 
+	case "export_patch":
+		return t.exportPatchTask(ctx, request)
+
+	case "promote":
+		return t.promoteTask(ctx, request)
+
 	case "finish":
 		return t.finishTask(request)
 
@@ -258,7 +274,7 @@ func (t *Tool) Run(
 
 	default:
 		return "", fmt.Errorf(
-			"lab: unknown action %q; expected start_task, run, verify, finish, fail, cancel, block, or close",
+			"lab: unknown action %q; expected start_task, run, verify, export_patch, promote, finish, fail, cancel, block, or close",
 			request.Action,
 		)
 	}
@@ -461,17 +477,15 @@ func (t *Tool) verifyTask(
 			checks,
 		)
 
-	case strings.TrimSpace(request.BuildCommand) != "" ||
-		strings.TrimSpace(request.TestCommand) != "":
+	default:
+		// VerifyStandard auto-discovers native project checks when the caller
+		// does not provide explicit build/test commands.
 		summary, err = t.verifier.VerifyStandard(
 			ctx,
 			task,
 			request.BuildCommand,
 			request.TestCommand,
 		)
-
-	default:
-		return "", ErrVerificationEmpty
 	}
 
 	_ = t.sessions.Touch(task.ID)
@@ -495,12 +509,301 @@ func (t *Tool) verifyTask(
 	return encoded, err
 }
 
+// exportPatchTask produces a unified binary-capable Git patch between the
+// original source tree and the modified Lab workspace.
+//
+// The source repository is copied to a temporary comparison tree with .git
+// excluded. The workspace is copied to a second temporary tree. git diff
+// therefore sees only project content and cannot export repository metadata.
+//
+// This operation never mutates the source repository or the Lab workspace.
+func (t *Tool) exportPatchTask(
+	ctx context.Context,
+	request codingLabRequest,
+) (string, error) {
+	task, err := t.lookupTask(request.TaskID)
+	if err != nil {
+		return "", err
+	}
+
+	if task.Workspace == nil {
+		return "", ErrInvalidWorkspace
+	}
+
+	if task.Status != TaskRunning {
+		return "", fmt.Errorf(
+			"%w: current status=%s",
+			ErrTaskNotRunnable,
+			task.Status,
+		)
+	}
+
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	root := t.tasks.Workspaces.Root
+
+	tempRoot, err := os.MkdirTemp(
+		root,
+		"export-patch-*",
+	)
+	if err != nil {
+		return "", fmt.Errorf(
+			"lab: create patch workspace: %w",
+			err,
+		)
+	}
+	defer os.RemoveAll(tempRoot)
+
+	sourceCopy := filepath.Join(tempRoot, "source")
+	workspaceCopy := filepath.Join(tempRoot, "workspace")
+
+	if err := os.MkdirAll(sourceCopy, 0o755); err != nil {
+		return "", fmt.Errorf(
+			"lab: create source comparison tree: %w",
+			err,
+		)
+	}
+
+	if err := os.MkdirAll(workspaceCopy, 0o755); err != nil {
+		return "", fmt.Errorf(
+			"lab: create workspace comparison tree: %w",
+			err,
+		)
+	}
+
+	if err := copyTree(
+		ctx,
+		task.Workspace.Source,
+		sourceCopy,
+	); err != nil {
+		return "", fmt.Errorf(
+			"lab: copy source for patch: %w",
+			err,
+		)
+	}
+
+	if err := copyTreeContents(
+		ctx,
+		task.Workspace.Path,
+		workspaceCopy,
+	); err != nil {
+		return "", fmt.Errorf(
+			"lab: copy workspace for patch: %w",
+			err,
+		)
+	}
+
+	patchDir := filepath.Join(root, "patches")
+
+	if err := os.MkdirAll(patchDir, 0o755); err != nil {
+		return "", fmt.Errorf(
+			"lab: create patch directory: %w",
+			err,
+		)
+	}
+
+	patchPath := filepath.Join(
+		patchDir,
+		task.ID+".patch",
+	)
+
+	output, err := runGitNoIndexDiff(
+		ctx,
+		tempRoot,
+		"source",
+		"workspace",
+	)
+	if err != nil {
+		return "", err
+	}
+
+	if err := os.WriteFile(
+		patchPath,
+		[]byte(output),
+		0o600,
+	); err != nil {
+		return "", fmt.Errorf(
+			"lab: write patch %q: %w",
+			patchPath,
+			err,
+		)
+	}
+
+	task.Metadata["patchPath"] = patchPath
+
+	_ = t.sessions.Touch(task.ID)
+
+	return encodeLabResponse(
+		codingLabResponse{
+			OK:          true,
+			Action:      "export_patch",
+			Task:        task,
+			ArtifactPath: patchPath,
+			Message:     "Patch exported without modifying the source repository.",
+		},
+	)
+}
+
+func runGitNoIndexDiff(
+	ctx context.Context,
+	workDir string,
+	sourcePath string,
+	workspacePath string,
+) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	cmd := exec.CommandContext(
+		ctx,
+		"git",
+		"diff",
+		"--no-index",
+		"--binary",
+		"--src-prefix=a/",
+		"--dst-prefix=b/",
+		"--",
+		sourcePath,
+		workspacePath,
+	)
+	cmd.Dir = workDir
+
+	env := append(
+		[]string(nil),
+		os.Environ()...,
+	)
+
+	env = append(
+		env,
+		"GIT_PAGER=cat",
+		"GIT_TERMINAL_PROMPT=0",
+		"GIT_OPTIONAL_LOCKS=0",
+		"GIT_CONFIG_NOSYSTEM=1",
+	)
+
+	cmd.Env = env
+
+	output, err := cmd.CombinedOutput()
+
+	if err == nil {
+		return string(output), nil
+	}
+
+	var exitErr *exec.ExitError
+
+	if errors.As(err, &exitErr) {
+		switch exitErr.ExitCode() {
+		case 1:
+			// git diff --no-index returns 1 when differences exist.
+			return string(output), nil
+
+		default:
+			return "", fmt.Errorf(
+				"lab: export patch git diff failed with exit code %d: %s",
+				exitErr.ExitCode(),
+				strings.TrimSpace(string(output)),
+			)
+		}
+	}
+
+	if errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded) {
+		return "", err
+	}
+
+	return "", fmt.Errorf(
+		"lab: execute git diff for patch: %w",
+		err,
+	)
+}
+
+func (t *Tool) promoteTask(
+	ctx context.Context,
+	request codingLabRequest,
+) (string, error) {
+	task, err := t.lookupTask(request.TaskID)
+	if err != nil {
+		return "", err
+	}
+
+	if task.Workspace == nil {
+		return "", ErrInvalidWorkspace
+	}
+
+	if !task.IsVerified() {
+		return "", ErrTaskNotVerified
+	}
+
+	snapshotPath, err := t.tasks.Workspaces.Promote(
+		ctx,
+		task.Workspace,
+	)
+	if err != nil {
+		return encodeLabResponse(
+			codingLabResponse{
+				OK:     false,
+				Action: "promote",
+				Task:   task,
+				Error:  err.Error(),
+			},
+		), err
+	}
+
+	if task.Metadata == nil {
+		task.Metadata = make(map[string]string)
+	}
+
+	verifiedAt := ""
+	if task.VerifiedAt != nil {
+		verifiedAt = task.VerifiedAt.UTC().Format(time.RFC3339Nano)
+	}
+
+	task.Metadata["promotionSnapshot"] = snapshotPath
+	task.Metadata["promotionVerifiedAt"] = verifiedAt
+
+	_ = t.sessions.Touch(task.ID)
+
+	return encodeLabResponse(
+		codingLabResponse{
+			OK:           true,
+			Action:       "promote",
+			Task:         task,
+			SnapshotPath: snapshotPath,
+			Message:      "Verified Lab workspace promoted to the source repository after creating a recovery snapshot.",
+		},
+	)
+}
+
 func (t *Tool) finishTask(
 	request codingLabRequest,
 ) (string, error) {
 	task, err := t.lookupTask(request.TaskID)
 	if err != nil {
 		return "", err
+	}
+
+	if !task.IsVerified() {
+		return "", ErrTaskVerificationStale
+	}
+
+	currentVerification := ""
+	if task.VerifiedAt != nil {
+		currentVerification = task.VerifiedAt.UTC().Format(time.RFC3339Nano)
+	}
+
+	promotedVerification := ""
+	if task.Metadata != nil {
+		promotedVerification = task.Metadata["promotionVerifiedAt"]
+	}
+
+	if currentVerification == "" ||
+		promotedVerification == "" ||
+		currentVerification != promotedVerification {
+		return "", errors.New(
+			"lab: task must be promoted after its current verification before finish",
+		)
 	}
 
 	if err := t.tasks.Finish(task); err != nil {
@@ -684,13 +987,15 @@ func (t *Tool) lookupTask(id string) (*Task, error) {
 }
 
 type codingLabResponse struct {
-	OK           bool                 `json:"ok"`
-	Action       string               `json:"action"`
-	Task         *Task                `json:"task,omitempty"`
-	Result       *CommandResult       `json:"result,omitempty"`
-	Verification *VerificationSummary `json:"verification,omitempty"`
-	Message      string               `json:"message,omitempty"`
-	Error        string               `json:"error,omitempty"`
+	OK            bool                 `json:"ok"`
+	Action        string               `json:"action"`
+	Task          *Task                `json:"task,omitempty"`
+	Result        *CommandResult       `json:"result,omitempty"`
+	Verification  *VerificationSummary `json:"verification,omitempty"`
+	Message       string               `json:"message,omitempty"`
+	Error         string               `json:"error,omitempty"`
+	ArtifactPath  string               `json:"artifactPath,omitempty"`
+	SnapshotPath  string               `json:"snapshotPath,omitempty"`
 }
 
 func encodeLabResponse(value codingLabResponse) (string, error) {
