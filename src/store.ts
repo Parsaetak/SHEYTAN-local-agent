@@ -670,16 +670,19 @@ export const useRuntimeStore =
 				connection: "connecting",
 			});
 
-			socket = new WebSocket(
+			const ws = new WebSocket(
 				activityWebSocketURL(
 					sessionId,
 				),
 			);
 
-			socket.onopen = () => {
+			socket = ws;
+
+			ws.onopen = () => {
 				if (
+					socket !== ws ||
 					activitySessionId !==
-					get().activeSessionId
+						get().activeSessionId
 				) {
 					return;
 				}
@@ -689,9 +692,17 @@ export const useRuntimeStore =
 				});
 			};
 
-			socket.onmessage = (
+			ws.onmessage = (
 				event,
 			) => {
+				if (
+					socket !== ws ||
+					activitySessionId !==
+						get().activeSessionId
+				) {
+					return;
+				}
+
 				try {
 					const payload =
 						JSON.parse(
@@ -735,26 +746,30 @@ export const useRuntimeStore =
 				}
 			};
 
-			socket.onerror = () => {
+			ws.onerror = () => {
 				if (
-					activitySessionId ===
-					get().activeSessionId
-				) {
-					set({
-						connection: "error",
-					});
-				}
-			};
-
-			socket.onclose = () => {
-				socket = null;
-
-				if (
+					socket !== ws ||
 					activitySessionId !==
-					get().activeSessionId
+						get().activeSessionId
 				) {
 					return;
 				}
+
+				set({
+					connection: "error",
+				});
+			};
+
+			ws.onclose = () => {
+				if (
+					socket !== ws ||
+					activitySessionId !==
+						get().activeSessionId
+				) {
+					return;
+				}
+
+				socket = null;
 
 				set({
 					connection:
