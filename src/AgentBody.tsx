@@ -40,10 +40,13 @@ function AgentBody() {
 		error,
 		activity,
 		running,
+		loadInitialState,
 		createSession,
 		deleteSession,
 		run,
 		abort,
+		connectActivity,
+		disconnectActivity,
 		clearActivity,
 	} = useRuntimeStore();
 
@@ -53,11 +56,23 @@ function AgentBody() {
 		useRef<HTMLDivElement | null>(null);
 
 	useEffect(() => {
-		activityEndRef.current?.scrollIntoView({
-			behavior: "smooth",
-			block: "nearest",
+		let cancelled = false;
+
+		void loadInitialState().then(() => {
+			if (!cancelled) {
+				connectActivity();
+			}
 		});
-	}, [activity]);
+
+		return () => {
+			cancelled = true;
+			disconnectActivity();
+		};
+	}, [
+		loadInitialState,
+		connectActivity,
+		disconnectActivity,
+	]);
 
 	const activeSession = useMemo(
 		() =>
@@ -74,6 +89,13 @@ function AgentBody() {
 
 	const localModels =
 		models?.local ?? [];
+
+	useEffect(() => {
+		activityEndRef.current?.scrollIntoView({
+			behavior: "smooth",
+			block: "nearest",
+		});
+	}, [activity]);
 
 	async function handleSubmit(
 		event: FormEvent<HTMLFormElement>,
@@ -117,6 +139,24 @@ function AgentBody() {
 			// The store exposes the error state.
 		}
 	}
+
+	useEffect(() => {
+		function handleNewSessionRequest() {
+			void handleNewSession();
+		}
+
+		window.addEventListener(
+			"sheytan:new-session",
+			handleNewSessionRequest,
+		);
+
+		return () => {
+			window.removeEventListener(
+				"sheytan:new-session",
+				handleNewSessionRequest,
+			);
+		};
+	}, [createSession]);
 
 	return (
 		<>
