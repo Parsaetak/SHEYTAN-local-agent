@@ -1,10 +1,13 @@
 import {
 	useEffect,
+	useMemo,
 	useRef,
 } from "react";
 
 import type { ActivityEvent } from "./store";
 import { useRuntimeStore } from "./store";
+
+const MAX_VISIBLE_EVENTS = 50;
 
 function formatActivity(
 	activity: ActivityEvent,
@@ -45,6 +48,17 @@ function ActivityStream() {
 		useRef<HTMLDivElement | null>(
 			null,
 		);
+
+	const visibleActivity = useMemo(
+		() =>
+			activity.length >
+			MAX_VISIBLE_EVENTS
+				? activity.slice(
+						-MAX_VISIBLE_EVENTS,
+					)
+				: activity,
+		[activity],
+	);
 
 	useEffect(() => {
 		activityEndRef.current?.scrollIntoView(
@@ -106,7 +120,7 @@ function ActivityStream() {
 						</span>
 					</div>
 				) : (
-					activity.map(
+					visibleActivity.map(
 						(item) => (
 							<article
 								className="activity-item"
