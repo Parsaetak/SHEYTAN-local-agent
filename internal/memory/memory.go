@@ -1,15 +1,3 @@
-// Package memory is the agent's persistent memory layer.
-//
-// Memory is deliberately separated by class and provenance so that untrusted
-// external material cannot silently become an authoritative user fact.
-//
-// M1 = user facts
-// M2 = preferences
-// M3 = project state
-// M4 = decisions
-// M5 = procedures / learned fixes
-// M6 = conversation summaries
-// M7 = observations / untrusted or provisional knowledge
 package memory
 
 import (
@@ -27,6 +15,19 @@ import (
 	"time"
 )
 
+// Package memory is the agent's persistent memory layer.
+//
+// Memory is deliberately separated by class and provenance so that untrusted
+// external material cannot silently become an authoritative user fact.
+//
+// M1 = user facts
+// M2 = preferences
+// M3 = project state
+// M4 = decisions
+// M5 = procedures / learned fixes
+// M6 = conversation summaries
+// M7 = observations / untrusted or provisional knowledge
+
 const (
 	ClassM1 = "M1"
 	ClassM2 = "M2"
@@ -40,11 +41,11 @@ const (
 type TrustLevel string
 
 const (
-	TrustUnknown    TrustLevel = "unknown"
-	TrustUntrusted  TrustLevel = "untrusted"
+	TrustUnknown     TrustLevel = "unknown"
+	TrustUntrusted   TrustLevel = "untrusted"
 	TrustProvisional TrustLevel = "provisional"
-	TrustTrusted    TrustLevel = "trusted"
-	TrustVerified   TrustLevel = "verified"
+	TrustTrusted     TrustLevel = "trusted"
+	TrustVerified    TrustLevel = "verified"
 )
 
 type Provenance struct {
@@ -57,17 +58,17 @@ type Provenance struct {
 }
 
 type Entry struct {
-	ID        string      `json:"id"`
-	Class     string      `json:"class,omitempty"`
-	Tags      []string    `json:"tags"`
-	Content   string      `json:"content"`
-	Source    string      `json:"source,omitempty"` // legacy/session source
-	CreatedAt time.Time   `json:"createdAt"`
-	Trust     TrustLevel  `json:"trust,omitempty"`
-	Provenance Provenance `json:"provenance,omitempty"`
-	Quarantined bool      `json:"quarantined,omitempty"`
-	Authoritative bool    `json:"authoritative,omitempty"`
-	Score     float64     `json:"-"` // search-only
+	ID           string      `json:"id"`
+	Class        string      `json:"class,omitempty"`
+	Tags         []string    `json:"tags"`
+	Content      string      `json:"content"`
+	Source       string      `json:"source,omitempty"` // legacy/session source
+	CreatedAt    time.Time   `json:"createdAt"`
+	Trust        TrustLevel  `json:"trust,omitempty"`
+	Provenance   Provenance  `json:"provenance,omitempty"`
+	Quarantined  bool        `json:"quarantined,omitempty"`
+	Authoritative bool       `json:"authoritative,omitempty"`
+	Score        float64     `json:"-"` // search-only
 }
 
 type Store struct {
@@ -77,21 +78,30 @@ type Store struct {
 
 func New(path string) *Store {
 	dir := filepath.Dir(path)
+
 	if dir != "." {
 		_ = os.MkdirAll(dir, 0o755)
 	}
-	return &Store{path: path}
+
+	return &Store{
+		path: path,
+	}
 }
 
 // NormalizeEntry applies the memory trust boundary.
 //
-// The key invariant is:
+// The key invariants are:
 //
-//   untrusted external material may never remain an M1 authoritative fact.
+//   - M1 is reserved for explicit trusted/verified user facts.
+//   - External web/research/GitHub/Reddit material can never remain in a
+//     higher-trust memory class simply because the caller labeled it so.
+//   - External material is downgraded to M7 and quarantined.
+//   - Quarantined material is never authoritative.
 //
-// Such material is automatically downgraded to M7 and quarantined.
+// Such data can still be explicitly inspected, but ordinary recall excludes it.
 func NormalizeEntry(e Entry) Entry {
 	e.ID = strings.TrimSpace(e.ID)
+
 	if e.ID == "" {
 		e.ID = uniqueID()
 	}
@@ -102,16 +112,34 @@ func NormalizeEntry(e Entry) Entry {
 	e.Content = strings.TrimSpace(e.Content)
 	e.Source = strings.TrimSpace(e.Source)
 
+	e.Provenance.Kind = strings.ToLower(
+		strings.TrimSpace(e.Provenance.Kind),
+	)
+	e.Provenance.Source = strings.TrimSpace(
+		e.Provenance.Source,
+	)
+	e.Provenance.URI = strings.TrimSpace(
+		e.Provenance.URI,
+	)
+	e.Provenance.Reference = strings.TrimSpace(
+		e.Provenance.Reference,
+	)
+	e.Provenance.CollectedBy = strings.TrimSpace(
+		e.Provenance.CollectedBy,
+	)
+
 	for i := range e.Tags {
 		e.Tags[i] = strings.TrimSpace(e.Tags[i])
 	}
 
 	var tags []string
+
 	for _, tag := range e.Tags {
 		if tag != "" {
 			tags = append(tags, tag)
 		}
 	}
+
 	e.Tags = tags
 
 	if e.CreatedAt.IsZero() {
@@ -122,6 +150,22 @@ func NormalizeEntry(e Entry) Entry {
 
 	if e.Provenance.ObservedAt.IsZero() {
 		e.Provenance.ObservedAt = e.CreatedAt
+	} else {
+		e.Provenance.ObservedAt = e.Provenance.ObservedAt.UTC()
+	}
+
+	// External material is never allowed to retain a durable trusted class.
+	// This check intentionally runs before the M1 rule so a caller cannot
+	// bypass quarantine by labeling external material as M2-M6.
+	if isExternalProvenance(e.Provenance) {
+		e.Class = ClassM7
+		e.Quarantined = true
+		e.Authoritative = false
+
+		if e.Trust == TrustTrusted ||
+			e.Trust == TrustVerified {
+			e.Trust = TrustProvisional
+		}
 	}
 
 	// M1 is reserved for explicit trusted/verified user facts.
@@ -130,7 +174,9 @@ func NormalizeEntry(e Entry) Entry {
 			e.Class = ClassM7
 			e.Quarantined = true
 			e.Authoritative = false
-			if e.Trust == TrustTrusted || e.Trust == TrustVerified {
+
+			if e.Trust == TrustTrusted ||
+				e.Trust == TrustVerified {
 				e.Trust = TrustProvisional
 			}
 		} else {
@@ -139,10 +185,12 @@ func NormalizeEntry(e Entry) Entry {
 	}
 
 	// Only explicitly trusted/verified data can be authoritative.
-	if e.Trust != TrustTrusted && e.Trust != TrustVerified {
+	if e.Trust != TrustTrusted &&
+		e.Trust != TrustVerified {
 		e.Authoritative = false
 	}
 
+	// Quarantine always wins over authority.
 	if e.Quarantined {
 		e.Authoritative = false
 	}
@@ -151,24 +199,48 @@ func NormalizeEntry(e Entry) Entry {
 }
 
 func isTrustedUserFact(e Entry) bool {
-	if e.Provenance.Kind != "user" {
+	if strings.ToLower(
+		strings.TrimSpace(e.Provenance.Kind),
+	) != "user" {
 		return false
 	}
 
-	return e.Trust == TrustTrusted || e.Trust == TrustVerified
+	return e.Trust == TrustTrusted ||
+		e.Trust == TrustVerified
+}
+
+func isExternalProvenance(p Provenance) bool {
+	switch strings.ToLower(strings.TrimSpace(p.Kind)) {
+	case "web", "research", "github", "reddit":
+		return true
+	}
+
+	switch strings.ToLower(strings.TrimSpace(p.Source)) {
+	case "web", "research", "github", "reddit":
+		return true
+	}
+
+	return false
 }
 
 func normalizeClass(class string) string {
-	switch strings.ToUpper(strings.TrimSpace(class)) {
-	case ClassM1, ClassM2, ClassM3, ClassM4, ClassM5, ClassM6, ClassM7:
-		return strings.ToUpper(strings.TrimSpace(class))
+	class = strings.ToUpper(strings.TrimSpace(class))
+
+	switch class {
+	case ClassM1, ClassM2, ClassM3, ClassM4,
+		ClassM5, ClassM6, ClassM7:
+		return class
 	default:
 		return ClassM7
 	}
 }
 
 func normalizeTrust(trust TrustLevel) TrustLevel {
-	switch TrustLevel(strings.ToLower(strings.TrimSpace(string(trust)))) {
+	switch TrustLevel(
+		strings.ToLower(
+			strings.TrimSpace(string(trust)),
+		),
+	) {
 	case TrustUnknown:
 		return TrustUnknown
 	case TrustUntrusted:
@@ -184,7 +256,11 @@ func normalizeTrust(trust TrustLevel) TrustLevel {
 	}
 }
 
-func (s *Store) Append(tags []string, content, source string) error {
+func (s *Store) Append(
+	tags []string,
+	content,
+	source string,
+) error {
 	return s.AppendEntry(Entry{
 		Tags:    tags,
 		Content: content,
@@ -216,6 +292,7 @@ func (s *Store) AppendEntry(entry Entry) error {
 	if err != nil {
 		return err
 	}
+
 	defer f.Close()
 
 	enc := json.NewEncoder(f)
@@ -227,6 +304,7 @@ func (s *Store) AppendEntry(entry Entry) error {
 func (s *Store) All() ([]Entry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	return s.allLocked()
 }
 
@@ -236,18 +314,27 @@ func (s *Store) allLocked() ([]Entry, error) {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
+
 		return nil, err
 	}
+
 	defer f.Close()
 
 	var out []Entry
 
 	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	sc.Buffer(
+		make([]byte, 0, 64*1024),
+		4*1024*1024,
+	)
 
 	for sc.Scan() {
 		var e Entry
-		if err := json.Unmarshal(sc.Bytes(), &e); err != nil {
+
+		if err := json.Unmarshal(
+			sc.Bytes(),
+			&e,
+		); err != nil {
 			continue
 		}
 
@@ -262,8 +349,15 @@ func (s *Store) allLocked() ([]Entry, error) {
 	return out, nil
 }
 
-func (s *Store) Search(query string, limit int) ([]Entry, error) {
-	return s.SearchWithOptions(query, limit, false)
+func (s *Store) Search(
+	query string,
+	limit int,
+) ([]Entry, error) {
+	return s.SearchWithOptions(
+		query,
+		limit,
+		false,
+	)
 }
 
 // SearchWithOptions searches memory while keeping quarantined entries hidden
@@ -284,20 +378,30 @@ func (s *Store) SearchWithOptions(
 	filtered := make([]Entry, 0, len(all))
 
 	for _, e := range all {
-		if !includeQuarantined && e.Quarantined {
+		if !includeQuarantined &&
+			e.Quarantined {
 			continue
 		}
+
 		filtered = append(filtered, e)
 	}
 
-	q := strings.ToLower(strings.TrimSpace(query))
+	q := strings.ToLower(
+		strings.TrimSpace(query),
+	)
 
 	if q == "" {
-		sort.Slice(filtered, func(i, j int) bool {
-			return filtered[i].CreatedAt.After(filtered[j].CreatedAt)
-		})
+		sort.Slice(
+			filtered,
+			func(i, j int) bool {
+				return filtered[i].CreatedAt.After(
+					filtered[j].CreatedAt,
+				)
+			},
+		)
 
-		if limit > 0 && len(filtered) > limit {
+		if limit > 0 &&
+			len(filtered) > limit {
 			filtered = filtered[:limit]
 		}
 
@@ -308,12 +412,18 @@ func (s *Store) SearchWithOptions(
 		var score float64
 
 		for _, tag := range filtered[i].Tags {
-			if strings.Contains(strings.ToLower(tag), q) {
+			if strings.Contains(
+				strings.ToLower(tag),
+				q,
+			) {
 				score += 2.0
 			}
 		}
 
-		if strings.Contains(strings.ToLower(filtered[i].Content), q) {
+		if strings.Contains(
+			strings.ToLower(filtered[i].Content),
+			q,
+		) {
 			score += 1.0
 		}
 
@@ -339,14 +449,21 @@ func (s *Store) SearchWithOptions(
 		}
 	}
 
-	sort.SliceStable(hits, func(i, j int) bool {
-		if hits[i].Score == hits[j].Score {
-			return hits[i].CreatedAt.After(hits[j].CreatedAt)
-		}
-		return hits[i].Score > hits[j].Score
-	})
+	sort.SliceStable(
+		hits,
+		func(i, j int) bool {
+			if hits[i].Score == hits[j].Score {
+				return hits[i].CreatedAt.After(
+					hits[j].CreatedAt,
+				)
+			}
 
-	if limit > 0 && len(hits) > limit {
+			return hits[i].Score > hits[j].Score
+		},
+	)
+
+	if limit > 0 &&
+		len(hits) > limit {
 		hits = hits[:limit]
 	}
 
@@ -384,6 +501,7 @@ func (s *Store) DeleteByID(id string) error {
 		if err := enc.Encode(e); err != nil {
 			_ = f.Close()
 			_ = os.Remove(tmp)
+
 			return err
 		}
 	}
@@ -400,7 +518,11 @@ func (s *Store) Clear() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	return os.WriteFile(s.path, []byte{}, 0o644)
+	return os.WriteFile(
+		s.path,
+		[]byte{},
+		0o644,
+	)
 }
 
 func (s *Store) Count() int {
@@ -430,20 +552,20 @@ func (Tool) Description() string {
 
 func (Tool) Parameters() any {
 	return struct {
-		Action         string      `json:"action"`
-		Query          string      `json:"query,omitempty"`
-		Tags           []string    `json:"tags,omitempty"`
-		Content        string      `json:"content,omitempty"`
-		ID             string      `json:"id,omitempty"`
-		Limit          int         `json:"limit,omitempty"`
-		Class          string      `json:"class,omitempty"`
-		Trust          TrustLevel  `json:"trust,omitempty"`
-		ProvenanceKind string      `json:"provenanceKind,omitempty"`
-		ProvenanceSrc  string      `json:"provenanceSource,omitempty"`
-		URI            string      `json:"uri,omitempty"`
-		Reference      string      `json:"reference,omitempty"`
-		Quarantine     bool        `json:"quarantine,omitempty"`
-	} {}
+		Action         string     `json:"action"`
+		Query          string     `json:"query,omitempty"`
+		Tags           []string   `json:"tags,omitempty"`
+		Content        string     `json:"content,omitempty"`
+		ID             string     `json:"id,omitempty"`
+		Limit          int        `json:"limit,omitempty"`
+		Class          string     `json:"class,omitempty"`
+		Trust          TrustLevel `json:"trust,omitempty"`
+		ProvenanceKind string     `json:"provenanceKind,omitempty"`
+		ProvenanceSrc  string     `json:"provenanceSource,omitempty"`
+		URI            string     `json:"uri,omitempty"`
+		Reference      string     `json:"reference,omitempty"`
+		Quarantine     bool       `json:"quarantine,omitempty"`
+	}{}
 }
 
 func (t Tool) Run(
@@ -470,10 +592,16 @@ func (t Tool) Run(
 		Quarantine     bool       `json:"quarantine"`
 	}
 
-	if err := json.Unmarshal(args, &p); err != nil {
+	if err := json.Unmarshal(
+		args,
+		&p,
+	); err != nil {
 		var probe map[string]json.RawMessage
 
-		if json.Unmarshal(args, &probe) == nil {
+		if json.Unmarshal(
+			args,
+			&probe,
+		) == nil {
 			if rawTags, ok := probe["tags"]; ok &&
 				len(rawTags) > 0 &&
 				rawTags[0] == '"' {
@@ -483,16 +611,24 @@ func (t Tool) Run(
 			}
 		}
 
-		return "", fmt.Errorf("bad args: %w", err)
+		return "", fmt.Errorf(
+			"bad args: %w",
+			err,
+		)
 	}
 
 	if p.Limit == 0 {
 		p.Limit = 10
 	}
 
-	switch strings.ToLower(strings.TrimSpace(p.Action)) {
+	switch strings.ToLower(
+		strings.TrimSpace(p.Action),
+	) {
 	case "recall", "search":
-		hits, err := t.Store.Search(p.Query, p.Limit)
+		hits, err := t.Store.Search(
+			p.Query,
+			p.Limit,
+		)
 		if err != nil {
 			return "", err
 		}
@@ -527,20 +663,32 @@ func (t Tool) Run(
 		}
 
 		if strings.TrimSpace(p.Query) == "" {
-			return "", fmt.Errorf("query is required for history search")
+			return "", fmt.Errorf(
+				"query is required for history search",
+			)
 		}
 
-		lines := t.RecallSearch(p.Query, p.Limit)
+		lines := t.RecallSearch(
+			p.Query,
+			p.Limit,
+		)
 
 		if len(lines) == 0 {
 			return "No matching past conversations found.", nil
 		}
 
-		return strings.Join(lines, "\n"), nil
+		return strings.Join(
+			lines,
+			"\n",
+		), nil
 
 	case "remember", "save", "add":
-		if strings.TrimSpace(p.Content) == "" {
-			return "", fmt.Errorf("content is required to remember")
+		if strings.TrimSpace(
+			p.Content,
+		) == "" {
+			return "", fmt.Errorf(
+				"content is required to remember",
+			)
 		}
 
 		entry := Entry{
@@ -550,10 +698,10 @@ func (t Tool) Run(
 			Trust:   normalizeTrust(p.Trust),
 			Source:  "agent",
 			Provenance: Provenance{
-				Kind:      strings.TrimSpace(p.ProvenanceKind),
-				Source:    strings.TrimSpace(p.ProvenanceSrc),
-				URI:       strings.TrimSpace(p.URI),
-				Reference: strings.TrimSpace(p.Reference),
+				Kind:        strings.TrimSpace(p.ProvenanceKind),
+				Source:      strings.TrimSpace(p.ProvenanceSrc),
+				URI:         strings.TrimSpace(p.URI),
+				Reference:   strings.TrimSpace(p.Reference),
 				CollectedBy: "SHEYTAN-Local-Agent",
 			},
 			Quarantined: p.Quarantine,
@@ -567,21 +715,9 @@ func (t Tool) Run(
 			entry.Trust = TrustProvisional
 		}
 
-		// Web/research material is never promoted to an M1 fact merely
-		// because the model asked to remember it.
-		if entry.Provenance.Kind == "web" ||
-			entry.Provenance.Kind == "research" ||
-			entry.Provenance.Kind == "github" ||
-			entry.Provenance.Kind == "reddit" {
-			entry.Class = ClassM7
-			entry.Quarantined = true
-			entry.Authoritative = false
-
-			if entry.Trust == TrustTrusted ||
-				entry.Trust == TrustVerified {
-				entry.Trust = TrustProvisional
-			}
-		}
+		// Normalize before persistence and before reporting the result so
+		// the returned ID/class/trust exactly match what was stored.
+		entry = NormalizeEntry(entry)
 
 		if err := t.Store.AppendEntry(entry); err != nil {
 			return "", err
@@ -591,8 +727,8 @@ func (t Tool) Run(
 			"remembered as %s (%s, trust=%s, quarantined=%t)",
 			entry.Class,
 			entry.ID,
-			NormalizeEntry(entry).Trust,
-			NormalizeEntry(entry).Quarantined,
+			entry.Trust,
+			entry.Quarantined,
 		), nil
 
 	case "list":
@@ -621,7 +757,9 @@ func (t Tool) Run(
 
 	case "forget", "delete":
 		if strings.TrimSpace(p.ID) == "" {
-			return "", fmt.Errorf("id is required to forget")
+			return "", fmt.Errorf(
+				"id is required to forget",
+			)
 		}
 
 		return fmt.Sprintf(
@@ -654,14 +792,18 @@ func uniqueID() string {
 	var rnd [4]byte
 
 	if _, err := crand.Read(rnd[:]); err != nil {
-		return time.Now().UTC().Format("20060102150405") +
+		return time.Now().UTC().Format(
+			"20060102150405",
+		) +
 			fmt.Sprintf(
 				"-%09d",
 				idSeq.Add(1),
 			)
 	}
 
-	return time.Now().UTC().Format("20060102150405") +
+	return time.Now().UTC().Format(
+		"20060102150405",
+	) +
 		fmt.Sprintf(
 			"-%06d-%08x",
 			idSeq.Add(1)%1_000_000,
