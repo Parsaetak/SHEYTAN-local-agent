@@ -15,7 +15,7 @@ require (
 )
 
 require (
-	github.com/BurntSushi/toml v1.6.1 // indirect
+	github.com/BurntSushi/toml v1.6.0 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
 	github.com/gobwas/httphead v0.1.0 // indirect
