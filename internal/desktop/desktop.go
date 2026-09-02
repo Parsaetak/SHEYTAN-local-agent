@@ -1,20 +1,17 @@
-// Package desktop provides the native cross-platform desktop shell.
-//
-// Wails owns the application window while the existing Go API server remains
-// the backend contract used by the React frontend. The browser is never
-// launched by this package.
 package desktop
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"net/http"
 	"time"
 
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/api"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
+	"github.com/Parsaetak/SHEYTAN-local-agent/web"
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
@@ -29,8 +26,10 @@ const (
 // Run starts the SHEYTAN native desktop application and blocks until the
 // desktop application exits.
 //
-// The existing HTTP API is intentionally retained behind the native Wails
-// window so the React frontend and headless API use the same backend.
+// The React production assets are served from the embedded web.StaticFS by
+// Wails. The Go API remains available locally on cfg.Host/cfg.Port, while the
+// UI itself does not require a browser tab or a separately running frontend
+// server.
 func Run(cfg *config.Config) int {
 	if cfg == nil {
 		fmt.Println("desktop: missing configuration")
@@ -69,24 +68,32 @@ func Run(cfg *config.Config) int {
 		serveErr <- httpServer.Serve(listener)
 	}()
 
-	frontendURL := fmt.Sprintf("http://localhost:%d/", cfg.Port)
+	staticFS, err := fs.Sub(web.StaticFS, "static")
+	if err != nil {
+		fmt.Println("desktop: embedded frontend:", err)
+		_ = listener.Close()
+		return 1
+	}
 
 	app := application.New(application.Options{
 		Name:        config.AppName,
 		Description: "SHEYTAN Local Agent",
+		Assets: application.AssetOptions{
+			Handler: application.AssetFileServerFS(staticFS),
+		},
 	})
 
 	window := app.Window.NewWithOptions(application.WebviewWindowOptions{
-		Name:              "main-window",
-		Title:             config.AppName,
-		Width:             defaultWidth,
-		Height:            defaultHeight,
-		MinWidth:          minimumWidth,
-		MinHeight:         minimumHeight,
-		BackgroundColour:  application.NewRGB(18, 18, 20),
-		URL:               frontendURL,
-		Hidden:            false,
-		DisableResize:     false,
+		Name:             "main-window",
+		Title:            config.AppName,
+		Width:            defaultWidth,
+		Height:           defaultHeight,
+		MinWidth:         minimumWidth,
+		MinHeight:        minimumHeight,
+		BackgroundColour: application.NewRGB(18, 18, 20),
+		URL:              "/",
+		Hidden:           false,
+		DisableResize:    false,
 	})
 
 	window.Center()
