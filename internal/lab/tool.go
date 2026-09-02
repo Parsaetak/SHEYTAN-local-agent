@@ -241,6 +241,19 @@ func (t *Tool) Run(
 
 	request.Action = strings.ToLower(strings.TrimSpace(request.Action))
 
+	// A task session is serialized across all lifecycle operations after
+	// start_task. This prevents concurrent model calls from racing on the
+	// same Task, Workspace, verification state, or promotion state.
+	if request.Action != "start_task" {
+		session, err := t.sessions.Get(request.TaskID)
+		if err != nil {
+			return "", err
+		}
+
+		session.Lock()
+		defer session.Unlock()
+	}
+
 	switch request.Action {
 	case "start_task":
 		return t.startTask(ctx, request)
@@ -466,7 +479,7 @@ func (t *Tool) verifyTask(
 			checks = append(checks, VerificationCheck{
 				Name:         strings.TrimSpace(check.Name),
 				Command:      verificationCommand,
-				Required:     check.Required,
+				Required:     true,
 				AllowFailure: check.AllowFailure,
 			})
 		}
