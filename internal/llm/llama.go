@@ -36,19 +36,17 @@ type LlamaServer struct {
 	state   string // "stopped" | "starting" | "running" | "error"
 	stateCh chan string
 	logBuf  *ringBuffer
-	errRing *ringBuffer // v1.0.5: stderr tail — the REAL reason a launch died
+	errRing *ringBuffer
 
 	loaded   string // absolute path of the model currently loaded by the subprocess
 	switchMu sync.Mutex
 
-	// mmproj is the multimodal projector (v1.0.6) the engine was launched
-	// with — empty when the engine runs text-only. Resolved at start from
-	// cfg.VisionEnabled/VisionMMProj + pairing with the selected model.
+	// mmproj is the multimodal projector the engine was launched with.
+	// Empty when the engine runs text-only.
 	mmproj string
 
-	// engineUpdateTried guards the v1.0.5 self-heal: when a model fails to
-	// load because the bundled engine predates its architecture, the engine
-	// is auto-updated once per app run and the load retried.
+	// engineUpdateTried prevents repeated engine self-updates during one
+	// application run.
 	engineUpdateTried bool
 }
 
@@ -79,16 +77,18 @@ func (r *ringBuffer) lines() []string {
 	defer r.mu.Unlock()
 
 	out := make([]string, 0, r.size)
+
 	for i := 0; i < r.size; i++ {
 		idx := (r.head + i) % r.size
+
 		if r.buf[idx] != "" {
 			out = append(out, r.buf[idx])
 		}
 	}
+
 	return out
 }
 
-// reset clears the ring. Each launch attempt starts with a clean stderr tail.
 func (r *ringBuffer) reset() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -142,6 +142,7 @@ func (s *LlamaServer) ensureBinary() error {
 		if updater.InstalledEngineTag(s.cfg) == "" {
 			updater.RecordEngineTag(s.cfg, updater.DefaultEngineTag)
 		}
+
 		return nil
 	}
 
@@ -155,6 +156,7 @@ func (s *LlamaServer) ensureBinary() error {
 	}
 
 	dir := filepath.Dir(s.cfg.LlamaBinPath)
+
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
@@ -185,14 +187,9 @@ func (s *LlamaServer) ensureBinary() error {
 	return nil
 }
 
-// modelLoadTimeout bounds how long the subprocess may take to become
-// HTTP-ready.
 const modelLoadTimeout = 180 * time.Second
-
-// engineCompatMax is the last, most conservative launch profile index.
 const engineCompatMax = 3
 
-// compatLevelName renders a launch-profile label for logs and the UI.
 func compatLevelName(level int) string {
 	switch level {
 	case 1:
@@ -221,9 +218,9 @@ func (s *LlamaServer) Start() error {
 // When the engine reports an unsupported model architecture, the bundled
 // llama.cpp engine may be updated once and the ladder retried.
 //
-// IMPORTANT: adoptExisting() must never be called while s.mu is held because
-// its success path previously attempted to acquire s.mu again, causing a
-// non-reentrant mutex deadlock.
+// adoptExisting must never be called while s.mu is held. The previous
+// implementation could deadlock by attempting to lock s.mu again after
+// adopting an existing engine.
 func (s *LlamaServer) startLocked() error {
 	s.mu.Lock()
 
@@ -232,17 +229,21 @@ func (s *LlamaServer) startLocked() error {
 		return nil
 	}
 
-	portInUse := PortInUse(s.cfg.LlamaHost, s.cfg.LlamaPort)
+	portInUse := PortInUse(
+		s.cfg.LlamaHost,
+		s.cfg.LlamaPort,
+	)
+
 	s.mu.Unlock()
 
 	if portInUse {
-		// Do not hold s.mu while probing/adopting an existing server.
 		if s.adoptExisting() {
 			s.setState("running")
 			return nil
 		}
 
 		s.setState("error")
+
 		return fmt.Errorf(
 			"port %d is already in use by another program — "+
 				"change LlamaPort in config.json or close the other app",
@@ -257,13 +258,17 @@ func (s *LlamaServer) startLocked() error {
 		return err
 	}
 
-	modelPath, err := ResolveModelPath(s.cfg.ModelsDir, s.cfg.Model)
+	modelPath, err := ResolveModelPath(
+		s.cfg.ModelsDir,
+		s.cfg.Model,
+	)
 	if err != nil {
 		s.setState("error")
 		return err
 	}
 
 	mmproj := ""
+
 	if s.cfg.VisionEnabled {
 		if p := vision.FindProjector(
 			s.cfg.ModelsDir,
@@ -271,7 +276,10 @@ func (s *LlamaServer) startLocked() error {
 			s.cfg.VisionMMProj,
 		); p != "" {
 			mmproj = p
-			s.logf("vision projector paired: %s", filepath.Base(p))
+			s.logf(
+				"vision projector paired: %s",
+				filepath.Base(p),
+			)
 		}
 	}
 
@@ -283,6 +291,7 @@ func (s *LlamaServer) startLocked() error {
 
 	for {
 		startLevel := s.cfg.EngineCompat
+
 		if startLevel < 0 || startLevel > engineCompatMax {
 			startLevel = 0
 		}
@@ -296,7 +305,10 @@ func (s *LlamaServer) startLocked() error {
 				if err == nil {
 					if s.cfg.EngineCompat != level {
 						s.cfg.EngineCompat = level
-						_ = config.Save(s.cfg.ConfigPath(), s.cfg)
+						_ = config.Save(
+							s.cfg.ConfigPath(),
+							s.cfg,
+						)
 					}
 
 					if level > 0 {
@@ -305,6 +317,7 @@ func (s *LlamaServer) startLocked() error {
 							level,
 							compatLevelName(level),
 						)
+
 						logging.Default().Warn(
 							"engine",
 							"started in compatibility mode %d (%s) for %s",
@@ -412,7 +425,10 @@ func (s *LlamaServer) Pid() int {
 //	1 — everything + --jinja
 //	2 — --jinja + GPU, but no speed flags
 //	3 — bare: model, host/port, context, threads
-func (s *LlamaServer) buildArgs(modelPath string, level int) []string {
+func (s *LlamaServer) buildArgs(
+	modelPath string,
+	level int,
+) []string {
 	base := []string{
 		"--model",
 		modelPath,
@@ -465,6 +481,7 @@ func (s *LlamaServer) buildArgs(modelPath string, level int) []string {
 	}
 
 	gpuLayers := s.cfg.LLM.NumGPU
+
 	if gpuLayers <= 0 && s.autoGPUOffload() {
 		gpuLayers = 99
 	}
@@ -498,7 +515,6 @@ func (s *LlamaServer) buildArgs(modelPath string, level int) []string {
 	return base
 }
 
-// procExit carries one subprocess's death.
 type procExit struct {
 	done chan struct{}
 	err  error
@@ -506,7 +522,10 @@ type procExit struct {
 
 // launchOnce spawns the server with one profile's flags and waits until it
 // is HTTP-ready.
-func (s *LlamaServer) launchOnce(modelPath string, level int) error {
+func (s *LlamaServer) launchOnce(
+	modelPath string,
+	level int,
+) error {
 	if level > 0 {
 		s.logf(
 			"launching with compatibility profile %d (%s)…",
@@ -517,7 +536,11 @@ func (s *LlamaServer) launchOnce(modelPath string, level int) error {
 
 	args := s.buildArgs(modelPath, level)
 
-	cmd := proc.Command(s.cfg.LlamaBinPath, args...)
+	cmd := proc.Command(
+		s.cfg.LlamaBinPath,
+		args...,
+	)
+
 	cmd.Dir = s.cfg.DataDir
 
 	cmd.Stdout = newLineWriter(func(line string) {
@@ -553,6 +576,7 @@ func (s *LlamaServer) launchOnce(modelPath string, level int) error {
 		s.mu.Lock()
 
 		latest := s.cmd == cmd
+
 		if latest {
 			s.cmd = nil
 		}
@@ -570,6 +594,7 @@ func (s *LlamaServer) launchOnce(modelPath string, level int) error {
 
 		if wasRunning {
 			s.setState("stopped")
+
 			logging.Default().Error(
 				"engine",
 				"engine exited while running: %v",
@@ -580,10 +605,14 @@ func (s *LlamaServer) launchOnce(modelPath string, level int) error {
 		close(exit.done)
 	}()
 
-	if err := s.waitReadySignaled(modelLoadTimeout, exit); err != nil {
+	if err := s.waitReadySignaled(
+		modelLoadTimeout,
+		exit,
+	); err != nil {
 		s.mu.Lock()
 
 		c := s.cmd
+
 		if s.cmd == cmd {
 			s.cmd = nil
 		}
@@ -646,7 +675,7 @@ func (s *LlamaServer) waitReadySignaled(
 		if resp, err := client.Get(url); err == nil {
 			_ = resp.Body.Close()
 
-			if resp.StatusCode == 200 {
+			if resp.StatusCode == http.StatusOK {
 				return nil
 			}
 		}
@@ -654,6 +683,7 @@ func (s *LlamaServer) waitReadySignaled(
 		select {
 		case <-exit.done:
 			return s.exitError(exit.err)
+
 		case <-time.After(400 * time.Millisecond):
 		}
 	}
@@ -661,6 +691,7 @@ func (s *LlamaServer) waitReadySignaled(
 	select {
 	case <-exit.done:
 		return s.exitError(exit.err)
+
 	default:
 	}
 
@@ -679,7 +710,6 @@ func (s *LlamaServer) waitReadySignaled(
 	return fmt.Errorf("%s", msg)
 }
 
-// exitError builds the launch-failure error for a dead subprocess.
 func (s *LlamaServer) exitError(err error) error {
 	return &exitFailure{
 		err:  explainExit(err),
@@ -687,13 +717,11 @@ func (s *LlamaServer) exitError(err error) error {
 	}
 }
 
-// exitFailure marks the retry-worthy startup failure class.
 type exitFailure struct {
 	err  error
 	tail []string
 }
 
-// explainExit turns a raw subprocess exit error into actionable guidance.
 func explainExit(err error) error {
 	if err == nil {
 		return fmt.Errorf("llama.cpp exited during startup")
@@ -712,7 +740,10 @@ func explainExit(err error) error {
 		)
 	}
 
-	return fmt.Errorf("llama.cpp exited during startup: %v", err)
+	return fmt.Errorf(
+		"llama.cpp exited during startup: %v",
+		err,
+	)
 }
 
 func (e *exitFailure) Error() string {
@@ -733,12 +764,10 @@ func (e *exitFailure) Unwrap() error {
 	return e.err
 }
 
-// tailLines returns the last n stderr lines.
 func (s *LlamaServer) tailLines(n int) string {
 	return compactLines(s.errRing.lines(), n)
 }
 
-// compactLines joins the last n non-empty lines, each clipped to 200 chars.
 func compactLines(lines []string, n int) string {
 	if len(lines) > n {
 		lines = lines[len(lines)-n:]
@@ -763,8 +792,6 @@ func compactLines(lines []string, n int) string {
 	return strings.Join(kept, "\n")
 }
 
-// needsNewerEngine reports whether an error says the engine predates the
-// model's architecture.
 func needsNewerEngine(err error) bool {
 	if err == nil {
 		return false
@@ -787,7 +814,6 @@ func needsNewerEngine(err error) bool {
 	return false
 }
 
-// updateEngineForModel downloads the newest llama.cpp release once per app run.
 func (s *LlamaServer) updateEngineForModel() bool {
 	if s.engineUpdateTried {
 		return false
@@ -810,18 +836,23 @@ func (s *LlamaServer) updateEngineForModel() bool {
 
 	latest, err := updater.LatestTag(ctx)
 	if err != nil || latest == "" {
-		s.logf("could not find a newer engine: %v", err)
+		s.logf(
+			"could not find a newer engine: %v",
+			err,
+		)
 		return false
 	}
 
 	current := updater.InstalledEngineTag(s.cfg)
+
 	if current == "" {
 		current = updater.DefaultEngineTag
 	}
 
 	if latest == current {
 		s.logf(
-			"engine %s is already the newest release — the model is still not loadable",
+			"engine %s is already the newest release — "+
+				"the model is still not loadable",
 			current,
 		)
 		return false
@@ -848,23 +879,29 @@ func (s *LlamaServer) updateEngineForModel() bool {
 		nil,
 		latest,
 	); err != nil {
-		s.logf("engine auto-update failed: %v", err)
+		s.logf(
+			"engine auto-update failed: %v",
+			err,
+		)
+
 		logging.Default().Warn(
 			"engine",
 			"auto-update failed: %v",
 			err,
 		)
+
 		return false
 	}
 
 	s.cfg.EngineCompat = 0
-	_ = config.Save(s.cfg.ConfigPath(), s.cfg)
+	_ = config.Save(
+		s.cfg.ConfigPath(),
+		s.cfg,
+	)
 
 	return true
 }
 
-// autoGPUOffload reports whether the engine should be launched with GPU
-// layer offload even though NumGPU is 0.
 func (s *LlamaServer) autoGPUOffload() bool {
 	if !s.cfg.GPUAutoOffload {
 		return false
@@ -878,8 +915,6 @@ func (s *LlamaServer) autoGPUOffload() bool {
 	return len(info.GPU) > 0
 }
 
-// hasVulkanBackend reports whether the Vulkan backend is present next to the
-// server binary.
 func (s *LlamaServer) hasVulkanBackend() bool {
 	bin := s.cfg.LlamaBinPath
 
@@ -892,14 +927,20 @@ func (s *LlamaServer) hasVulkanBackend() bool {
 	}
 
 	if _, err := os.Stat(
-		filepath.Join(filepath.Dir(bin), "ggml-vulkan.dll"),
+		filepath.Join(
+			filepath.Dir(bin),
+			"ggml-vulkan.dll",
+		),
 	); err == nil {
 		return true
 	}
 
 	if runtime.GOOS != "windows" {
 		if _, err := os.Stat(
-			filepath.Join(filepath.Dir(bin), "libggml-vulkan.so"),
+			filepath.Join(
+				filepath.Dir(bin),
+				"libggml-vulkan.so",
+			),
 		); err == nil {
 			return true
 		}
@@ -908,17 +949,14 @@ func (s *LlamaServer) hasVulkanBackend() bool {
 	return false
 }
 
-// HasVulkanBackendForTest is the exported seam for the stress suite.
 func (s *LlamaServer) HasVulkanBackendForTest() bool {
 	return s.hasVulkanBackend()
 }
 
-// AutoGPUOffloadForTest is the exported seam for the stress suite.
 func (s *LlamaServer) AutoGPUOffloadForTest() bool {
 	return s.autoGPUOffload()
 }
 
-// BuildArgsForTest exposes buildArgs.
 func (s *LlamaServer) BuildArgsForTest(
 	modelPath string,
 	level int,
@@ -926,19 +964,16 @@ func (s *LlamaServer) BuildArgsForTest(
 	return s.buildArgs(modelPath, level)
 }
 
-// SetProjectorForTest pins the active multimodal projector.
 func (s *LlamaServer) SetProjectorForTest(path string) {
 	s.mu.Lock()
 	s.mmproj = path
 	s.mu.Unlock()
 }
 
-// ProjectorPathForTest exposes the active projector path.
 func (s *LlamaServer) ProjectorPathForTest() string {
 	return s.ProjectorPath()
 }
 
-// MakeExitFailureForTest builds an exitFailure with a canned stderr tail.
 func MakeExitFailureForTest(
 	err error,
 	tail []string,
@@ -949,18 +984,15 @@ func MakeExitFailureForTest(
 	}
 }
 
-// IsExitFailureForTest reports whether err is the retry-worthy exit kind.
 func IsExitFailureForTest(err error) bool {
 	_, ok := err.(*exitFailure)
 	return ok
 }
 
-// NeedsNewerEngineForTest exposes the auto-update signal check.
 func NeedsNewerEngineForTest(err error) bool {
 	return needsNewerEngine(err)
 }
 
-// CompactLinesForTest exposes the stderr-tail clipper.
 func CompactLinesForTest(
 	lines []string,
 	n int,
@@ -988,7 +1020,7 @@ func (s *LlamaServer) adoptExisting() bool {
 
 	defer resp.Body.Close()
 
-	return resp.StatusCode == 200
+	return resp.StatusCode == http.StatusOK
 }
 
 // Stop terminates the subprocess.
@@ -1089,9 +1121,89 @@ func (s *LlamaServer) setState(st string) {
 	}
 }
 
-func (s *LlamaServer) logf(format string, args ...interface{}) {
+func (s *LlamaServer) logf(
+	format string,
+	args ...interface{},
+) {
 	line := fmt.Sprintf(format, args...)
 	s.logBuf.add(line)
+}
+
+// safeArchivePath validates an archive member name and returns a path
+// guaranteed to remain inside dir.
+//
+// Archive entry names are normalized to forward slashes first so Windows
+// backslash traversal is treated exactly like Unix-style traversal.
+//
+// Examples rejected:
+//   - ../../outside.exe
+//   - ../outside.exe
+//   - /absolute/path
+//   - \\server\share\file
+//   - C:\outside.exe
+//   - C:/outside.exe
+//
+// Examples accepted:
+//   - llama-server.exe
+//   - bin/llama-server.exe
+func safeArchivePath(dir, name string) (string, error) {
+	name = strings.TrimSpace(name)
+
+	if name == "" {
+		return "", fmt.Errorf("archive contains an empty path")
+	}
+
+	normalized := strings.ReplaceAll(name, "\\", "/")
+	cleanName := filepath.Clean(filepath.FromSlash(normalized))
+
+	if cleanName == "." ||
+		cleanName == string(filepath.Separator) ||
+		cleanName == "" {
+		return "", fmt.Errorf(
+			"archive contains invalid path %q",
+			name,
+		)
+	}
+
+	if filepath.IsAbs(cleanName) ||
+		filepath.VolumeName(cleanName) != "" {
+		return "", fmt.Errorf(
+			"archive path %q is absolute or contains a volume",
+			name,
+		)
+	}
+
+	base, err := filepath.Abs(dir)
+	if err != nil {
+		return "", fmt.Errorf(
+			"resolve archive destination: %w",
+			err,
+		)
+	}
+
+	target := filepath.Join(base, cleanName)
+
+	relative, err := filepath.Rel(base, target)
+	if err != nil {
+		return "", fmt.Errorf(
+			"validate archive path %q: %w",
+			name,
+			err,
+		)
+	}
+
+	if relative == ".." ||
+		strings.HasPrefix(
+			relative,
+			".."+string(filepath.Separator),
+		) {
+		return "", fmt.Errorf(
+			"archive path %q escapes extraction directory",
+			name,
+		)
+	}
+
+	return target, nil
 }
 
 // downloadAndExtract downloads url and extracts it into dir.
@@ -1140,12 +1252,22 @@ func downloadAndExtract(url, dir string) error {
 		}
 
 		for _, f := range zr.File {
-			out := filepath.Join(dir, f.Name)
+			out, err := safeArchivePath(
+				dir,
+				f.Name,
+			)
+			if err != nil {
+				return err
+			}
 
 			if f.FileInfo().IsDir() {
-				if err := os.MkdirAll(out, 0o755); err != nil {
+				if err := os.MkdirAll(
+					out,
+					0o755,
+				); err != nil {
 					return err
 				}
+
 				continue
 			}
 
@@ -1167,7 +1289,11 @@ func downloadAndExtract(url, dir string) error {
 				return err
 			}
 
-			_, copyErr := io.Copy(outFile, rc)
+			_, copyErr := io.Copy(
+				outFile,
+				rc,
+			)
+
 			closeErr := outFile.Close()
 			rcErr := rc.Close()
 
@@ -1221,7 +1347,10 @@ func downloadAndExtract(url, dir string) error {
 		}
 
 		out, err := os.Create(
-			filepath.Join(dir, filepath.Base(url)),
+			filepath.Join(
+				dir,
+				filepath.Base(url),
+			),
 		)
 		if err != nil {
 			return err
@@ -1239,12 +1368,6 @@ func downloadAndExtract(url, dir string) error {
 
 // ResolveModelPath turns a configured model name into an existing absolute
 // GGUF path.
-//
-// Accepted inputs, in priority order:
-//  1. an existing absolute or cwd-relative file path
-//  2. a file inside modelsDir matching the name exactly
-//  3. a file inside modelsDir whose name contains the given string
-//  4. when name is empty: the first .gguf in modelsDir
 func ResolveModelPath(
 	modelsDir,
 	name string,
@@ -1350,7 +1473,6 @@ func ResolveModelPath(
 		)
 }
 
-// fuzzyTokens splits a model query into lowercase alphanumeric tokens.
 func fuzzyTokens(name string) []string {
 	var toks []string
 
@@ -1374,7 +1496,6 @@ func fuzzyTokens(name string) []string {
 	return toks
 }
 
-// llamaBinaryName returns the OS-specific llama.cpp server binary name.
 func llamaBinaryName() string {
 	switch runtime.GOOS {
 	case "windows":
@@ -1386,8 +1507,6 @@ func llamaBinaryName() string {
 	}
 }
 
-// llamaDownloadURL returns the official llama.cpp release URL for the
-// current OS/arch.
 func llamaDownloadURL() (string, error) {
 	tag := updater.DefaultEngineTag
 	url := updater.AssetURL(tag)
@@ -1404,7 +1523,6 @@ func llamaDownloadURL() (string, error) {
 	return url, nil
 }
 
-// ListLocalModels returns the .gguf files found in the models dir.
 func ListLocalModels(dir string) []string {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -1432,7 +1550,6 @@ func ListLocalModels(dir string) []string {
 	return out
 }
 
-// ListLoadedModels queries the running llama.cpp server's /v1/models endpoint.
 func (s *LlamaServer) ListLoadedModels() ([]string, error) {
 	if !s.IsRunning() {
 		return nil,
@@ -1458,7 +1575,9 @@ func (s *LlamaServer) ListLoadedModels() ([]string, error) {
 		} `json:"data"`
 	}
 
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+	if err := json.NewDecoder(
+		resp.Body,
+	).Decode(&body); err != nil {
 		return nil, err
 	}
 
@@ -1471,11 +1590,17 @@ func (s *LlamaServer) ListLoadedModels() ([]string, error) {
 	return out, nil
 }
 
-// PortInUse is a small helper for the UI to show whether a port is occupied.
 func PortInUse(host string, port int) bool {
-	addr := fmt.Sprintf("%s:%d", host, port)
+	addr := fmt.Sprintf(
+		"%s:%d",
+		host,
+		port,
+	)
 
-	l, err := net.Listen("tcp", addr)
+	l, err := net.Listen(
+		"tcp",
+		addr,
+	)
 	if err != nil {
 		return true
 	}
@@ -1484,17 +1609,22 @@ func PortInUse(host string, port int) bool {
 	return false
 }
 
-// lineWriter collects stdout/stderr line-by-line and calls cb for each line.
 type lineWriter struct {
 	buf []byte
 	cb  func(string)
 }
 
-func newLineWriter(cb func(string)) *lineWriter {
-	return &lineWriter{cb: cb}
+func newLineWriter(
+	cb func(string),
+) *lineWriter {
+	return &lineWriter{
+		cb: cb,
+	}
 }
 
-func (w *lineWriter) Write(p []byte) (int, error) {
+func (w *lineWriter) Write(
+	p []byte,
+) (int, error) {
 	w.buf = append(w.buf, p...)
 
 	for {
