@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -13,17 +14,17 @@ import (
 
 // Tool exposes the Coding Lab through the orchestrator's generic tool system.
 //
-// It intentionally provides a single stable tool surface instead of exposing
-// filesystem/process primitives independently to the model. The Lab itself
-// remains responsible for workspace isolation, policy enforcement, execution,
-// and verification.
+// The tool is deliberately a single controlled interface. The model does not
+// receive direct filesystem or process primitives; all operations flow through
+// the Lab session, task, workspace, policy, runner, and verifier layers.
 type Tool struct {
 	cfg      *config.Config
 	tasks    *TaskManager
 	verifier *Verifier
+	sessions *SessionRegistry
 }
 
-// NewTool creates the Coding Lab orchestrator tool.
+// NewTool creates a fully initialized Coding Lab tool.
 func NewTool(cfg *config.Config) (*Tool, error) {
 	if cfg == nil {
 		return nil, errors.New("lab: config is nil")
@@ -40,7 +41,7 @@ func NewTool(cfg *config.Config) (*Tool, error) {
 
 	workspaceRoot := strings.TrimSpace(cfg.LabWorkspaceRoot)
 	if workspaceRoot == "" {
-		workspaceRoot = cfg.LabDir() + string(pathSeparator())
+		workspaceRoot = filepath.Join(cfg.LabDir(), "workspaces")
 	}
 
 	workspaces, err := NewWorkspaceManager(workspaceRoot)
@@ -75,6 +76,7 @@ func NewTool(cfg *config.Config) (*Tool, error) {
 		cfg:      cfg,
 		tasks:    tasks,
 		verifier: verifier,
+		sessions: NewSessionRegistry(),
 	}, nil
 }
 
@@ -87,43 +89,141 @@ func (t *Tool) Name() string {
 func (t *Tool) Description() string {
 	return `Use the isolated Coding Lab to work on a local code project.
 
-The Lab creates a disposable workspace, executes permitted commands, and can
-run objective verification checks. Use it for inspecting, building, testing,
-diagnosing, and fixing code.
+The Lab creates a disposable workspace, executes policy-controlled commands,
+and runs objective verification checks.
+
+Use this tool when the task requires inspecting, modifying, building, testing,
+debugging, or verifying a local project.
+
+Lifecycle:
+1. start_task
+2. run one or more commands
+3. verify the project
+4. finish only after successful verification
+5. close when retained workspace cleanup is required
 
 Available actions:
-- start_task: create an isolated workspace from a local source directory
-- run: execute one permitted command inside the task workspace
-- verify: run objective build/test/check commands
-- finish: mark the task successful after verification
-- fail: mark the task failed
-- cancel: cancel the task
-- block: mark the task blocked
-- close: release the task workspace
+- start_task
+- run
+- verify
+- finish
+- fail
+- cancel
+- block
+- close
 
 Important:
-- The Lab does not assume that a successful command means the project works.
-- Verification should be used before finish.
-- Network access is disabled by default unless explicitly enabled by policy.
-- Interactive and dangerous commands are blocked by policy.`
+- Command success does not mean the project is correct.
+- Use verify before declaring a coding task complete.
+- Network access is disabled by default.
+- Dangerous, interactive, and workspace-escaping commands are blocked by policy.`
 }
 
 // Parameters implements the agent.Tool interface.
 func (t *Tool) Parameters() any {
-	return codingLabParameters{}
+	return codingLabParameters{
+		Type: "object",
+		Properties: map[string]labToolSchema{
+			"action": {
+				Type:        "string",
+				Description: "Coding Lab lifecycle operation to perform.",
+				Enum: []string{
+					"start_task",
+					"run",
+					"verify",
+					"finish",
+					"fail",
+					"cancel",
+					"block",
+					"close",
+				},
+			},
+			"taskId": {
+				Type:        "string",
+				Description: "Task ID returned by start_task.",
+			},
+			"title": {
+				Type:        "string",
+				Description: "Human-readable task title used by start_task.",
+			},
+			"description": {
+				Type:        "string",
+				Description: "Detailed coding objective used by start_task.",
+			},
+			"source": {
+				Type:        "string",
+				Description: "Absolute or relative local project directory copied into the isolated workspace.",
+			},
+			"command": {
+				Type:        "string",
+				Description: "Shell command executed inside the task workspace.",
+			},
+			"workingDir": {
+				Type:        "string",
+				Description: "Workspace-relative directory used as the command working directory.",
+			},
+			"environment": {
+				Type:        "array",
+				Description: "Additional KEY=VALUE environment variables for the command.",
+				Items: &labToolSchema{
+					Type: "string",
+				},
+			},
+			"timeoutSec": {
+				Type:        "integer",
+				Description: "Optional command timeout in seconds.",
+			},
+			"maxOutputMB": {
+				Type:        "number",
+				Description: "Optional maximum command output retained in megabytes.",
+			},
+			"buildCommand": {
+				Type:        "string",
+				Description: "Required build command used by standard verification.",
+			},
+			"testCommand": {
+				Type:        "string",
+				Description: "Required test command used by standard verification.",
+			},
+			"checks": {
+				Type:        "array",
+				Description: "Explicit verification checks.",
+				Items: &labToolSchema{
+					Type: "object",
+				},
+			},
+			"error": {
+				Type:        "string",
+				Description: "Failure explanation used by the fail action.",
+			},
+			"reason": {
+				Type:        "string",
+				Description: "Reason used by the block action.",
+			},
+		},
+		Required: []string{
+			"action",
+		},
+	}
 }
 
 // Run implements the agent.Tool interface.
-func (t *Tool) Run(ctx context.Context, args json.RawMessage) (string, error) {
-	if t == nil || t.tasks == nil || t.verifier == nil {
+func (t *Tool) Run(
+	ctx context.Context,
+	args json.RawMessage,
+) (string, error) {
+	if t == nil ||
+		t.tasks == nil ||
+		t.verifier == nil ||
+		t.sessions == nil {
 		return "", errors.New("lab: tool is not initialized")
 	}
-
-	var request codingLabRequest
 
 	if len(args) == 0 {
 		return "", errors.New("lab: tool arguments are empty")
 	}
+
+	var request codingLabRequest
 
 	if err := json.Unmarshal(args, &request); err != nil {
 		return "", fmt.Errorf("lab: invalid tool arguments: %w", err)
@@ -134,20 +234,28 @@ func (t *Tool) Run(ctx context.Context, args json.RawMessage) (string, error) {
 	switch request.Action {
 	case "start_task":
 		return t.startTask(ctx, request)
+
 	case "run":
 		return t.runCommand(ctx, request)
+
 	case "verify":
 		return t.verifyTask(ctx, request)
+
 	case "finish":
 		return t.finishTask(request)
+
 	case "fail":
 		return t.failTask(request)
+
 	case "cancel":
 		return t.cancelTask(request)
+
 	case "block":
 		return t.blockTask(request)
+
 	case "close":
 		return t.closeTask(request)
+
 	default:
 		return "", fmt.Errorf(
 			"lab: unknown action %q; expected start_task, run, verify, finish, fail, cancel, block, or close",
@@ -165,11 +273,12 @@ type codingLabRequest struct {
 	Description string `json:"description,omitempty"`
 	Source      string `json:"source,omitempty"`
 
-	Command      string        `json:"command,omitempty"`
-	WorkingDir  string        `json:"workingDir,omitempty"`
-	Environment []string      `json:"environment,omitempty"`
-	TimeoutSec  int           `json:"timeoutSec,omitempty"`
-	MaxOutputMB float64       `json:"maxOutputMB,omitempty"`
+	Command     string   `json:"command,omitempty"`
+	WorkingDir string   `json:"workingDir,omitempty"`
+	Environment []string `json:"environment,omitempty"`
+
+	TimeoutSec  int     `json:"timeoutSec,omitempty"`
+	MaxOutputMB float64 `json:"maxOutputMB,omitempty"`
 
 	BuildCommand string `json:"buildCommand,omitempty"`
 	TestCommand  string `json:"testCommand,omitempty"`
@@ -190,16 +299,16 @@ type codingLabCheck struct {
 }
 
 type codingLabParameters struct {
-	Type       string                    `json:"type"`
-	Properties map[string]labToolSchema  `json:"properties"`
-	Required   []string                  `json:"required"`
+	Type       string                   `json:"type"`
+	Properties map[string]labToolSchema `json:"properties"`
+	Required   []string                 `json:"required"`
 }
 
 type labToolSchema struct {
-	Type        string                    `json:"type,omitempty"`
-	Description string                    `json:"description,omitempty"`
-	Enum        []string                  `json:"enum,omitempty"`
-	Items       *labToolSchema            `json:"items,omitempty"`
+	Type        string         `json:"type,omitempty"`
+	Description string         `json:"description,omitempty"`
+	Enum        []string       `json:"enum,omitempty"`
+	Items       *labToolSchema `json:"items,omitempty"`
 }
 
 func (t *Tool) startTask(
@@ -227,11 +336,31 @@ func (t *Tool) startTask(
 		), err
 	}
 
+	if _, err := t.sessions.Create(task); err != nil {
+		// The task has successfully created a workspace, but the runtime
+		// session could not be registered. Clean it up rather than leaving
+		// an orphaned workspace behind.
+		cleanupErr := t.tasks.Fail(task, err)
+
+		if cleanupErr != nil {
+			err = errors.Join(err, cleanupErr)
+		}
+
+		return encodeLabResponse(
+			codingLabResponse{
+				OK:     false,
+				Action: "start_task",
+				Task:   task,
+				Error:  err.Error(),
+			},
+		), err
+	}
+
 	return encodeLabResponse(
 		codingLabResponse{
-			OK:     true,
-			Action: "start_task",
-			Task:   task,
+			OK:      true,
+			Action:  "start_task",
+			Task:    task,
 			Message: "Coding Lab task started in an isolated workspace.",
 		},
 	)
@@ -262,11 +391,13 @@ func (t *Tool) runCommand(
 
 	result, err := t.tasks.RunCommand(ctx, task, command)
 
+	_ = t.sessions.Touch(task.ID)
+
 	response := codingLabResponse{
-		OK:      err == nil && result.Success,
-		Action:  "run",
-		Task:    task,
-		Result:  &result,
+		OK:     err == nil && result.Success,
+		Action: "run",
+		Task:   task,
+		Result: &result,
 	}
 
 	if err != nil {
@@ -298,8 +429,12 @@ func (t *Tool) verifyTask(
 
 		for index, check := range request.Checks {
 			command := strings.TrimSpace(check.Command)
+
 			if command == "" {
-				return "", fmt.Errorf("lab: verification check %d has an empty command", index+1)
+				return "", fmt.Errorf(
+					"lab: verification check %d has an empty command",
+					index+1,
+				)
 			}
 
 			verificationCommand := Command{
@@ -339,10 +474,12 @@ func (t *Tool) verifyTask(
 		return "", ErrVerificationEmpty
 	}
 
+	_ = t.sessions.Touch(task.ID)
+
 	response := codingLabResponse{
-		OK:         err == nil && summary.Passed,
-		Action:     "verify",
-		Task:       task,
+		OK:           err == nil && summary.Passed,
+		Action:       "verify",
+		Task:         task,
 		Verification: &summary,
 	}
 
@@ -370,7 +507,7 @@ func (t *Tool) finishTask(
 		return "", err
 	}
 
-	return encodeLabResponse(
+	response, encodeErr := encodeLabResponse(
 		codingLabResponse{
 			OK:      true,
 			Action:  "finish",
@@ -378,6 +515,18 @@ func (t *Tool) finishTask(
 			Message: "Coding Lab task marked successful.",
 		},
 	)
+
+	removeErr := t.sessions.RemoveCompleted(task.ID)
+
+	if encodeErr != nil {
+		return "", encodeErr
+	}
+
+	if removeErr != nil {
+		return response, removeErr
+	}
+
+	return response, nil
 }
 
 func (t *Tool) failTask(
@@ -388,8 +537,11 @@ func (t *Tool) failTask(
 		return "", err
 	}
 
+	reason := strings.TrimSpace(request.Error)
+
 	var cause error
-	if reason := strings.TrimSpace(request.Error); reason != "" {
+
+	if reason != "" {
 		cause = errors.New(reason)
 	} else {
 		cause = errors.New("task failed by agent request")
@@ -399,7 +551,7 @@ func (t *Tool) failTask(
 		return "", err
 	}
 
-	return encodeLabResponse(
+	response, encodeErr := encodeLabResponse(
 		codingLabResponse{
 			OK:      true,
 			Action:  "fail",
@@ -407,6 +559,18 @@ func (t *Tool) failTask(
 			Message: "Coding Lab task marked failed.",
 		},
 	)
+
+	removeErr := t.sessions.RemoveCompleted(task.ID)
+
+	if encodeErr != nil {
+		return "", encodeErr
+	}
+
+	if removeErr != nil {
+		return response, removeErr
+	}
+
+	return response, nil
 }
 
 func (t *Tool) cancelTask(
@@ -421,7 +585,7 @@ func (t *Tool) cancelTask(
 		return "", err
 	}
 
-	return encodeLabResponse(
+	response, encodeErr := encodeLabResponse(
 		codingLabResponse{
 			OK:      true,
 			Action:  "cancel",
@@ -429,6 +593,18 @@ func (t *Tool) cancelTask(
 			Message: "Coding Lab task canceled.",
 		},
 	)
+
+	removeErr := t.sessions.RemoveCompleted(task.ID)
+
+	if encodeErr != nil {
+		return "", encodeErr
+	}
+
+	if removeErr != nil {
+		return response, removeErr
+	}
+
+	return response, nil
 }
 
 func (t *Tool) blockTask(
@@ -440,6 +616,7 @@ func (t *Tool) blockTask(
 	}
 
 	reason := strings.TrimSpace(request.Reason)
+
 	if reason == "" {
 		reason = "task blocked by agent"
 	}
@@ -448,7 +625,7 @@ func (t *Tool) blockTask(
 		return "", err
 	}
 
-	return encodeLabResponse(
+	response, encodeErr := encodeLabResponse(
 		codingLabResponse{
 			OK:      true,
 			Action:  "block",
@@ -456,6 +633,18 @@ func (t *Tool) blockTask(
 			Message: "Coding Lab task blocked.",
 		},
 	)
+
+	removeErr := t.sessions.RemoveCompleted(task.ID)
+
+	if encodeErr != nil {
+		return "", encodeErr
+	}
+
+	if removeErr != nil {
+		return response, removeErr
+	}
+
+	return response, nil
 }
 
 func (t *Tool) closeTask(
@@ -470,6 +659,10 @@ func (t *Tool) closeTask(
 		return "", err
 	}
 
+	if err := t.sessions.Delete(task.ID); err != nil {
+		return "", err
+	}
+
 	return encodeLabResponse(
 		codingLabResponse{
 			OK:      true,
@@ -481,33 +674,23 @@ func (t *Tool) closeTask(
 }
 
 func (t *Tool) lookupTask(id string) (*Task, error) {
-	// The first implementation keeps active tasks in memory. Persistent task
-	// storage will be introduced with the Lab session layer, where task state
-	// can be recovered across application restarts.
-	//
-	// This method deliberately exists as the single lookup boundary so that
-	// persistence can replace the in-memory implementation without changing
-	// the tool API.
 	id = strings.TrimSpace(id)
 
 	if id == "" {
 		return nil, errors.New("lab: taskId is required")
 	}
 
-	return nil, fmt.Errorf(
-		"lab: task %q is not available yet; task persistence/registry is the next Lab layer",
-		id,
-	)
+	return t.sessions.GetTask(id)
 }
 
 type codingLabResponse struct {
-	OK           bool                  `json:"ok"`
-	Action       string                `json:"action"`
-	Task         *Task                 `json:"task,omitempty"`
-	Result       *CommandResult        `json:"result,omitempty"`
-	Verification *VerificationSummary  `json:"verification,omitempty"`
-	Message      string                `json:"message,omitempty"`
-	Error        string                `json:"error,omitempty"`
+	OK           bool                 `json:"ok"`
+	Action       string               `json:"action"`
+	Task         *Task                `json:"task,omitempty"`
+	Result       *CommandResult       `json:"result,omitempty"`
+	Verification *VerificationSummary `json:"verification,omitempty"`
+	Message      string               `json:"message,omitempty"`
+	Error        string               `json:"error,omitempty"`
 }
 
 func encodeLabResponse(value codingLabResponse) (string, error) {
@@ -517,8 +700,4 @@ func encodeLabResponse(value codingLabResponse) (string, error) {
 	}
 
 	return string(data), nil
-}
-
-func pathSeparator() rune {
-	return '/'
 }
