@@ -1,11 +1,12 @@
-// Package runtime wires the full SHEYTAN agent stack: LLM client,
-// orchestrator with every built-in tool, memory, multi-agent layer, and the
-// llama.cpp subprocess manager. Both the desktop GUI and the headless `ask`
-// CLI build on this so they stay feature-identical.
+ // Package runtime wires the full SHEYTAN agent stack: LLM client,
+ // orchestrator with every built-in tool, memory, multi-agent layer, research,
+ // and the llama.cpp subprocess manager. Both the desktop GUI and the headless
+ // `ask` CLI build on this so they stay feature-identical.
 package runtime
 
 import (
 	"fmt"
+	"net/http"
 
 	"github.com/sheytan/local-agent/internal/agent"
 	"github.com/sheytan/local-agent/internal/aicontext"
@@ -16,6 +17,7 @@ import (
 	"github.com/sheytan/local-agent/internal/memory"
 	"github.com/sheytan/local-agent/internal/multiagent"
 	"github.com/sheytan/local-agent/internal/recall"
+	"github.com/sheytan/local-agent/internal/research"
 	"github.com/sheytan/local-agent/internal/sandbox"
 	"github.com/sheytan/local-agent/internal/sessions"
 	"github.com/sheytan/local-agent/internal/tools"
@@ -32,8 +34,16 @@ type Stack struct {
 	Browser *tools.BrowserTool
 	Sandbox *sandbox.CodeExecSandbox
 	Recall  *recall.Engine
+
 	// Lab is the autonomous Coding Lab tool.
 	Lab *lab.Tool
+
+	// Research is the unified external research service.
+	Research *research.Service
+
+	// ResearchTool is the agent-facing research tool backed by Research.
+	ResearchTool *research.Tool
+
 	// Linux (v1.0.6) is the built-in Linux-like shell used by BOTH the agent
 	// (the `linux` tool) and the Terminal view — one shared instance so the
 	// user sees (and can replay) exactly what the agent did.
@@ -60,24 +70,25 @@ func NewStack(cfg *config.Config) *Stack {
 	// so chained workflows (files→dataAnalysis→git) never break.
 	tools.SetBaseDir(cfg.DataDir)
 
-	// Core tools
+	// Core tools.
 	orch.Register(tools.Shell{})
 	orch.Register(tools.Files{})
 	orch.Register(tools.CodeExec{})
 	orch.Register(tools.WebSearch{})
 	orch.Register(tools.Git{})
-	orch.Register(tools.NewBrowserTool(cfg)) // browser automation
-	orch.Register(tools.NewDataTool(cfg))    // data analysis + charts
+	orch.Register(tools.NewBrowserTool(cfg))
+	orch.Register(tools.NewDataTool(cfg))
 
 	// v1.0.10 (PRISM): structured data, archives, URLs, verification.
-	orch.Register(tools.JSONTool{})     // JSON/JSONL query + transform
-	orch.Register(tools.ArchiveTool{})  // zip/tar create + extract
-	orch.Register(tools.NewFetchTool()) // bounded URL reader (text/raw)
-	orch.Register(tools.DiffTool{})     // line-level verification
+	orch.Register(tools.JSONTool{})
+	orch.Register(tools.ArchiveTool{})
+	orch.Register(tools.NewFetchTool())
+	orch.Register(tools.DiffTool{})
 
-	// v1.0.6: vision + terminal
+	// v1.0.6: vision + terminal.
 	llamaSrv := llm.NewLlamaServer(cfg)
 	orch.Register(tools.Screenshot{})
+
 	linuxSim := tools.NewLinuxSim(cfg.DataDir)
 	orch.Register(linuxSim)
 
@@ -85,6 +96,7 @@ func NewStack(cfg *config.Config) *Stack {
 	// The Lab is registered only when enabled. Initialization failure is
 	// surfaced through logging while preserving the rest of the runtime.
 	var labTool *lab.Tool
+
 	if cfg.LabEnabled {
 		var err error
 
@@ -103,6 +115,92 @@ func NewStack(cfg *config.Config) *Stack {
 				"Coding Lab registered: workspace=%s network=%t",
 				cfg.LabWorkspaceRoot,
 				cfg.LabAllowNetwork,
+			)
+		}
+	}
+
+	// Version Zeta: unified external research.
+	//
+	// The service owns provider routing and result normalization. The agent
+	// receives one stable "research" tool, while GitHub and Reddit remain
+	// independently replaceable providers.
+	var researchService *research.Service
+	var researchTool *research.Tool
+
+	if cfg.ResearchEnabled {
+		researchConfig := research.ServiceConfig{
+			Backend:    cfg.ResearchBackend,
+			MaxResults: cfg.ResearchMaxResults,
+			Timeout:    researchTimeout(cfg.ResearchTimeoutSec),
+		}
+
+		researchService = research.NewService(researchConfig)
+
+		researchHTTPClient := &http.Client{
+			Timeout: researchTimeout(cfg.ResearchTimeoutSec),
+		}
+
+		if cfg.ResearchGitHub {
+			githubProvider := research.NewGitHubProvider(
+				researchHTTPClient,
+				"",
+				"",
+			)
+
+			if err := researchService.Register(githubProvider); err != nil {
+				logging.Default().Warn(
+					"research",
+					"GitHub provider unavailable: %v",
+					err,
+				)
+			} else {
+				logging.Default().Info(
+					"research",
+					"GitHub provider registered",
+				)
+			}
+		}
+
+		if cfg.ResearchReddit {
+			redditProvider := research.NewRedditProvider(
+				researchHTTPClient,
+				"",
+				"",
+				cfg.ResearchUserAgent,
+			)
+
+			if err := researchService.Register(redditProvider); err != nil {
+				logging.Default().Warn(
+					"research",
+					"Reddit provider unavailable: %v",
+					err,
+				)
+			} else {
+				logging.Default().Info(
+					"research",
+					"Reddit provider registered",
+				)
+			}
+		}
+
+		tool, err := research.NewTool(researchService)
+		if err != nil {
+			logging.Default().Warn(
+				"research",
+				"research tool unavailable: %v",
+				err,
+			)
+		} else {
+			researchTool = tool
+			orch.Register(researchTool)
+
+			logging.Default().Info(
+				"research",
+				"unified research tool registered: backend=%s results=%d timeout=%s providers=%v",
+				researchService.Backend(),
+				cfg.ResearchMaxResults,
+				researchTimeout(cfg.ResearchTimeoutSec),
+				researchService.ProviderNames(),
 			)
 		}
 	}
@@ -144,7 +242,10 @@ func NewStack(cfg *config.Config) *Stack {
 			var lines []string
 
 			for _, c := range engine.Search(query, k) {
-				lines = append(lines, formatCapsuleLine(c))
+				lines = append(
+					lines,
+					formatCapsuleLine(c),
+				)
 			}
 
 			return lines
@@ -174,7 +275,7 @@ func NewStack(cfg *config.Config) *Stack {
 	}
 
 	// Job-Object sandbox (overrides plain codeExec when available);
-	// workdirs live under <app folder>/sandbox/
+	// workdirs live under <app folder>/sandbox/.
 	sb, sbErr := sandbox.NewCodeExecSandbox(
 		512,
 		25,
@@ -200,24 +301,39 @@ func NewStack(cfg *config.Config) *Stack {
 	)
 
 	return &Stack{
-		Cfg:     cfg,
-		Client:  client,
-		Orch:   orch,
-		Multi:  multi,
-		Mem:    mem,
-		Llama:  llamaSrv,
-		Browser: nil,
-		Sandbox: sb,
-		Recall: engine,
-		Lab:    labTool,
-		Linux:  linuxSim,
+		Cfg:          cfg,
+		Client:       client,
+		Orch:         orch,
+		Multi:        multi,
+		Mem:          mem,
+		Llama:        llamaSrv,
+		Browser:      nil,
+		Sandbox:      sb,
+		Recall:       engine,
+		Lab:          labTool,
+		Research:     researchService,
+		ResearchTool: researchTool,
+		Linux:        linuxSim,
 	}
+}
+
+// researchTimeout converts the configuration's seconds value into a safe
+// service/client timeout.
+func researchTimeout(seconds int) time.Duration {
+	if seconds <= 0 {
+		seconds = 20
+	}
+
+	return time.Duration(seconds) * time.Second
 }
 
 // formatCapsuleLine renders one recall capsule for the memory tool's
 // history action.
 func formatCapsuleLine(c recall.Capsule) string {
-	line := c.TS.Format("2006-01-02") + " [" + c.SessionID + "]"
+	line := c.TS.Format("2006-01-02") +
+		" [" +
+		c.SessionID +
+		"]"
 
 	if c.Title != "" {
 		line += " " + c.Title
@@ -275,8 +391,8 @@ func (s *Stack) EnsureLLM() error {
 
 // Close tears down every owned subprocess/handle.
 func (s *Stack) Close() {
-	if bt := s.BrowserTool(); bt != nil {
-		bt.Close()
+	if s.BrowserTool() != nil {
+		s.BrowserTool().Close()
 	}
 
 	if s.Sandbox != nil {
