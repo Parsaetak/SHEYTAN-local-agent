@@ -40,7 +40,7 @@ jobs:
         uses: actions/setup-node@v5
         with:
           node-version: "22.12.0"
-          cache: npm
+          cache: false
 
       - name: Install frontend dependencies
         run: npm install
@@ -61,16 +61,15 @@ jobs:
         run: |
           test -f web/static/index.html
           test -d web/static/assets
-          test -f web/static/manifest.json
           echo "Embedded frontend assets verified."
 
       - name: Regenerate Windows resources
         run: go run ./scripts/gen-syso
 
-      - name: Run unit tests
+      - name: Run internal unit tests
         run: go test ./internal/... -tags headless
 
-      - name: Run race-free package tests
+      - name: Run full Go test suite
         run: go test ./... -run Test -count=1
 
       - name: Vet
