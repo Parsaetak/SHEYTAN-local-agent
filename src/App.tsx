@@ -2,7 +2,6 @@ import {
 	Suspense,
 	lazy,
 	useEffect,
-	useMemo,
 	useState,
 } from "react";
 
@@ -17,6 +16,10 @@ import { useRuntimeStore } from "./store";
 
 const AgentBody = lazy(
 	() => import("./AgentBody"),
+);
+
+const AgentHeader = lazy(
+	() => import("./AgentHeader"),
 );
 
 const AgentSidebar = lazy(
@@ -77,20 +80,8 @@ function App() {
 		(state) => state.app?.appVersion ?? null,
 	);
 
-	const sessions = useRuntimeStore(
-		(state) => state.sessions,
-	);
-
-	const activeSessionId = useRuntimeStore(
-		(state) => state.activeSessionId,
-	);
-
 	const connection = useRuntimeStore(
 		(state) => state.connection,
-	);
-
-	const running = useRuntimeStore(
-		(state) => state.running,
 	);
 
 	const [view, setView] =
@@ -149,23 +140,6 @@ function App() {
 		};
 	}, []);
 
-	const activeSession = useMemo(
-		() =>
-			sessions.find(
-				(session) =>
-					session.id ===
-					activeSessionId,
-			) ?? null,
-		[
-			sessions,
-			activeSessionId,
-		],
-	);
-
-	const selectSession = useRuntimeStore(
-		(state) => state.selectSession,
-	);
-
 	function changeView(
 		nextView: WorkspaceView,
 	) {
@@ -195,12 +169,6 @@ function App() {
 				: connection === "error"
 					? "Connection error"
 					: "Offline";
-
-	const viewTitle =
-		view === "agent"
-			? activeSession?.title ||
-				activeLayer.title
-			: activeLayer.title;
 
 	return (
 		<div className="app-shell">
@@ -358,19 +326,26 @@ function App() {
 								}
 							</span>
 
-							<h1>
-								{viewTitle}
-							</h1>
-						</div>
-
-						<div className="header-actions">
-							{view === "agent" ? (
-								<span className="runtime-pill">
-									{running
-										? "RUNNING"
-										: "READY"}
-								</span>
-							) : null}
+							{view ===
+							"agent" ? (
+								<Suspense
+									fallback={
+										<h1>
+											{
+												activeLayer.title
+											}
+										</h1>
+									}
+								>
+									<AgentHeader />
+								</Suspense>
+							) : (
+								<h1>
+									{
+										activeLayer.title
+									}
+								</h1>
+							)}
 						</div>
 					</section>
 
