@@ -4,9 +4,13 @@ import {
 } from "./api";
 import { useRuntimeStore } from "./store";
 
+const INITIALIZATION_TTL_MS = 30_000;
+
 let initializationPromise:
 	| Promise<void>
 	| null = null;
+
+let initializedAt = 0;
 
 function resolveActiveSessionID(
 	sessions: Session[],
@@ -32,13 +36,11 @@ async function initializeAgentOnce(): Promise<void> {
 	});
 
 	try {
-		const [
-			app,
-			sessions,
-		] = await Promise.all([
-			api.state(),
-			api.sessions(),
-		]);
+		const [app, sessions] =
+			await Promise.all([
+				api.state(),
+				api.sessions(),
+			]);
 
 		const current =
 			useRuntimeStore.getState()
@@ -74,17 +76,34 @@ async function initializeAgentOnce(): Promise<void> {
 }
 
 export function initializeAgent(): Promise<void> {
-	if (!initializationPromise) {
-		initializationPromise =
-			initializeAgentOnce().catch(
-				(error) => {
-					initializationPromise =
-						null;
-
-					throw error;
-				},
-			);
+	if (initializationPromise) {
+		return initializationPromise;
 	}
+
+	const now = Date.now();
+
+	if (
+		initializedAt > 0 &&
+		now - initializedAt <
+			INITIALIZATION_TTL_MS
+	) {
+		return Promise.resolve();
+	}
+
+	initializationPromise =
+		initializeAgentOnce()
+			.then(() => {
+				initializedAt =
+					Date.now();
+			})
+			.catch((error) => {
+				initializedAt = 0;
+				throw error;
+			})
+			.finally(() => {
+				initializationPromise =
+					null;
+			});
 
 	return initializationPromise;
 }
