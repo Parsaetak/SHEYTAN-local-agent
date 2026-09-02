@@ -1,12 +1,25 @@
 import { useRuntimeStore } from "./store";
 
 function AgentSidebar() {
-	const {
-		sessions,
-		activeSessionId,
-		loading,
-		selectSession,
-	} = useRuntimeStore();
+	const sessions = useRuntimeStore(
+		(state) => state.sessions,
+	);
+
+	const activeSessionId =
+		useRuntimeStore(
+			(state) =>
+				state.activeSessionId,
+		);
+
+	const loading = useRuntimeStore(
+		(state) => state.loading,
+	);
+
+	const selectSession =
+		useRuntimeStore(
+			(state) =>
+				state.selectSession,
+		);
 
 	function requestNewSession() {
 		window.dispatchEvent(
