@@ -640,12 +640,6 @@ func (s *Server) handleAbort(w http.ResponseWriter, r *http.Request) {
 
 	if ok {
 		rs.cancel()
-
-		// NOTE:
-		// s.orch.Abort() is intentionally still present here for compatibility
-		// with the current orchestrator. The dedicated per-session abort fix
-		// is handled separately in P0-9.
-		s.orch.Abort()
 	}
 
 	writeJSON(w, map[string]any{
@@ -697,7 +691,6 @@ func (s *Server) handleActivityWS(w http.ResponseWriter, r *http.Request) {
 
 			if action, _ := msg["action"].(string); action == "abort" {
 				rs.cancel()
-				s.orch.Abort()
 			}
 		}
 	}()
