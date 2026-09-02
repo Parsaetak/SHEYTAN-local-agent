@@ -1,85 +1,180 @@
-# SHEYTAN™ Local-Agent — Version Zeta
+# SHEYTAN™ Local-Agent
 
-> A local-first autonomous AI software-engineering environment.
+> **A local-first AI software-engineering laboratory.**
 >
-> **SHEYTAN™ is a trademark of Parsaetak · © 2024–2026 Parsaetak. All rights reserved.**
-> Licensed under the Parsaetak Proprietary License v1.1.
+> The model proposes. The tools execute. The laboratory verifies.
 
-SHEYTAN-Local-Agent is a local-first AI agent built to reason about software, use controlled tools, operate inside isolated coding workspaces, research technical problems, and verify whether proposed changes actually work.
+**SHEYTAN™** is a local-first AI agent/runtime for software engineering. It combines local or OpenAI-compatible LLMs with controlled tools, isolated coding workspaces, objective verification, bounded autonomous repair, technical research, persistent engineering memory, and a modern web UI.
 
-The defining rule of Version Zeta is:
+**SHEYTAN™ is a trademark of Parsaetak · © 2024–2026 Parsaetak. All rights reserved.**
 
-> **The AI may propose a solution. The laboratory decides whether the solution actually works.**
-
----
-
-## Version Zeta
-
-Version Zeta moves the project toward an autonomous coding laboratory rather than a conventional chat assistant.
-
-```text
-                         SHEYTAN — VERSION ZETA
-                                  │
-                    ┌─────────────┴─────────────┐
-                    │                           │
-                LOCAL AI                   ENGINEERING STATE
-                    │                    memory / recall / sessions
-                    ▼                           │
-              ORCHESTRATOR ◄───────────────────┘
-                    │
-          ┌─────────┼──────────┐
-          │         │          │
-        TOOLS      LAB      RESEARCH
-          │         │          │
-          │         │     GitHub / Reddit / Web
-          │         │          │
-          │    ┌────┴─────┐    │
-          │    │ WORKSPACE│    │
-          │    │ isolated │    │
-          │    └────┬─────┘    │
-          │         │          │
-          │      RUN / EDIT ◄──┘
-          │         │
-          │      VERIFY
-          │         │
-          └─────────┴──────────────► PASS / FAIL
-                                         │
-                                FAIL ────┴────► REPAIR ↺
-```
-
-The model remains replaceable. The orchestration, tooling, isolation, verification, research, memory, and UI are application-owned systems.
+Licensed under the **Parsaetak Proprietary License v1.1**.
 
 ---
 
-# Current Architecture
-
-The project currently contains a Go backend/runtime with web and Windows desktop surfaces.
+# Project Identity
 
 ```text
-Go runtime
- ├── local/remote LLM
- ├── orchestrator
- ├── tools
- ├── memory / recall
- ├── browser
- ├── sandbox
- ├── Coding Lab
- └── HTTP + WebSocket API
+Application:  SHEYTAN-Local-Agent
+Version:     1.1.0
+Codename:    Zeta
 ```
 
-The current web frontend is a static UI embedded into the Go server, while Windows retains the existing native Fyne entry point.
+The numeric application version and human-facing codename are separate runtime values.
 
-The next UI stage is a **Node.js + React + TypeScript + Vite frontend**, while keeping the Go runtime as the execution and systems backend.
+The defining architectural principle is:
 
-This separation keeps process execution, filesystem access, sandboxing, local LLM management, and orchestration in Go while giving the UI a modern application stack.
+```text
+LLM claim
+   ↓
+tool execution
+   ↓
+objective evidence
+   ↓
+verification
+   ↓
+accept / reject
+```
+
+A language model is never treated as the final authority on whether a code change works.
+
+---
+
+# What SHEYTAN Is
+
+SHEYTAN-Local-Agent is intended to behave as a bounded AI software engineer rather than a conventional chatbot.
+
+A typical engineering task can follow this lifecycle:
+
+```text
+REQUEST
+   ↓
+UNDERSTAND
+   ↓
+INSPECT
+   ↓
+BASELINE
+   ↓
+PLAN
+   ↓
+EDIT
+   ↓
+RUN
+   ↓
+VERIFY
+   │
+   ├── PASS ──► REVIEW ──► COMPLETE
+   │
+   └── FAIL
+          ↓
+       DIAGNOSE
+          ↓
+       RESEARCH
+          ↓
+        REPAIR ↺
+```
+
+The system is designed so that every stage can be constrained by policies, timeouts, workspace boundaries, output limits, cancellation, and verification rules.
+
+---
+
+# Architecture
+
+The project uses Go as the systems/runtime core and a modern TypeScript frontend for the interactive UI.
+
+```text
+                    ┌────────────────────────┐
+                    │   React / TypeScript   │
+                    │        Vite UI         │
+                    └───────────┬────────────┘
+                                │
+                         REST + WebSocket
+                                │
+                                ▼
+                    ┌────────────────────────┐
+                    │       Go HTTP API      │
+                    └───────────┬────────────┘
+                                │
+                                ▼
+                    ┌────────────────────────┐
+                    │      Go Runtime        │
+                    ├────────────────────────┤
+                    │ orchestrator           │
+                    │ LLM                    │
+                    │ tools                  │
+                    │ Coding Lab             │
+                    │ research               │
+                    │ memory / recall        │
+                    │ sandbox                │
+                    │ process control        │
+                    │ sessions               │
+                    └────────────────────────┘
+```
+
+The runtime owns system-level operations.
+
+The frontend owns presentation, interaction, session navigation, activity display, and future project/Lab visualizations.
+
+Critical execution logic remains in Go.
+
+---
+
+# Runtime Components
+
+```text
+cmd/
+internal/
+├── agent/
+├── aicontext/
+├── api/
+├── artifacts/
+├── browser/
+├── chunking/
+├── config/
+├── continuum/
+├── lab/
+├── llm/
+├── logging/
+├── memory/
+├── multiagent/
+├── native/
+├── proc/
+├── recall/
+├── research/
+├── runtime/
+├── sandbox/
+├── sessions/
+├── sysinfo/
+└── tools/
+src/
+scripts/
+web/
+```
+
+Primary subsystems:
+
+```text
+LLM
+Orchestrator
+Tool Registry
+Coding Lab
+Research
+Memory
+Recall
+Sandbox
+Process Control
+HTTP API
+WebSocket Activity
+React UI
+```
 
 ---
 
 # Coding Lab
 
-The Coding Lab is the central Version Zeta execution system.
+The Coding Lab is the execution and verification core for autonomous software changes.
 
-A task begins from a source project:
+A source project is treated as the original authority:
 
 ```text
 project/
@@ -89,368 +184,481 @@ project/
 └── .git/
 ```
 
-The Lab creates an isolated workspace:
+The Lab operates on a disposable workspace:
 
 ```text
 lab/
 └── workspaces/
-    └── task-YYYYMMDD-HHMMSS-random/
+    └── <task-id>/
         ├── source files
         ├── tests
         └── build/test state
 ```
 
-The autonomous task operates on the disposable workspace instead of directly modifying the original source tree.
+The workspace is intentionally separated from the original source tree during autonomous modification.
 
-## Implemented Lab layers
+## Lab capabilities
 
 ```text
-internal/lab/
-├── workspace.go
-├── runner.go
-├── policy.go
-├── task.go
-├── session.go
-├── verifier.go
-├── tool.go
-├── lab_test.go
-└── runner_test.go
+workspace creation
+workspace isolation
+source/workspace overlap protection
+workspace path validation
+symlink exclusion
+.git handling
+snapshots
+patch export
+promotion
+bounded command execution
+timeouts
+cancellation
+combined output limits
+stdin isolation
+environment sanitization
+command policy
+task lifecycle
+session registry
+objective verification
+repair iteration limits
 ```
-
-Current foundation includes:
-
-* isolated workspace creation
-* source/workspace overlap protection
-* `.git` exclusion
-* symlink exclusion
-* workspace path traversal protection
-* bounded process execution
-* context cancellation
-* command timeouts
-* shared stdout/stderr output limits
-* conservative command policy
-* task lifecycle management
-* session registry
-* objective verification
-* verification invalidation after commands
-* successful-task verification gating
-* orchestrator tool integration
-* regression tests for critical Lab behavior
 
 ---
 
 # Verification Invariant
 
-A successful Coding Lab task cannot be completed without a current passing verification.
+The most important Lab invariant is:
+
+> **A task cannot be considered successfully completed without current passing verification.**
+
+Verification becomes stale whenever the workspace is mutated.
 
 ```text
 RUN / EDIT
-     │
-     ▼
-verification becomes stale
-     │
-     ▼
+     ↓
+verification stale
+     ↓
 VERIFY
-     │
-     ├── FAIL ──► repair / research
-     │
-     └── PASS
-           │
-           ▼
-        FINISH
+     ↓
+PASS ──► continue
+FAIL ──► diagnose / repair
 ```
 
-This prevents an older successful verification result from being reused after a later workspace mutation.
+Trivial successful shell commands are not accepted as proof of correctness.
+
+Examples explicitly rejected as meaningful verification include:
+
+```text
+echo
+printf
+true
+false
+exit 0
+```
+
+The verifier can discover native project checks for common project types such as:
+
+```text
+Go
+Node.js
+Python
+Rust
+```
+
+The verification model is based on meaningful project-level checks rather than arbitrary command success.
+
+---
+
+# Autonomous Repair
+
+The Lab contains a bounded repair controller.
+
+The controller is designed around:
+
+```text
+baseline
+   ↓
+diagnose
+   ↓
+repair
+   ↓
+verify
+   ↓
+repeat only when justified
+```
+
+The repair budget is bounded:
+
+```text
+default: 25 iterations
+absolute maximum: 100 iterations
+```
+
+The controller also avoids blindly retrying the same normalized command indefinitely.
+
+Every repair action remains subject to the normal Lab policy and runner controls.
+
+Autonomous repair is therefore bounded rather than unconstrained.
+
+---
+
+# Promotion and Recovery
+
+Changes are not written directly into the original source tree during normal Lab execution.
+
+Promotion follows this model:
+
+```text
+Lab workspace
+     ↓
+snapshot
+     ↓
+current verification
+     ↓
+promotion
+     ↓
+source tree
+```
+
+Snapshots are created before source mutation.
+
+The Lab workspace is intentionally retained after promotion so that evidence, diagnostics, and recovery information are not immediately destroyed.
+
+The Lab can also export a binary-safe patch representation.
 
 ---
 
 # Controlled Execution
 
-The intended execution path is:
+Agent-controlled commands pass through multiple layers:
 
 ```text
 LLM
- │
- ▼
+ ↓
 Tool API
- │
- ▼
-Command Policy
- │
- ▼
-Coding Lab Runner
- │
- ▼
-Isolated Workspace
- │
- ▼
+ ↓
+Policy
+ ↓
+Lab Runner
+ ↓
+Workspace
+ ↓
 Process
 ```
 
-Current controls include:
+The execution stack provides defense in depth.
+
+Controls include:
 
 ```text
 workspace boundary
-command timeout
-combined output limit
-network policy
-interactive-command policy
-destructive-command policy
-tool allow-list
-abort support
-structured execution results
+path validation
+command policy
+interactive-command restrictions
+network restrictions
+Git restrictions
+timeouts
+output limits
+stdin isolation
+environment sanitization
+process-tree cancellation
 ```
 
-The policy layer is defense-in-depth and is not a replacement for operating-system isolation.
+These controls reduce risk but are **not equivalent to a dedicated operating-system or hardware security boundary**.
 
 ---
 
-# Autonomous Repair Loop
+# Filesystem Security
 
-The intended Zeta loop is:
+The filesystem path layer validates tool paths relative to a configured base.
+
+Important protections include:
 
 ```text
-USER TASK
-   │
-   ▼
-ANALYZE PROJECT
-   │
-   ▼
-BASELINE
-   │
-   ├── build
-   ├── tests
-   └── diagnostics
-   │
-   ▼
-PLAN
-   │
-   ▼
-EDIT
-   │
-   ▼
-RUN
-   │
-   ▼
-VERIFY
-   │
-   ├── PASS ──► REVIEW ──► COMPLETE
-   │
-   └── FAIL
-          │
-          ▼
-       DIAGNOSE
-          │
-          ▼
-       RESEARCH
-          │
-          ▼
-        REPAIR ↺
+absolute-path rejection where required
+relative traversal rejection
+base-directory validation
+symlink-prefix escape detection
+safe path joining
+existing-path checks
+workspace restriction
 ```
 
-The autonomous repair controller is still under active implementation.
+Tools are expected to use the checked path layer instead of constructing unrestricted filesystem paths themselves.
+
+---
+
+# Shell and Git Security
+
+Shell and Git execution are constrained by both path validation and command policy.
+
+The Git policy rejects common escape mechanisms such as:
+
+```text
+-C
+--git-dir
+--work-tree
+absolute external paths
+parent traversal
+file:// repository targets
+```
+
+Workspace-local Git workflows such as committing are permitted where policy allows them.
+
+Git publishing is blocked by the Lab policy.
+
+---
+
+# Process Control
+
+The process layer is designed to cancel entire process trees rather than only the direct child process.
+
+Unix-like systems use process groups.
+
+Windows uses:
+
+```text
+CREATE_NEW_PROCESS_GROUP
+taskkill /PID /T /F
+```
+
+This reduces the risk of timed-out or canceled commands leaving child processes alive.
+
+The Lab runner also avoids inheriting the host's complete environment.
+
+Sensitive host environment values are removed before Lab execution.
+
+Standard input is not inherited from the host terminal for Lab commands.
+
+---
+
+# Network and Fetch Security
+
+Model-controlled HTTP access is bounded and validated.
+
+The fetch layer includes:
+
+```text
+request timeout
+response-size limits
+redirect limits
+redirect re-validation
+localhost blocking
+loopback blocking
+link-local blocking
+private-network blocking
+DNS/network validation
+```
+
+The purpose is to prevent a model-controlled fetch path from being used to access internal/private services.
 
 ---
 
 # Research Engine
 
-Version Zeta is designed to research technical failures instead of blindly guessing.
+Research is a first-class runtime capability.
 
-Planned research sources include:
+Current research backends include:
 
 ```text
+Auto
 GitHub
 Reddit
-general web
-official documentation
+DuckDuckGo
 SearXNG
-bounded HTTP fetches
+Web compatibility alias
 ```
 
-Research should extract evidence such as:
+The agent-facing research tool is:
 
 ```text
-exact error strings
-package/module names
-symbols
-version information
-maintainer explanations
-known regressions
-candidate patches
-workarounds
+research
 ```
 
-A discovered solution is treated as a **candidate**, then checked against the local project and version context.
+The `web` backend name is retained as a compatibility alias for DuckDuckGo. It is **not** a generic unrestricted web provider.
+
+Research requests and results are normalized.
+
+The service supports:
+
+```text
+bounded result counts
+bounded timeouts
+provider validation
+result normalization
+deduplication
+relevance ranking
+authority ranking
+content hashing
+metadata
+```
 
 ---
 
-# Evidence Model
+# Research Evidence
 
-The intended authority order is approximately:
+Research is evidence, not automatic truth.
+
+The intended authority ordering is approximately:
 
 ```text
 official documentation
         ↓
-maintainer-authored issue / PR
+maintainer / project material
         ↓
 project source / release information
         ↓
 high-quality technical discussion
         ↓
-community reports / Reddit
+community reports
         ↓
 unknown web content
 ```
 
-This ranking is guidance, not proof.
+This ordering is advisory.
 
-Local execution and objective verification remain the final acceptance criterion.
+A high-ranked result does not become a confirmed fix merely because it ranks highly.
+
+The final acceptance criterion remains:
+
+```text
+local project state
++
+local execution
++
+objective verification
+```
 
 ---
 
-# AI Runtime
+# GitHub Research
 
-SHEYTAN supports local and remote OpenAI-compatible providers.
+The GitHub provider is intended to surface engineering evidence such as:
 
 ```text
-SHEYTAN
-   │
-   ▼
-LLM Client
-   │
-   ├── local llama.cpp
-   └── remote OpenAI-compatible endpoint
+exact error messages
+package/module names
+symbols
+known regressions
+maintainer explanations
+issues
+pull requests
+workarounds
 ```
 
-The orchestrator provides:
+Responses are bounded and endpoint construction is validated.
 
-* deterministic tool ordering
-* tool allow-listing
-* iterative tool calls
-* streaming activity
-* abort support
-* history windowing
-* persistent recall
-* context-pressure tracking
-* configurable iteration limits
+GitHub research remains evidence that must be checked against the local project and version context.
+
+---
+
+# Reddit Research
+
+Reddit provides practical community evidence such as:
+
+```text
+installation failures
+hardware-specific issues
+configuration problems
+regressions
+practical workarounds
+```
+
+Reddit evidence is treated as experiential rather than authoritative.
+
+OAuth/token requirements are enforced where applicable.
+
+---
+
+# Web Research
+
+The current architecture supports:
+
+```text
+DuckDuckGo
+SearXNG
+```
+
+with:
+
+```text
+timeouts
+result limits
+body limits
+normalization
+ranking
+deduplication
+```
+
+External web content must not silently become authoritative engineering knowledge.
 
 ---
 
 # Memory and Recall
 
-Persistent sessions and recall are already part of the runtime.
+The memory layer separates trusted engineering knowledge from provisional observations.
 
-Zeta is extending that foundation toward engineering memory:
+Current memory classes:
 
 ```text
-project
-├── architecture knowledge
-├── dependency information
-├── known failures
-├── successful commands
-├── verified fixes
-├── rejected approaches
-└── research evidence
+M1 = trusted user facts
+M2 = preferences
+M3 = project state
+M4 = decisions
+M5 = procedures / learned fixes
+M6 = conversation summaries
+M7 = observations / untrusted or provisional knowledge
 ```
 
-The long-term goal is to make previously verified engineering knowledge reusable across tasks.
+Memory entries can carry provenance and trust information.
+
+External research provenance is quarantined by default rather than being silently promoted into trusted memory.
+
+The system distinguishes:
+
+```text
+what was observed
+what was reported
+what was inferred
+what was verified
+```
+
+This distinction is essential to reliable autonomous engineering.
 
 ---
 
-# User Interface — Zeta UI Migration
+# AI Context
 
-The existing UI is being replaced incrementally by a modern Node.js frontend while the Go runtime remains the systems core.
-
-Target stack:
+The project contains an operational AI constitution in:
 
 ```text
-Node.js
-TypeScript
-React
-Vite
-REST
-WebSocket
+internal/aicontext/AI-CONTEXT.md
 ```
 
-Target architecture:
+The AI context is responsible for communicating:
 
 ```text
-             Node / React UI
-                    │
-             REST + WebSocket
-                    │
-                    ▼
-              Go HTTP API
-                    │
-                    ▼
-             Shared Go Runtime
-                    │
-       ┌────────────┼─────────────┐
-       │            │             │
-      LLM          LAB         RESEARCH
+runtime identity
+system information
+LLM/provider state
+capabilities
+tool availability
+research availability
+memory expectations
+verification rules
+safety constraints
+failure discipline
+answer discipline
 ```
 
-The migration is intended to improve:
+The runtime can generate context using the actual registered tool set.
 
-* UI development speed
-* component reuse
-* maintainability
-* interactive rendering
-* live project visualization
-* editor integration
-* responsive application behavior
-
-Critical process, filesystem, sandbox, LLM, and orchestration logic remains in Go.
-
-The migration is **planned/in progress**, not yet complete.
+This is important because the model should see capabilities that match the tools that actually exist at runtime.
 
 ---
 
-# Live SVG Workspace
+# Agent Tool Architecture
 
-SVG becomes a first-class project artifact in the new UI.
-
-```text
-.svg file
-   │
-   ├── live SVG renderer
-   │      ├── zoom
-   │      ├── pan
-   │      ├── selection
-   │      └── instant refresh
-   │
-   └── source editor
-          ├── XML editing
-          ├── formatting
-          ├── validation
-          └── save
-```
-
-The intended workflow is:
-
-```text
-AI creates SVG
-      ↓
-Coding Lab writes file
-      ↓
-UI renders SVG live
-      ↓
-user edits SVG source
-      ↓
-preview updates immediately
-      ↓
-Lab verifies resulting artifact
-```
-
-The new interface is intended to allow both **visual inspection** and **direct SVG source editing** without leaving the application.
-
-The SVG editor/preview is a target of the Node/React UI stage and is not yet a completed product feature.
-
----
-
-# Tool Architecture
-
-Agent tools implement the common interface:
+Tools implement the common interface:
 
 ```go
 type Tool interface {
@@ -461,39 +669,211 @@ type Tool interface {
 }
 ```
 
-Current tool families include:
+The orchestrator exposes the tools actually registered in the runtime.
+
+Tool ordering is deterministic.
+
+Configured tool restrictions are applied before capability information is exposed to the model.
+
+This prevents divergence between:
 
 ```text
-Core
-├── files
-├── shell
-├── code execution
-├── git
-├── browser
-├── web search
-├── JSON
-├── archive
-├── bounded fetch
-├── diff
-└── data analysis
-
-Coding Lab
-└── coding_lab
-
-Runtime
-├── memory
-├── recall
-├── screenshot
-└── linux terminal
+advertised capabilities
 ```
 
-The Coding Lab is registered through the shared runtime stack so the main runtime can use the same implementation.
+and:
+
+```text
+actual capabilities
+```
+
+---
+
+# LLM Runtime
+
+SHEYTAN supports local and OpenAI-compatible LLM endpoints.
+
+Conceptually:
+
+```text
+SHEYTAN
+   ↓
+LLM Client
+   ├── local llama.cpp
+   └── OpenAI-compatible endpoint
+```
+
+The runtime supports:
+
+```text
+streaming
+tool calls
+history management
+iteration limits
+abort handling
+telemetry
+context-pressure management
+dynamic tool exposure
+```
+
+The LLM remains a replaceable component.
+
+The engineering infrastructure around it is application-owned.
+
+An LLM response without usable choices is treated as an error rather than being silently accepted.
+
+---
+
+# API
+
+The Go server provides HTTP endpoints for the frontend/runtime boundary.
+
+Core API areas include:
+
+```text
+state
+sysinfo
+models
+presets
+tools
+sessions
+session details
+session updates
+run
+abort
+activity WebSocket
+```
+
+Session operations are session-scoped.
+
+The WebSocket activity channel is also session-scoped.
+
+API configuration responses redact sensitive credentials.
+
+Configuration updates behave as patches against the current configuration rather than blindly replacing unrelated settings.
+
+---
+
+# WebSocket Activity
+
+Live activity is delivered over:
+
+```text
+/ws/activity?sessionId=<session-id>
+```
+
+Activity connections are scoped to a session.
+
+The server enforces an origin policy rather than accepting arbitrary cross-origin WebSocket requests.
+
+The React frontend connects to the active session's activity channel.
+
+---
+
+# React / TypeScript UI
+
+The current frontend stack is:
+
+```text
+Node.js
+TypeScript
+React
+Vite
+Zustand
+REST
+WebSocket
+```
+
+The package currently targets:
+
+```text
+Node >= 22.12.0
+npm  >= 10.0.0
+```
+
+The main scripts are:
+
+```bash
+npm run dev
+npm run build
+npm run build:web
+npm run sync:web
+npm run preview
+npm run typecheck
+npm run lint
+npm run format
+npm run format:check
+```
+
+The React UI currently includes the core runtime shell:
+
+```text
+session navigation
+session creation
+session deletion
+active-session selection
+live activity
+connection state
+runtime metrics
+model state
+agent composer
+abort support
+```
+
+The frontend communicates with the Go runtime through the HTTP API and WebSocket activity channel.
+
+The migration is active development work; the React UI should not be described as feature-complete.
+
+---
+
+# Frontend Design Direction
+
+The intended UI evolution is:
+
+```text
+Agent
+ ├── conversation / activity
+ ├── runtime state
+ ├── models
+ └── execution status
+
+Coding Lab
+ ├── task
+ ├── workspace
+ ├── commands
+ ├── verification
+ ├── repair iterations
+ ├── snapshots
+ └── promotion
+
+Research
+ ├── query
+ ├── providers
+ ├── evidence
+ ├── ranking
+ └── source details
+
+Memory
+ ├── recall
+ ├── provenance
+ ├── trust
+ └── engineering knowledge
+
+Artifacts
+ ├── files
+ ├── diffs
+ └── future SVG workspace
+```
+
+Lab and Research UI panels are part of the next frontend feature stage.
+
+The SVG editor/preview remains later work.
 
 ---
 
 # Configuration
 
-Version Zeta adds dedicated Lab and research settings:
+Important Version Zeta configuration areas include:
 
 ```text
 LabEnabled
@@ -515,178 +895,381 @@ ResearchWeb
 ResearchUserAgent
 ```
 
-Default safety posture:
+Lab iteration policy:
 
 ```text
-Coding Lab           enabled
-Lab network          disabled
-workspace retention  disabled
-command timeout     300 seconds
-research             enabled
-GitHub research      enabled
-Reddit research      enabled
-web research         enabled
+default = 25
+maximum = 100
 ```
+
+The effective value is bounded even when configuration is malformed or absent.
 
 ---
 
-# Project Structure
+# Security Posture
+
+The project follows a defense-in-depth model.
+
+Important security properties include:
 
 ```text
-SHEYTAN-local-agent/
-├── cmd/
-├── internal/
-│   ├── agent/
-│   ├── aicontext/
-│   ├── api/
-│   ├── artifacts/
-│   ├── browser/
-│   ├── chunking/
-│   ├── config/
-│   ├── continuum/
-│   ├── lab/
-│   ├── llm/
-│   ├── logging/
-│   ├── memory/
-│   ├── multiagent/
-│   ├── native/
-│   ├── recall/
-│   ├── runtime/
-│   ├── sandbox/
-│   ├── sessions/
-│   └── tools/
-├── web/
-│   ├── embed.go
-│   └── static/
-├── models/
-├── sessions/
-├── logs/
-├── sandbox/
-├── workspace/
-├── lab/
-├── charts/
-├── go.mod
-├── go.sum
-├── README.md
-└── worklog.md
+workspace boundaries
+checked filesystem paths
+symlink avoidance
+ZIP extraction validation
+SSRF protection
+bounded HTTP responses
+bounded redirects
+command policy
+Git restrictions
+process-tree cancellation
+environment sanitization
+stdin isolation
+configuration secret redaction
+WebSocket origin checks
+verification gating
+research provenance quarantine
 ```
 
-The future Node/React frontend will be added as a dedicated application surface rather than replacing the Go runtime.
+Security-sensitive changes should preserve these invariants rather than bypassing them for convenience.
 
 ---
 
-# Running
+# Development Rules
 
-Headless agent:
+## For developers
 
-```bash
-sheytan-local-agent ask "Analyze this project"
-```
-
-HTTP/web server:
-
-```bash
-sheytan-local-agent serve
-```
-
-Diagnostics:
-
-```bash
-sheytan-local-agent doctor
-```
-
-System information:
-
-```bash
-sheytan-local-agent sysinfo
-```
-
-Stress suite:
-
-```bash
-sheytan-local-agent stress
-```
-
-Version:
-
-```bash
-sheytan-local-agent version
-```
-
-Windows currently retains the native desktop entry point while the Node/React UI migration is developed.
-
----
-
-# Version Naming
-
-The user-facing numbered release identity is retired.
-
-The project identity is:
+Changes should preserve the separation:
 
 ```text
-SHEYTAN-Local-Agent
-Version Zeta
+UI
+ ↓
+API
+ ↓
+runtime
+ ↓
+controlled execution
 ```
 
-Configuration exposes:
+Do not move security-critical execution logic into the browser merely to simplify UI implementation.
 
-```go
-const (
-    AppName    = "SHEYTAN-Local-Agent"
-    AppVersion = "Zeta"
-)
+When changing an API contract:
+
+```text
+backend contract
+↓
+TypeScript types
+↓
+store/runtime usage
+↓
+UI consumers
 ```
 
-Internal engineering milestones may still be tracked in `worklog.md`, but the public application identity remains **Version Zeta**.
+must remain synchronized.
+
+When changing Lab behavior:
+
+```text
+policy
+runner
+task lifecycle
+verification
+promotion
+tests
+```
+
+must be considered together.
+
+When changing research behavior:
+
+```text
+provider
+normalization
+ranking
+deduplication
+trust/provenance
+tests
+```
+
+must remain consistent.
 
 ---
 
-# Current Development Status
+# Rules for Coding Agents
+
+Agents working on this repository should follow these rules.
+
+### 1. Inspect before modifying
+
+Never assume a file, endpoint, capability, or architecture exists.
+
+Check the live repository first.
+
+### 2. Preserve verified boundaries
+
+Do not weaken:
+
+```text
+workspace isolation
+path checks
+process cancellation
+command policy
+SSRF protection
+secret redaction
+verification gates
+memory quarantine
+```
+
+to make a feature easier.
+
+### 3. Treat external research as evidence
+
+A GitHub issue, Reddit post, web page, or model-generated claim is not automatically true.
+
+Use research to form hypotheses.
+
+Use the local project to test them.
+
+### 4. Never fake verification
+
+Do not turn:
+
+```text
+echo
+true
+exit 0
+```
+
+into a success signal.
+
+Do not report a task as fixed without current meaningful verification.
+
+### 5. Re-verify after mutation
+
+Any workspace mutation can invalidate previous verification.
+
+### 6. Prefer bounded behavior
+
+Loops, retries, commands, network access, output, and repair iterations must have explicit limits.
+
+### 7. Keep API contracts explicit
+
+JSON names are part of the API contract.
+
+Use the backend's actual field names.
+
+### 8. Keep documentation truthful
+
+Do not document planned functionality as implemented.
+
+Use these states:
+
+```text
+Implemented
+In progress
+Planned
+Experimental
+```
+
+### 9. Read AI-CONTEXT.md
+
+The operational constitution in:
+
+```text
+internal/aicontext/AI-CONTEXT.md
+```
+
+is part of the agent/runtime design and should be treated as an engineering contract.
+
+### 10. Verify the actual repository state
+
+A requested change is not considered complete merely because a patch was written locally.
+
+The authoritative state is the committed repository state plus successful verification.
+
+---
+
+# Verification Commands
+
+After Go changes:
+
+```bash
+go mod tidy
+go test ./internal/... -tags headless -count=1
+go test ./internal/lab/ -count=1
+go test ./internal/research/ -count=1
+go vet ./internal/...
+go build -o /tmp/sheytan .
+```
+
+After frontend changes:
+
+```bash
+npm run typecheck
+npm run lint
+npm run build:web
+```
+
+Full frontend/runtime synchronization:
+
+```bash
+npm run build
+```
+
+The exact commands that are appropriate for a change should be selected from the actual project structure rather than copied mechanically.
+
+A test command itself is not sufficient evidence when the test suite does not cover the changed behavior.
+
+---
+
+# Repository Hygiene
+
+Before committing:
+
+```text
+no stale module paths
+no dead imports
+no hardcoded secrets
+no unrestricted filesystem paths
+no unbounded network operations
+no accidental host-environment inheritance
+no fake verification paths
+no stale documentation claims
+no generated build artifacts unless intentionally tracked
+```
+
+Format and typecheck frontend changes.
+
+Run relevant Go tests and vet checks.
+
+---
+
+# Current Status
 
 ## Implemented
 
 ```text
-✓ Go runtime and application architecture
-✓ local and remote LLM support
-✓ orchestrator/tool registry
-✓ persistent sessions and recall
-✓ streaming / abort / context management
-✓ browser and Git tooling
-✓ diagnostics and stress infrastructure
-✓ portable application data
-✓ Coding Lab workspace isolation
-✓ Coding Lab runner
-✓ conservative command policy
-✓ Coding Lab task lifecycle
-✓ Coding Lab session registry
+✓ canonical Go module path
+✓ TOML dependency normalization
+✓ runtime version/codename separation
+✓ dynamic runtime tool exposure
+✓ AI operating context
+✓ persistent sessions
+✓ memory classes and provenance
+✓ memory quarantine for external research
+✓ bounded Coding Lab
+✓ workspace isolation
+✓ task/session lifecycle
+✓ command policy
+✓ path security
+✓ Git restrictions
+✓ process-tree cancellation
+✓ environment sanitization
+✓ stdin isolation
 ✓ objective verification
-✓ verification invalidation/gating
-✓ Coding Lab orchestrator integration
-✓ Lab regression tests
-✓ shared stdout/stderr output limiting
+✓ verification invalidation
+✓ native verification discovery
+✓ snapshot support
+✓ patch export
+✓ promotion gating
+✓ bounded autonomous repair
+✓ GitHub research
+✓ Reddit research
+✓ DuckDuckGo research
+✓ SearXNG research
+✓ research ranking
+✓ research deduplication
+✓ research caching
+✓ SSRF-aware fetch path
+✓ API hardening
+✓ WebSocket origin restrictions
+✓ per-session abort
+✓ LLM empty-response rejection
+✓ llama startup deadlock fix
+✓ ZIP extraction protection
+✓ React/Vite frontend foundation
+✓ session-aware React activity WebSocket
+✓ REST API integration
 ```
 
-## In progress
+## In Progress
 
 ```text
-□ unified API/runtime construction
-□ autonomous repair controller
-□ GitHub research provider
-□ Reddit research provider
-□ general web / SearXNG research
-□ research cache and evidence ranking
-□ engineering/coding memory integration
-□ Node.js + React + TypeScript + Vite UI
-□ live SVG editor/preview
-□ full GUI/Lab integration
-□ end-to-end autonomous coding verification
+□ complete React feature parity with the legacy UI
+□ Coding Lab frontend panel
+□ Research frontend panel
+□ richer project/task inspection
+□ end-to-end autonomous coding workflows
+□ broader verification coverage
+□ frontend integration tests
+□ final UI architecture cleanup
+```
+
+## Later
+
+```text
+□ live SVG editor
+□ advanced artifact workspace
+□ richer visual debugging
+□ additional research providers
+□ more sophisticated engineering-memory workflows
 ```
 
 ---
 
-# Core Objective
+# Engineering Philosophy
 
-The finished Version Zeta system should turn a request such as:
+SHEYTAN is built around one principle:
+
+> **Intelligence is not only the model.**
+
+A useful engineering agent combines:
+
+```text
+Model
+× Reasoning
+× Tools
+× Memory
+× Planning
+× Verification
+× Runtime
+× Compute
+```
+
+A stronger model can improve reasoning.
+
+It cannot replace:
+
+```text
+safe execution
+real project state
+persistent evidence
+objective verification
+bounded control
+```
+
+The final system should therefore behave less like:
+
+```text
+"the AI says the code is fixed"
+```
+
+and more like:
+
+```text
+"the system inspected the project,
+changed the isolated workspace,
+ran the relevant checks,
+verified the result,
+preserved the evidence,
+and only then accepted the change."
+```
+
+---
+
+# Final Objective
+
+The long-term target is a local AI software engineer capable of receiving a request such as:
 
 ```text
 Fix every failing test in this repository.
@@ -695,32 +1278,32 @@ Do not modify files outside the project.
 Keep iterating until the build and tests pass.
 ```
 
-into a bounded engineering loop:
+and executing a bounded, auditable engineering loop:
 
 ```text
 REQUEST
-  ↓
-ANALYZE
-  ↓
+   ↓
+INSPECT
+   ↓
 BASELINE
-  ↓
+   ↓
 DIAGNOSE
-  ↓
+   ↓
 RESEARCH
-  ↓
+   ↓
 PLAN
-  ↓
+   ↓
 PATCH
-  ↓
+   ↓
 RUN
-  ↓
+   ↓
 VERIFY
-  │
-  ├── PASS → REVIEW → COMPLETE
-  │
-  └── FAIL → RESEARCH → REPAIR ↺
+   │
+   ├── PASS → REVIEW → COMPLETE
+   │
+   └── FAIL → RESEARCH → REPAIR ↺
 ```
 
-The defining objective remains:
+The objective is not to make the model appear certain.
 
-> **Build an AI software engineer whose claims are backed by executable evidence.**
+The objective is to make the system produce **evidence-backed engineering results**.
