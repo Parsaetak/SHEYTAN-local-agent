@@ -1,17 +1,3 @@
-// Package proc launches subprocesses without ever flashing a console
-// window on Windows.
-//
-// v1.0.4 fix — the "extra terminal that is always open": SHEYTAN is a GUI
-// app (-H=windowsgui), but every child process it spawned before
-// (llama-server.exe, cmd.exe for the shell tool, wmic/powershell for
-// hardware probes, git, python, node, tar) is a CONSOLE application.
-// Windows gives each console app launched from a GUI process its own
-// brand-new console window — the engine alone kept one terminal open for
-// the whole session, and every hardware probe flashed another.
-//
-// Every process the app spawns now goes through proc.Command /
-// proc.CommandContext (or proc.Hide), which set
-// CREATE_NO_WINDOW | HideWindow on Windows and are no-ops elsewhere.
 package proc
 
 import (
@@ -25,10 +11,12 @@ func Hide(cmd *exec.Cmd) {
 	if cmd == nil {
 		return
 	}
+
 	if cmd.SysProcAttr == nil {
 		cmd.SysProcAttr = newSysProcAttr()
 		return
 	}
+
 	applyHidden(cmd.SysProcAttr)
 }
 
@@ -41,8 +29,21 @@ func Command(name string, args ...string) *exec.Cmd {
 }
 
 // CommandContext is the context-aware variant of Command.
-func CommandContext(ctx context.Context, name string, args ...string) *exec.Cmd {
+//
+// Cancellation is configured to terminate the whole process tree rather than
+// only the immediate child. This is important for shell commands that spawn
+// compilers, test runners, interpreters, or other descendants.
+func CommandContext(
+	ctx context.Context,
+	name string,
+	args ...string,
+) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, name, args...)
 	Hide(cmd)
+
+	cmd.Cancel = func() error {
+		return killProcessTree(cmd)
+	}
+
 	return cmd
 }
