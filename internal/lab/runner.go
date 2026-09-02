@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/proc"
 )
 
 // Package lab contains the autonomous coding-laboratory runtime.
@@ -22,9 +24,9 @@ import (
 // bounded, structured result.
 
 var (
-	ErrCommandEmpty     = errors.New("lab: command is empty")
-	ErrOutputLimit      = errors.New("lab: command output exceeded configured limit")
-	ErrCommandTimedOut  = errors.New("lab: command timed out")
+	ErrCommandEmpty    = errors.New("lab: command is empty")
+	ErrOutputLimit     = errors.New("lab: command output exceeded configured limit")
+	ErrCommandTimedOut = errors.New("lab: command timed out")
 )
 
 // Command describes one process execution requested by the Coding Lab.
@@ -37,7 +39,7 @@ type Command struct {
 	WorkingDir string `json:"workingDir,omitempty"`
 
 	// Environment contains additional environment variables in KEY=VALUE form.
-	// Values are added on top of the current process environment.
+	// Only non-sensitive variables are passed to the child process.
 	Environment []string `json:"environment,omitempty"`
 
 	// Timeout overrides the runner default for this command. A zero value uses
@@ -68,7 +70,7 @@ type CommandResult struct {
 
 // Runner executes commands inside Coding Lab workspaces.
 type Runner struct {
-	DefaultTimeout       time.Duration
+	DefaultTimeout        time.Duration
 	DefaultMaxOutputBytes int64
 }
 
@@ -132,11 +134,13 @@ func (r *Runner) Run(
 	}
 
 	timeout := command.Timeout
+
 	if timeout <= 0 {
 		timeout = r.defaultTimeout()
 	}
 
 	maxOutput := command.MaxOutputBytes
+
 	if maxOutput <= 0 {
 		maxOutput = r.defaultMaxOutputBytes()
 	}
@@ -151,21 +155,22 @@ func (r *Runner) Run(
 	if timeout > 0 {
 		runCtx, cancel = context.WithTimeout(ctx, timeout)
 	}
+
 	defer cancel()
 
 	cmd := buildShellCommand(runCtx, command.Command)
 	cmd.Dir = workingDir
 
-	env := os.Environ()
+	// Coding Lab processes must not inherit the full host environment.
+	// This removes API keys, tokens, passwords, credentials, cookies, and
+	// other host secrets while retaining normal compiler/runtime variables.
+	cmd.Env = mergeEnvironment(
+		sanitizedEnvironment(),
+		command.Environment,
+	)
 
-	if len(command.Environment) > 0 {
-		env = mergeEnvironment(env, command.Environment)
-	}
-
-	cmd.Env = env
-
-	// stdin is intentionally disconnected: autonomous runs must never hang
-	// waiting for interactive input.
+	// stdin remains disconnected: autonomous runs must never block waiting
+	// for terminal input.
 	cmd.Stdin = nil
 
 	// stdout and stderr share ONE output budget. This makes MaxOutputBytes a
@@ -186,6 +191,7 @@ func (r *Runner) Run(
 	started := time.Now().UTC()
 
 	startErr := cmd.Start()
+
 	if startErr != nil {
 		finished := time.Now().UTC()
 
@@ -215,6 +221,7 @@ func (r *Runner) Run(
 		runCtx.Err(),
 		context.DeadlineExceeded,
 	)
+
 	canceled := !timedOut && errors.Is(
 		runCtx.Err(),
 		context.Canceled,
@@ -286,7 +293,7 @@ func buildShellCommand(
 	case "windows":
 		// cmd.exe is deliberately used instead of PowerShell so command syntax
 		// stays predictable for common Windows build/test tooling.
-		return exec.CommandContext(
+		return proc.CommandContext(
 			ctx,
 			"cmd.exe",
 			"/d",
@@ -296,25 +303,108 @@ func buildShellCommand(
 		)
 
 	default:
-		// sh -lc provides pipelines, redirection, &&, environment expansion,
-		// and other standard Unix build-tool behavior.
-		return exec.CommandContext(
+		// Do NOT use "-l": a login shell can read host startup configuration
+		// and unexpectedly reintroduce host state into the Coding Lab.
+		return proc.CommandContext(
 			ctx,
 			"/bin/sh",
-			"-lc",
+			"-c",
 			command,
 		)
 	}
+}
+
+// sanitizedEnvironment keeps normal build/runtime variables while removing
+// variables that commonly contain credentials or other host secrets.
+func sanitizedEnvironment() []string {
+	base := os.Environ()
+	result := make([]string, 0, len(base))
+
+	for _, item := range base {
+		key := envKey(item)
+
+		if key == "" {
+			continue
+		}
+
+		if isSensitiveEnvKey(key) {
+			continue
+		}
+
+		result = append(result, item)
+	}
+
+	return result
+}
+
+func isSensitiveEnvKey(key string) bool {
+	key = strings.ToUpper(strings.TrimSpace(key))
+
+	if key == "" {
+		return true
+	}
+
+	// Explicit high-value secret variables.
+	switch key {
+	case "OPENAI_API_KEY",
+		"ANTHROPIC_API_KEY",
+		"GEMINI_API_KEY",
+		"GOOGLE_API_KEY",
+		"GITHUB_TOKEN",
+		"GH_TOKEN",
+		"AWS_ACCESS_KEY_ID",
+		"AWS_SECRET_ACCESS_KEY",
+		"AWS_SESSION_TOKEN",
+		"AZURE_CLIENT_SECRET",
+		"NPM_TOKEN",
+		"PYPI_TOKEN":
+		return true
+	}
+
+	// Generic secret-bearing names.
+	sensitiveFragments := []string{
+		"API_KEY",
+		"APIKEY",
+		"ACCESS_TOKEN",
+		"AUTH_TOKEN",
+		"BEARER_TOKEN",
+		"CLIENT_SECRET",
+		"PASSWORD",
+		"PASSWD",
+		"SECRET",
+		"TOKEN",
+		"CREDENTIAL",
+		"PRIVATE_KEY",
+		"COOKIE",
+		"SESSION_SECRET",
+	}
+
+	for _, fragment := range sensitiveFragments {
+		if strings.Contains(key, fragment) {
+			return true
+		}
+	}
+
+	// Cloud/provider credential namespaces should not enter autonomous jobs.
+	for _, prefix := range []string{
+		"AWS_",
+		"AZURE_",
+		"GOOGLE_APPLICATION_CREDENTIALS",
+		"GCP_",
+		"DOCKER_AUTH",
+	} {
+		if strings.HasPrefix(key, prefix) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func mergeEnvironment(
 	base,
 	extra []string,
 ) []string {
-	if len(extra) == 0 {
-		return base
-	}
-
 	index := make(map[string]int, len(base))
 
 	for i, item := range base {
@@ -330,7 +420,7 @@ func mergeEnvironment(
 	for _, item := range extra {
 		key := envKey(item)
 
-		if key == "" {
+		if key == "" || isSensitiveEnvKey(key) {
 			continue
 		}
 
@@ -372,9 +462,9 @@ func buildCommandResult(
 
 	success :=
 		runErr == nil &&
-		!timedOut &&
-		!canceled &&
-		!outputLimited
+			!timedOut &&
+			!canceled &&
+			!outputLimited
 
 	if runErr != nil {
 		exitCode = exitCodeFromError(runErr)
@@ -515,6 +605,7 @@ func (b *boundedBuffer) Write(p []byte) (int, error) {
 	}
 
 	n, err := b.buffer.Write(p[:allowed])
+
 	b.Written += int64(n)
 
 	if allowed < len(p) {
