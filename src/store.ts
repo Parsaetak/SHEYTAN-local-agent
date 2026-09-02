@@ -58,7 +58,6 @@ type RuntimeState = {
 	researchLoading: boolean;
 	researchError: string | null;
 
-	loadInitialState: () => Promise<void>;
 	refreshSysinfo: () => Promise<void>;
 	refreshModels: () => Promise<void>;
 	refreshPresets: () => Promise<void>;
@@ -195,50 +194,6 @@ export const useRuntimeStore =
 		research: null,
 		researchLoading: false,
 		researchError: null,
-
-		loadInitialState: async () => {
-			set({
-				loading: true,
-				error: null,
-			});
-
-			try {
-				const [
-					app,
-					models,
-					sessions,
-				] = await Promise.all([
-					api.state(),
-					api.models(),
-					api.sessions(),
-				]);
-
-				const current =
-					get().activeSessionId;
-
-				const activeSessionId =
-					resolveActiveSessionID(
-						sessions,
-						current,
-					);
-
-				set({
-					app,
-					models,
-					sessions,
-					activeSessionId,
-					loading: false,
-				});
-			} catch (error) {
-				set({
-					loading: false,
-					error:
-						error instanceof Error
-							? error.message
-							: "Failed to initialize runtime state.",
-				});
-			}
-		},
 
 		refreshSysinfo: async () => {
 			try {
@@ -752,7 +707,7 @@ export const useRuntimeStore =
 						activity:
 							state.activity
 								.length >=
-							500
+								500
 								? [
 										...state.activity.slice(
 											-499,
