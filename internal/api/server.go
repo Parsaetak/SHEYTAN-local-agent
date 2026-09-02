@@ -188,12 +188,26 @@ func (s *Server) Handler() http.Handler {
 	return withCORS(mux)
 }
 
-// withCORS allows the dev server (Vite, etc.) to call the API during dev.
+// withCORS allows only approved local origins during development and
+// same-origin requests in normal operation.
+//
+// Wildcard origins are intentionally prohibited because this API can expose
+// local runtime state and perform privileged local operations.
 func withCORS(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		origin := strings.TrimSpace(r.Header.Get("Origin"))
+
+		if origin != "" {
+			if !allowedOrigin(origin, r.Host) {
+				http.Error(w, "forbidden origin", http.StatusForbidden)
+				return
+			}
+
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Vary", "Origin")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		}
 
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
@@ -379,46 +393,108 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// redactedConfig returns a copy safe for API responses.
+// Secrets are never returned to the browser.
+func (s *Server) redactedConfig() config.Config {
+	cfg := *s.cfg
+	cfg.RemoteAPIKey = ""
+	return cfg
+}
+
+// mergeConfigPatch applies a JSON object as a partial configuration update.
+//
+// Fields omitted from the request retain their current values. The existing
+// Config pointer is preserved so all runtime components continue sharing the
+// same configuration object.
+func (s *Server) mergeConfigPatch(data []byte) error {
+	var patch map[string]json.RawMessage
+	if err := json.Unmarshal(data, &patch); err != nil {
+		return err
+	}
+
+	currentData, err := json.Marshal(s.cfg)
+	if err != nil {
+		return err
+	}
+
+	var current map[string]json.RawMessage
+	if err := json.Unmarshal(currentData, &current); err != nil {
+		return err
+	}
+
+	for key, value := range patch {
+		// A blank remoteApiKey coming from a redacted GET response must never
+		// erase the stored secret. A non-empty value can intentionally replace
+		// the configured key.
+		if key == "remoteApiKey" {
+			var candidate string
+			if err := json.Unmarshal(value, &candidate); err == nil && candidate == "" {
+				continue
+			}
+		}
+
+		current[key] = value
+	}
+
+	merged, err := json.Marshal(current)
+	if err != nil {
+		return err
+	}
+
+	var updated config.Config
+	if err := json.Unmarshal(merged, &updated); err != nil {
+		return err
+	}
+
+	// Preserve the original shared pointer.
+	*s.cfg = updated
+
+	return nil
+}
+
 // handleConfig deliberately updates the existing Config object in place.
 //
-// runtime.Stack, LlamaServer, installer, tools, orchestrator and other
-// components retain the original config pointer. Replacing s.cfg with a new
-// pointer would leave those components running against stale configuration.
+// GET never exposes RemoteAPIKey.
+//
+// PUT/POST behave as patch operations: only fields supplied by the caller are
+// changed; unspecified settings remain untouched.
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, s.cfg)
+		writeJSON(w, s.redactedConfig())
 
 	case http.MethodPut, http.MethodPost:
-		var body config.Config
+	var raw json.RawMessage
 
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			writeErr(w, http.StatusBadRequest, err)
-			return
-		}
+	decoder := json.NewDecoder(r.Body)
+	decoder.UseNumber()
 
-		// Persist first so the in-memory runtime is only changed after the
-		// configuration has been successfully written.
-		if err := config.Save(s.cfg.ConfigPath(), &body); err != nil {
-			writeErr(w, http.StatusInternalServerError, err)
-			return
-		}
+	if err := decoder.Decode(&raw); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
 
-		// Preserve the original pointer owned by runtime.Stack and mutate it
-		// in place.
-		*s.cfg = body
+	if len(raw) == 0 || string(raw) == "null" {
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("configuration patch must be a JSON object"))
+		return
+	}
 
-		// Refresh directory layout/default-dependent paths after a config
-		// change. This does not replace the shared Config pointer.
-		if err := s.cfg.EnsureDirs(); err != nil {
-			writeErr(w, http.StatusInternalServerError, err)
-			return
-		}
+	if err := s.mergeConfigPatch(raw); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
 
-		writeJSON(w, map[string]any{
-			"ok": true,
-		})
+	if err := config.Save(s.cfg.ConfigPath(), s.cfg); err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
 
+	if err := s.cfg.EnsureDirs(); err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	writeJSON(w, s.redactedConfig())
 	default:
 		writeErr(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
 	}
