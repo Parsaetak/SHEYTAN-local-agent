@@ -9,7 +9,9 @@ import {
 import type { ActivityEvent } from "./store";
 import { useRuntimeStore } from "./store";
 
-function formatActivity(activity: ActivityEvent): string {
+function formatActivity(
+	activity: ActivityEvent,
+): string {
 	const data = activity.data;
 
 	if (typeof data.message === "string") {
@@ -32,28 +34,87 @@ function formatActivity(activity: ActivityEvent): string {
 }
 
 function AgentBody() {
-	const {
-		models,
-		sessions,
-		activeSessionId,
-		loading,
-		error,
-		activity,
-		running,
-		loadInitialState,
-		createSession,
-		deleteSession,
-		run,
-		abort,
-		connectActivity,
-		disconnectActivity,
-		clearActivity,
-	} = useRuntimeStore();
+	const models = useRuntimeStore(
+		(state) => state.models,
+	);
 
-	const [message, setMessage] = useState("");
+	const sessions = useRuntimeStore(
+		(state) => state.sessions,
+	);
+
+	const activeSessionId =
+		useRuntimeStore(
+			(state) =>
+				state.activeSessionId,
+		);
+
+	const loading = useRuntimeStore(
+		(state) => state.loading,
+	);
+
+	const error = useRuntimeStore(
+		(state) => state.error,
+	);
+
+	const activity = useRuntimeStore(
+		(state) => state.activity,
+	);
+
+	const running = useRuntimeStore(
+		(state) => state.running,
+	);
+
+	const loadInitialState =
+		useRuntimeStore(
+			(state) =>
+				state.loadInitialState,
+		);
+
+	const createSession =
+		useRuntimeStore(
+			(state) =>
+				state.createSession,
+		);
+
+	const deleteSession =
+		useRuntimeStore(
+			(state) =>
+				state.deleteSession,
+		);
+
+	const run = useRuntimeStore(
+		(state) => state.run,
+	);
+
+	const abort = useRuntimeStore(
+		(state) => state.abort,
+	);
+
+	const connectActivity =
+		useRuntimeStore(
+			(state) =>
+				state.connectActivity,
+		);
+
+	const disconnectActivity =
+		useRuntimeStore(
+			(state) =>
+				state.disconnectActivity,
+		);
+
+	const clearActivity =
+		useRuntimeStore(
+			(state) =>
+				state.clearActivity,
+		);
+
+	const [message, setMessage] =
+		useState("");
 
 	const activityEndRef =
-		useRef<HTMLDivElement | null>(null);
+		useRef<HTMLDivElement | null>(
+			null,
+		);
 
 	useEffect(() => {
 		let cancelled = false;
@@ -81,7 +142,10 @@ function AgentBody() {
 					session.id ===
 					activeSessionId,
 			) ?? null,
-		[sessions, activeSessionId],
+		[
+			sessions,
+			activeSessionId,
+		],
 	);
 
 	const loadedModels =
@@ -91,10 +155,12 @@ function AgentBody() {
 		models?.local ?? [];
 
 	useEffect(() => {
-		activityEndRef.current?.scrollIntoView({
-			behavior: "smooth",
-			block: "nearest",
-		});
+		activityEndRef.current?.scrollIntoView(
+			{
+				behavior: "smooth",
+				block: "nearest",
+			},
+		);
 	}, [activity]);
 
 	async function handleSubmit(
