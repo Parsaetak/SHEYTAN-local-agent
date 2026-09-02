@@ -1,0 +1,55 @@
+info:
+  productName: "SHEYTAN Local Agent"
+  productIdentifier: "com.sheytan.localagent"
+  productVersion: "0.0.0-zeta"
+  companyName: "SHEYTAN"
+  productDescription: "SHEYTAN Local Agent — native local AI agent runtime"
+
+dev_mode:
+  root_path: .
+
+  log_level: warn
+
+  debounce: 500
+
+  ignore:
+    dir:
+      - .git
+      - node_modules
+      - dist
+      - web/static
+      - bin
+      - tmp
+    file:
+      - .DS_Store
+      - .gitignore
+      - .gitkeep
+    watched_extension:
+      - "*.go"
+      - "*.ts"
+      - "*.tsx"
+      - "*.css"
+      - "*.html"
+      - "*.json"
+      - "*.yml"
+      - "*.yaml"
+    git_ignore: true
+
+  executes:
+    - cmd: npm install
+      type: once
+
+    - cmd: npm run dev -- --host 127.0.0.1
+      type: background
+
+    - cmd: go mod tidy
+      type: blocking
+
+    - cmd: npm run build
+      type: blocking
+
+    - cmd: wails3 task build
+      type: blocking
+
+    - cmd: wails3 task run
+      type: primary
