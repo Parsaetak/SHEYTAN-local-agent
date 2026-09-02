@@ -1,4 +1,53 @@
+import { memo } from "react";
+
+import type { Session } from "./api";
 import { useRuntimeStore } from "./store";
+
+const SessionItem = memo(
+	function SessionItem({
+		session,
+		active,
+		onSelect,
+	}: {
+		session: Session;
+		active: boolean;
+		onSelect: (
+			id: string,
+		) => void;
+	}) {
+		return (
+			<button
+				type="button"
+				className={`session-item ${
+					active ? "active" : ""
+				}`}
+				onClick={() =>
+					onSelect(
+						session.id,
+					)
+				}
+			>
+				<span className="session-icon">
+					◈
+				</span>
+
+				<span className="session-copy">
+					<strong>
+						{session.title ||
+							"Untitled session"}
+					</strong>
+
+					<span>
+						{session.id.slice(
+							0,
+							8,
+						)}
+					</span>
+				</span>
+			</button>
+		);
+	},
+);
 
 function AgentSidebar() {
 	const sessions = useRuntimeStore(
@@ -17,8 +66,7 @@ function AgentSidebar() {
 
 	const selectSession =
 		useRuntimeStore(
-			(state) =>
-				state.selectSession,
+			(state) => state.selectSession,
 		);
 
 	function requestNewSession() {
@@ -64,41 +112,21 @@ function AgentSidebar() {
 				) : (
 					sessions.map(
 						(session) => (
-							<button
-								type="button"
+							<SessionItem
 								key={
 									session.id
 								}
-								className={`session-item ${
+								session={
+									session
+								}
+								active={
 									session.id ===
 									activeSessionId
-										? "active"
-										: ""
-								}`}
-								onClick={() =>
-									selectSession(
-										session.id,
-									)
 								}
-							>
-								<span className="session-icon">
-									◈
-								</span>
-
-								<span className="session-copy">
-									<strong>
-										{session.title ||
-											"Untitled session"}
-									</strong>
-
-									<span>
-										{session.id.slice(
-											0,
-											8,
-										)}
-									</span>
-								</span>
-							</button>
+								onSelect={
+									selectSession
+								}
+							/>
 						),
 					)
 				)}
