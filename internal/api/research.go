@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -42,13 +43,6 @@ type researchHTTPResponse struct {
 	Backend   string               `json:"backend,omitempty"`
 }
 
-// handleResearch exposes the existing unified Research service.
-//
-// GET /api/research
-//   returns backend state and registered providers.
-//
-// POST /api/research
-//   executes one bounded research request.
 func (s *Server) handleResearch(w http.ResponseWriter, r *http.Request) {
 	if s == nil || s.stack == nil || s.stack.Research == nil {
 		writeErr(
@@ -94,8 +88,8 @@ func (s *Server) handleResearch(w http.ResponseWriter, r *http.Request) {
 				request.TimeoutSec,
 			) * time.Second
 
-			var cancel func()
-			ctx, cancel = contextWithTimeout(
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(
 				ctx,
 				timeout,
 			)
@@ -130,7 +124,7 @@ func (s *Server) handleResearch(w http.ResponseWriter, r *http.Request) {
 					Title:       result.Title,
 					URL:         result.URL,
 					Snippet:     result.Snippet,
-					Source:      result.Source,
+					Source:     result.Source,
 					Provider:    result.Provider,
 					PublishedAt: result.PublishedAt,
 					Authority:   result.Authority.String(),
