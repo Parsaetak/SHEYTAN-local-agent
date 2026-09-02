@@ -3,21 +3,19 @@
 package main
 
 import (
-	"fmt"
-	"os"
-
-	"github.com/sheytan/local-agent/internal/config"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/desktop"
 )
 
 func init() {
-	// On non-Windows (Linux/macOS dev box), the native Fyne GUI is not
-	// available — print a hint and exit.
+	// On Linux and other non-Windows platforms, launch the same native
+	// Wails desktop application instead of falling back to CLI-only mode.
 	runDefault = func() int {
-		fmt.Fprintf(os.Stderr,
-			"%s v%s — native desktop GUI is only available on Windows.\n"+
-				"On this %s/%s box you can still use the CLI subcommands:\n"+
-				"  serve, install, doctor, sysinfo, stress, version, help.\n",
-			config.AppName, config.AppVersion, "linux", "amd64")
-		return 1
+		cfg, err := config.Load(config.DefaultPath())
+		if err != nil {
+			return 1
+		}
+
+		return desktop.Run(cfg)
 	}
 }
