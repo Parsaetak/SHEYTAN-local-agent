@@ -15,13 +15,13 @@ import (
         "sync"
         "time"
 
-        "github.com/sheytan/local-agent/internal/aicontext"
-        "github.com/sheytan/local-agent/internal/chunking"
-        "github.com/sheytan/local-agent/internal/config"
-        "github.com/sheytan/local-agent/internal/continuum"
-        "github.com/sheytan/local-agent/internal/llm"
-        "github.com/sheytan/local-agent/internal/logging"
-        "github.com/sheytan/local-agent/internal/netcheck"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/aicontext"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/chunking"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/continuum"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/logging"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/netcheck"
 )
 
 // Tool is the interface every agent tool implements.
@@ -350,6 +350,7 @@ func (o *Orchestrator) RunDetailed(ctx context.Context, messages []llm.Message, 
                         onActivity(Activity{Type: "error", Caption: "LLM error: " + err.Error(), Timestamp: time.Now()})
                         return result, err
                 }
+
                 // v1.0.4: keep the speed telemetry of the last successful call
                 // for the UI HUD.
                 if hud := perf.String(); hud != "" {
@@ -430,6 +431,7 @@ func (o *Orchestrator) RunDetailed(ctx context.Context, messages []llm.Message, 
                         start := time.Now()
                         result2, err := tool.Run(ctx, json.RawMessage(tc.Function.Arguments))
                         dur := time.Since(start)
+
                         // v1.0.6 VISION: tools that produce images (screenshot,
                         // future chart renderers) tag them with [[IMG:path]]
                         // markers. The marker never reaches the model as text —
@@ -437,7 +439,9 @@ func (o *Orchestrator) RunDetailed(ctx context.Context, messages []llm.Message, 
                         // the client converts it into an image_url part the
                         // vision encoder can actually see.
                         result2, toolImages := ExtractImageMarkers(result2)
+
                         toolsUsed[tc.Function.Name] = true
+
                         // Log catcher: one structured record per tool call
                         rec := logging.ToolCallRecord{
                                 TS:         start,
@@ -452,6 +456,7 @@ func (o *Orchestrator) RunDetailed(ctx context.Context, messages []llm.Message, 
                                 rec.Result = ""
                         }
                         logging.Default().ToolCall(rec)
+
                         if err != nil {
                                 // Preserve the tool's output alongside the error —
                                 // tools like git/shell return diagnostic stderr
@@ -461,6 +466,7 @@ func (o *Orchestrator) RunDetailed(ctx context.Context, messages []llm.Message, 
                                 } else {
                                         result2 = fmt.Sprintf("Error: %v", err)
                                 }
+
                                 onActivity(Activity{
                                         Type:      "tool_end",
                                         Caption:   fmt.Sprintf("Tool %s FAILED (%v): %s", tc.Function.Name, dur.Round(time.Millisecond), err.Error()),
@@ -475,6 +481,7 @@ func (o *Orchestrator) RunDetailed(ctx context.Context, messages []llm.Message, 
                                         Timestamp: time.Now(),
                                 })
                         }
+
                         messages = append(messages, llm.Message{
                                 Role:       "tool",
                                 Content:    result2,
@@ -506,20 +513,24 @@ func ExtractImageMarkers(s string) (string, []string) {
         if !strings.Contains(s, imageMarkerPrefix) {
                 return s, nil
         }
+
         var paths []string
         var b strings.Builder
+
         for {
                 i := strings.Index(s, imageMarkerPrefix)
                 if i < 0 {
                         b.WriteString(s)
                         break
                 }
+
                 rest := s[i+len(imageMarkerPrefix):]
                 end := strings.Index(rest, "]]")
                 if end < 0 {
                         b.WriteString(s)
                         break
                 }
+
                 b.WriteString(s[:i])
                 p := strings.TrimSpace(rest[:end])
                 if p != "" {
@@ -527,11 +538,14 @@ func ExtractImageMarkers(s string) (string, []string) {
                 }
                 s = rest[end+2:]
         }
+
         out := b.String()
+
         // collapse the blank runs the stripped markers leave behind
         for strings.Contains(out, "\n\n\n") {
                 out = strings.ReplaceAll(out, "\n\n\n", "\n\n")
         }
+
         return strings.TrimSpace(out), paths
 }
 
@@ -551,27 +565,33 @@ func SplitThink(raw string) (reasoning, content string) {
                 }
                 return "", raw
         }
+
         var think strings.Builder
         var body strings.Builder
         rest := raw
+
         for {
                 open := strings.Index(rest, "<think>")
                 if open < 0 {
                         body.WriteString(rest)
                         break
                 }
+
                 body.WriteString(rest[:open])
                 rest = rest[open+len("<think>"):]
+
                 close := strings.Index(rest, "</think>")
                 if close < 0 {
                         // unclosed: the rest is reasoning (stream interrupted mid-think)
                         think.WriteString(strings.TrimSpace(rest))
                         break
                 }
+
                 think.WriteString(strings.TrimSpace(rest[:close]))
                 think.WriteString("\n")
                 rest = rest[close+len("</think>"):]
         }
+
         return strings.TrimSpace(think.String()), strings.TrimSpace(body.String())
 }
 
@@ -588,11 +608,13 @@ func ensureThinkingNudge(messages []llm.Message) []llm.Message {
                         }
                         return messages
                 }
+
                 // only system messages may precede the conversation
                 if messages[i].Role != "system" {
                         break
                 }
         }
+
         return messages
 }
 
@@ -613,12 +635,14 @@ func insertBeforeLastUser(messages []llm.Message, msg llm.Message) []llm.Message
         out := make([]llm.Message, 0, len(messages)+1)
         inserted := false
         lastUser := -1
+
         for i := len(messages) - 1; i >= 0; i-- {
                 if messages[i].Role == "user" {
                         lastUser = i
                         break
                 }
         }
+
         for i := range messages {
                 if i == lastUser {
                         out = append(out, msg)
@@ -626,9 +650,11 @@ func insertBeforeLastUser(messages []llm.Message, msg llm.Message) []llm.Message
                 }
                 out = append(out, messages[i])
         }
+
         if !inserted {
                 out = append(out, msg)
         }
+
         return out
 }
 
@@ -660,10 +686,12 @@ func hasAIContext(messages []llm.Message) bool {
                 if m.Role != "system" {
                         return false // only system messages precede the conversation
                 }
+
                 if strings.Contains(m.Content, aicontext.HeaderSentinel) {
                         return true
                 }
         }
+
         return false
 }
 
