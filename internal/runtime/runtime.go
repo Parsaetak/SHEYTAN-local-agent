@@ -158,7 +158,9 @@ func NewStack(cfg *config.Config) *Stack {
 		)
 
 		if cfg.ResearchGitHub {
-			githubProvider := research.NewGitHubProvider(
+			var githubProvider research.Provider
+
+			githubProvider = research.NewGitHubProvider(
 				researchHTTPClient,
 				"",
 				"",
@@ -186,7 +188,9 @@ func NewStack(cfg *config.Config) *Stack {
 		}
 
 		if cfg.ResearchReddit {
-			redditProvider := research.NewRedditProvider(
+			var redditProvider research.Provider
+
+			redditProvider = research.NewRedditProvider(
 				researchHTTPClient,
 				"",
 				"",
@@ -215,7 +219,9 @@ func NewStack(cfg *config.Config) *Stack {
 		}
 
 		if cfg.ResearchWeb {
-			duckDuckGoProvider :=
+			var duckDuckGoProvider research.Provider
+
+			duckDuckGoProvider =
 				research.NewDuckDuckGoProvider(
 					researchHTTPClient,
 					"",
@@ -243,7 +249,9 @@ func NewStack(cfg *config.Config) *Stack {
 		}
 
 		if cfg.ResearchSearXNGURL != "" {
-			searxngProvider :=
+			var searxngProvider research.Provider
+
+			searxngProvider =
 				research.NewSearXNGProvider(
 					researchHTTPClient,
 					cfg.ResearchSearXNGURL,
