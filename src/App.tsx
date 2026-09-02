@@ -19,6 +19,10 @@ const AgentBody = lazy(
 	() => import("./AgentBody"),
 );
 
+const AgentSidebar = lazy(
+	() => import("./AgentSidebar"),
+);
+
 const LabPanel = lazy(
 	() => import("./LabPanel"),
 );
@@ -50,15 +54,31 @@ function PanelLoading({
 	);
 }
 
+function SidebarLayerLoading() {
+	return (
+		<div className="panel-loading">
+			<div className="panel-loading-mark">
+				✦
+			</div>
+
+			<strong>
+				Loading Agent
+			</strong>
+
+			<span>
+				Initializing session layer…
+			</span>
+		</div>
+	);
+}
+
 function App() {
 	const {
 		app,
 		sessions,
 		activeSessionId,
 		connection,
-		loading,
 		running,
-		selectSession,
 	} = useRuntimeStore();
 
 	const [view, setView] =
@@ -230,7 +250,9 @@ function App() {
 							(layer) => (
 								<button
 									type="button"
-									key={layer.id}
+									key={
+										layer.id
+									}
 									className={`app-navigation-item ${
 										view ===
 										layer.id
@@ -272,91 +294,13 @@ function App() {
 					</nav>
 
 					{view === "agent" ? (
-						<>
-							<div className="sidebar-heading sidebar-heading-secondary">
-								<div>
-									<span className="eyebrow">
-										AGENT
-									</span>
-
-									<strong>
-										Sessions
-									</strong>
-								</div>
-
-								<button
-									type="button"
-									className="icon-button"
-									onClick={() => {
-										window.dispatchEvent(
-											new CustomEvent(
-												"sheytan:new-session",
-											),
-										);
-									}}
-									title="New session"
-									aria-label="New session"
-								>
-									+
-								</button>
-							</div>
-
-							<div className="session-list">
-								{sessions.length ===
-									0 &&
-								!loading ? (
-									<div className="empty-sidebar">
-										No
-										sessions
-										yet.
-									</div>
-								) : (
-									sessions.map(
-										(
-											session,
-										) => (
-											<button
-												type="button"
-												key={
-													session.id
-												}
-												className={`session-item ${
-													session.id ===
-													activeSessionId
-														? "active"
-														: ""
-												}`}
-												onClick={() =>
-													selectSession(
-														session.id,
-													)
-												}
-											>
-												<span className="session-icon">
-													◈
-												</span>
-
-												<span className="session-copy">
-													<strong>
-														{
-															session.title ||
-															"Untitled session"
-														}
-													</strong>
-
-													<span>
-														{session.id.slice(
-															0,
-															8,
-														)}
-													</span>
-												</span>
-											</button>
-										),
-									)
-								)}
-							</div>
-						</>
+						<Suspense
+							fallback={
+								<SidebarLayerLoading />
+							}
+						>
+							<AgentSidebar />
+						</Suspense>
 					) : (
 						<div className="sidebar-layer-info">
 							<span className="eyebrow">
@@ -364,7 +308,9 @@ function App() {
 							</span>
 
 							<strong>
-								{activeLayer.title}
+								{
+									activeLayer.title
+								}
 							</strong>
 
 							<span>
