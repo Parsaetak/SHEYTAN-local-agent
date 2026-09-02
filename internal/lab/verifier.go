@@ -27,10 +27,12 @@ const (
 // VerificationCheck describes one command that determines whether the task
 // actually works.
 //
-// A check is intentionally separate from a normal Task command. Commands may
-// modify the workspace; verification checks are expected to observe its state.
+// A check is intentionally separate from a normal Task command. Verification
+// commands may invoke compilers, test runners, linters, or other diagnostics,
+// but their final purpose is to establish objective evidence about the current
+// workspace state.
 type VerificationCheck struct {
-	Name         string        `json:"name"`
+	Name         string  `json:"name"`
 	Command      Command       `json:"command"`
 	Required     bool          `json:"required"`
 	AllowFailure bool          `json:"allowFailure,omitempty"`
@@ -48,18 +50,18 @@ type VerificationResult struct {
 
 // VerificationSummary is the aggregate judgment for a verification run.
 type VerificationSummary struct {
-	Passed          bool                 `json:"passed"`
-	RequiredTotal   int                  `json:"requiredTotal"`
-	RequiredPassed  int                  `json:"requiredPassed"`
-	RequiredFailed  int                  `json:"requiredFailed"`
-	OptionalTotal   int                  `json:"optionalTotal"`
-	OptionalPassed  int                  `json:"optionalPassed"`
-	OptionalFailed  int                  `json:"optionalFailed"`
-	Results         []VerificationResult `json:"results"`
-	Duration        time.Duration        `json:"duration"`
-	StartedAt       time.Time            `json:"startedAt"`
-	FinishedAt      time.Time            `json:"finishedAt"`
-	Error           string               `json:"error,omitempty"`
+	Passed         bool                 `json:"passed"`
+	RequiredTotal  int                  `json:"requiredTotal"`
+	RequiredPassed int                  `json:"requiredPassed"`
+	RequiredFailed int                  `json:"requiredFailed"`
+	OptionalTotal  int                  `json:"optionalTotal"`
+	OptionalPassed int                  `json:"optionalPassed"`
+	OptionalFailed int                  `json:"optionalFailed"`
+	Results        []VerificationResult `json:"results"`
+	Duration       time.Duration        `json:"duration"`
+	StartedAt      time.Time            `json:"startedAt"`
+	FinishedAt     time.Time            `json:"finishedAt"`
+	Error          string               `json:"error,omitempty"`
 }
 
 // Verifier executes objective checks against a running task.
@@ -81,12 +83,12 @@ func NewVerifier(tasks *TaskManager) (*Verifier, error) {
 	}, nil
 }
 
-// Verify executes all configured checks.
+// Verify executes all configured checks and records the resulting verification
+// state on the task.
 //
-// Required checks must pass. Optional checks are recorded but do not determine
-// the aggregate Passed field unless AllowFailure is false and the check fails.
-//
-// Verification stops when the context is canceled.
+// The task is considered verified only after the complete verification run has
+// finished and the resulting summary has been recorded through
+// TaskManager.RecordVerification().
 func (v *Verifier) Verify(
 	ctx context.Context,
 	task *Task,
@@ -95,44 +97,32 @@ func (v *Verifier) Verify(
 	started := time.Now().UTC()
 
 	summary := VerificationSummary{
-		Results:  make([]VerificationResult, 0, len(checks)),
+		Results:   make([]VerificationResult, 0, len(checks)),
 		StartedAt: started,
 	}
 
 	if v == nil || v.Tasks == nil {
-		summary.FinishedAt = time.Now().UTC()
-		summary.Duration = summary.FinishedAt.Sub(started)
-		summary.Error = "lab: verifier is not configured"
-		return summary, errors.New("lab: verifier is not configured")
+		return finishVerification(
+			summary,
+			errors.New("lab: verifier is not configured"),
+		)
 	}
 
 	if task == nil {
-		summary.FinishedAt = time.Now().UTC()
-		summary.Duration = summary.FinishedAt.Sub(started)
-		summary.Error = ErrTaskInvalid.Error()
-		return summary, ErrTaskInvalid
+		return finishVerification(summary, ErrTaskInvalid)
 	}
 
 	if task.Status != TaskRunning {
-		summary.FinishedAt = time.Now().UTC()
-		summary.Duration = summary.FinishedAt.Sub(started)
-		summary.Error = fmt.Sprintf(
-			"%s: current status=%s",
-			ErrTaskNotRunnable,
-			task.Status,
-		)
-		return summary, fmt.Errorf(
+		err := fmt.Errorf(
 			"%w: current status=%s",
 			ErrTaskNotRunnable,
 			task.Status,
 		)
+		return finishVerification(summary, err)
 	}
 
 	if len(checks) == 0 {
-		summary.FinishedAt = time.Now().UTC()
-		summary.Duration = summary.FinishedAt.Sub(started)
-		summary.Error = ErrVerificationEmpty.Error()
-		return summary, ErrVerificationEmpty
+		return finishVerification(summary, ErrVerificationEmpty)
 	}
 
 	if ctx == nil {
@@ -140,25 +130,36 @@ func (v *Verifier) Verify(
 	}
 
 	for index, check := range checks {
+		// Check cancellation before starting another verification command.
 		if err := ctx.Err(); err != nil {
-			summary.FinishedAt = time.Now().UTC()
-			summary.Duration = summary.FinishedAt.Sub(started)
 			summary.Error = ErrVerificationCanceled.Error()
+			summary.Passed = false
+
+			finished := time.Now().UTC()
+			summary.FinishedAt = finished
+			summary.Duration = finished.Sub(started)
+
+			_ = v.Tasks.RecordVerification(task, summary)
 
 			return summary, ErrVerificationCanceled
 		}
 
 		normalized, err := normalizeCheck(check, index)
 		if err != nil {
-			result := VerificationResult{
+			finished := time.Now().UTC()
+
+			verificationResult := VerificationResult{
 				Name:       check.Name,
 				Status:     VerificationFailed,
 				Error:      err.Error(),
-				StartedAt:  time.Now().UTC(),
-				FinishedAt: time.Now().UTC(),
+				StartedAt:  finished,
+				FinishedAt: finished,
 			}
 
-			summary.Results = append(summary.Results, result)
+			summary.Results = append(
+				summary.Results,
+				verificationResult,
+			)
 
 			if check.Required && !check.AllowFailure {
 				summary.RequiredTotal++
@@ -168,12 +169,25 @@ func (v *Verifier) Verify(
 				summary.OptionalFailed++
 			}
 
-			summary.FinishedAt = time.Now().UTC()
-			summary.Duration = summary.FinishedAt.Sub(started)
 			summary.Passed = false
 			summary.Error = ErrVerificationFailed.Error()
+			summary.FinishedAt = finished
+			summary.Duration = finished.Sub(started)
 
-			return summary, errors.Join(ErrVerificationFailed, err)
+			recordErr := v.Tasks.RecordVerification(task, summary)
+
+			if recordErr != nil {
+				return summary, errors.Join(
+					ErrVerificationFailed,
+					err,
+					recordErr,
+				)
+			}
+
+			return summary, errors.Join(
+				ErrVerificationFailed,
+				err,
+			)
 		}
 
 		if normalized.Required {
@@ -184,6 +198,9 @@ func (v *Verifier) Verify(
 
 		checkStarted := time.Now().UTC()
 
+		// Policy is checked again here even though RunCommand also checks it.
+		// This keeps verification policy failures represented explicitly as
+		// verification results rather than as an unexplained execution failure.
 		if err := v.Tasks.Policy.EvaluateForWorkspace(
 			normalized.Command.Command,
 			normalized.Command.WorkingDir,
@@ -207,12 +224,25 @@ func (v *Verifier) Verify(
 			}
 
 			if normalized.Required && !normalized.AllowFailure {
-				summary.FinishedAt = checkFinished
-				summary.Duration = summary.FinishedAt.Sub(started)
 				summary.Passed = false
 				summary.Error = ErrVerificationFailed.Error()
+				summary.FinishedAt = checkFinished
+				summary.Duration = checkFinished.Sub(started)
 
-				return summary, errors.Join(ErrVerificationFailed, err)
+				recordErr := v.Tasks.RecordVerification(task, summary)
+
+				if recordErr != nil {
+					return summary, errors.Join(
+						ErrVerificationFailed,
+						err,
+						recordErr,
+					)
+				}
+
+				return summary, errors.Join(
+					ErrVerificationFailed,
+					err,
+				)
 			}
 
 			continue
@@ -243,11 +273,9 @@ func (v *Verifier) Verify(
 				summary.OptionalPassed++
 			}
 
-		case errors.Is(commandErr, context.Canceled),
-			errors.Is(commandErr, ErrCommandTimedOut) &&
-				ctx.Err() != nil:
-
+		case errors.Is(commandErr, context.Canceled):
 			verificationResult.Status = VerificationCanceled
+			verificationResult.Error = commandErrorString(commandErr)
 
 			if normalized.Required {
 				summary.RequiredFailed++
@@ -255,14 +283,29 @@ func (v *Verifier) Verify(
 				summary.OptionalFailed++
 			}
 
-			verificationResult.Error = commandErrorString(commandErr)
+			summary.Results = append(
+				summary.Results,
+				verificationResult,
+			)
 
-			summary.Results = append(summary.Results, verificationResult)
-			summary.FinishedAt = checkFinished
-			summary.Duration = summary.FinishedAt.Sub(started)
+			summary.Passed = false
 			summary.Error = ErrVerificationCanceled.Error()
+			summary.FinishedAt = checkFinished
+			summary.Duration = checkFinished.Sub(started)
+
+			_ = v.Tasks.RecordVerification(task, summary)
 
 			return summary, ErrVerificationCanceled
+
+		case errors.Is(commandErr, ErrCommandTimedOut):
+			verificationResult.Status = VerificationFailed
+			verificationResult.Error = commandErrorString(commandErr)
+
+			if normalized.Required && !normalized.AllowFailure {
+				summary.RequiredFailed++
+			} else {
+				summary.OptionalFailed++
+			}
 
 		default:
 			verificationResult.Status = VerificationFailed
@@ -275,15 +318,29 @@ func (v *Verifier) Verify(
 			}
 		}
 
-		summary.Results = append(summary.Results, verificationResult)
+		summary.Results = append(
+			summary.Results,
+			verificationResult,
+		)
 
+		// Required failures stop the verification run immediately. The failed
+		// summary is still persisted to the Task so Finish() remains blocked.
 		if verificationResult.Status == VerificationFailed &&
 			normalized.Required &&
 			!normalized.AllowFailure {
-			summary.FinishedAt = checkFinished
-			summary.Duration = summary.FinishedAt.Sub(started)
 			summary.Passed = false
 			summary.Error = ErrVerificationFailed.Error()
+			summary.FinishedAt = checkFinished
+			summary.Duration = checkFinished.Sub(started)
+
+			recordErr := v.Tasks.RecordVerification(task, summary)
+
+			if recordErr != nil {
+				return summary, errors.Join(
+					ErrVerificationFailed,
+					recordErr,
+				)
+			}
 
 			return summary, ErrVerificationFailed
 		}
@@ -293,6 +350,9 @@ func (v *Verifier) Verify(
 
 	summary.FinishedAt = finished
 	summary.Duration = finished.Sub(started)
+
+	// At least one required check must exist. This prevents an accidentally
+	// empty required set from becoming an automatic success.
 	summary.Passed =
 		summary.RequiredTotal > 0 &&
 		summary.RequiredFailed == 0 &&
@@ -300,6 +360,22 @@ func (v *Verifier) Verify(
 
 	if !summary.Passed {
 		summary.Error = ErrVerificationFailed.Error()
+	}
+
+	// Record the result AFTER all commands are complete. RunCommand invalidates
+	// verification before every command, so recording earlier would immediately
+	// be wiped out by the next check.
+	recordErr := v.Tasks.RecordVerification(task, summary)
+	if recordErr != nil {
+		if summary.Passed {
+			summary.Passed = false
+			summary.Error = ErrVerificationFailed.Error()
+		}
+
+		return summary, recordErr
+	}
+
+	if !summary.Passed {
 		return summary, ErrVerificationFailed
 	}
 
@@ -308,8 +384,8 @@ func (v *Verifier) Verify(
 
 // VerifyStandard provides a simple build/test verification profile.
 //
-// Empty command strings are ignored, so callers can select only the checks
-// relevant to a particular repository.
+// Empty command strings are ignored. At least one of the supplied commands
+// must therefore be present for verification to succeed.
 func (v *Verifier) VerifyStandard(
 	ctx context.Context,
 	task *Task,
@@ -346,7 +422,7 @@ func (v *Verifier) VerifyStandard(
 
 // VerifyCommands verifies an arbitrary ordered list of commands.
 //
-// Every supplied check is treated as required.
+// Every supplied command is treated as a required verification check.
 func (v *Verifier) VerifyCommands(
 	ctx context.Context,
 	task *Task,
@@ -356,12 +432,13 @@ func (v *Verifier) VerifyCommands(
 
 	for index, command := range commands {
 		command = strings.TrimSpace(command)
+
 		if command == "" {
 			continue
 		}
 
 		checks = append(checks, VerificationCheck{
-			Name: fmt.Sprintf("check-%d", index+1),
+			Name:     fmt.Sprintf("check-%d", index+1),
 			Required: true,
 			Command: Command{
 				Command: command,
@@ -372,13 +449,18 @@ func (v *Verifier) VerifyCommands(
 	return v.Verify(ctx, task, checks)
 }
 
-func normalizeCheck(check VerificationCheck, index int) (VerificationCheck, error) {
+func normalizeCheck(
+	check VerificationCheck,
+	index int,
+) (VerificationCheck, error) {
 	name := strings.TrimSpace(check.Name)
+
 	if name == "" {
 		name = fmt.Sprintf("check-%d", index+1)
 	}
 
 	command := strings.TrimSpace(check.Command.Command)
+
 	if command == "" {
 		return VerificationCheck{}, ErrCommandEmpty
 	}
@@ -397,12 +479,19 @@ func commandErrorString(err error) string {
 	return err.Error()
 }
 
-// Required checks can be explicitly marked AllowFailure, which is useful for
-// advisory diagnostics that are structurally important but should not block
-// the autonomous repair loop.
-func isBlockingVerificationFailure(check VerificationCheck) bool {
-	return check.Required && !check.AllowFailure
-}
+func finishVerification(
+	summary VerificationSummary,
+	err error,
+) (VerificationSummary, error) {
+	finished := time.Now().UTC()
 
-// Keep this helper local for future policy/reporting extensions.
-var _ = isBlockingVerificationFailure
+	summary.FinishedAt = finished
+	summary.Duration = finished.Sub(summary.StartedAt)
+	summary.Passed = false
+
+	if err != nil {
+		summary.Error = err.Error()
+	}
+
+	return summary, err
+}
