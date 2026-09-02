@@ -30,23 +30,23 @@ const (
 // LLMOptions mirrors the available local/remote sampling and runtime knobs.
 type LLMOptions struct {
 	Temperature      float64 `json:"temperature" yaml:"temperature"`
-	TopP             float64 `json:"top_p" yaml:"top_p"`
-	TopK             int     `json:"top_k" yaml:"top_k"`
-	MinP             float64 `json:"min_p" yaml:"min_p"`
-	MaxTokens        int     `json:"max_tokens" yaml:"max_tokens"`
+	TopP             float64 `json:"topP" yaml:"top_p"`
+	TopK             int     `json:"topK" yaml:"top_k"`
+	MinP             float64 `json:"minP" yaml:"min_p"`
+	MaxTokens        int     `json:"maxTokens" yaml:"max_tokens"`
 	Stop             string  `json:"stop" yaml:"stop"`
 	Seed             int     `json:"seed" yaml:"seed"`
-	RepeatPenalty    float64 `json:"repeat_penalty" yaml:"repeat_penalty"`
-	RepeatLastN      int     `json:"repeat_last_n" yaml:"repeat_last_n"`
-	PresencePenalty  float64 `json:"presence_penalty" yaml:"presence_penalty"`
-	FrequencyPenalty float64 `json:"frequency_penalty" yaml:"frequency_penalty"`
+	RepeatPenalty    float64 `json:"repeatPenalty" yaml:"repeat_penalty"`
+	RepeatLastN      int     `json:"repeatLastN" yaml:"repeat_last_n"`
+	PresencePenalty  float64 `json:"presencePenalty" yaml:"presence_penalty"`
+	FrequencyPenalty float64 `json:"frequencyPenalty" yaml:"frequency_penalty"`
 	Mirostat         int     `json:"mirostat" yaml:"mirostat"`
-	MirostatTau      float64 `json:"mirostat_tau" yaml:"mirostat_tau"`
-	MirostatEta      float64 `json:"mirostat_eta" yaml:"mirostat_eta"`
-	NumCtx           int     `json:"num_ctx" yaml:"num_ctx"`
-	NumBatch         int     `json:"num_batch" yaml:"num_batch"`
-	NumGPU           int     `json:"num_gpu" yaml:"num_gpu"`
-	NumThread        int     `json:"num_thread" yaml:"num_thread"`
+	MirostatTau      float64 `json:"mirostatTau" yaml:"mirostat_tau"`
+	MirostatEta      float64 `json:"mirostatEta" yaml:"mirostat_eta"`
+	NumCtx           int     `json:"numCtx" yaml:"num_ctx"`
+	NumBatch         int     `json:"numBatch" yaml:"num_batch"`
+	NumGPU           int     `json:"numGpu" yaml:"num_gpu"`
+	NumThread        int     `json:"numThread" yaml:"num_thread"`
 	Stream           bool    `json:"stream" yaml:"stream"`
 	Preset           string  `json:"preset" yaml:"preset"`
 }
