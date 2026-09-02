@@ -166,21 +166,15 @@ func (r *SessionRegistry) Touch(taskID string) error {
 		return errors.New("lab: session registry is nil")
 	}
 
-	r.mu.RLock()
-	session, ok := r.sessions[taskID]
-	r.mu.RUnlock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
+	session, ok := r.sessions[taskID]
 	if !ok || session == nil {
 		return fmt.Errorf("%w: %s", ErrSessionNotFound, taskID)
 	}
 
-	session.Lock()
-	defer session.Unlock()
-
-	r.mu.Lock()
 	session.UpdatedAt = time.Now().UTC()
-	r.mu.Unlock()
-
 	return nil
 }
 
@@ -267,13 +261,17 @@ func (r *SessionRegistry) Active(taskID string) bool {
 // needs the task in the active runtime map. The Task object itself can still
 // be retained by the caller for reporting.
 func (r *SessionRegistry) RemoveCompleted(taskID string) error {
-	session, err := r.Get(taskID)
-	if err != nil {
-		return err
+	if r == nil {
+		return errors.New("lab: session registry is nil")
 	}
 
-	session.Lock()
-	defer session.Unlock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	session, ok := r.sessions[taskID]
+	if !ok || session == nil {
+		return fmt.Errorf("%w: %s", ErrSessionNotFound, taskID)
+	}
 
 	if session.Task == nil {
 		return fmt.Errorf("%w: %s", ErrTaskNotFoundForCleanup(), taskID)
@@ -281,15 +279,7 @@ func (r *SessionRegistry) RemoveCompleted(taskID string) error {
 
 	switch session.Task.Status {
 	case TaskSucceeded, TaskFailed, TaskCanceled, TaskBlocked:
-		r.mu.Lock()
-		defer r.mu.Unlock()
-
-		if _, ok := r.sessions[taskID]; !ok {
-			return fmt.Errorf("%w: %s", ErrSessionNotFound, taskID)
-		}
-
 		delete(r.sessions, taskID)
-
 		return nil
 
 	default:
