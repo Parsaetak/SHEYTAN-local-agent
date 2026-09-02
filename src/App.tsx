@@ -8,13 +8,18 @@ import {
 	useState,
 } from "react";
 
+import {
+	getWorkspaceLayer,
+	getWorkspaceHref,
+	parseWorkspaceHash,
+	type WorkspaceView,
+	WORKSPACE_LAYERS,
+} from "./workspace";
 import type { ActivityEvent } from "./store";
 import { useRuntimeStore } from "./store";
 
 const LabPanel = lazy(() => import("./LabPanel"));
 const ResearchPanel = lazy(() => import("./ResearchPanel"));
-
-type AppView = "agent" | "lab" | "research";
 
 function formatActivity(activity: ActivityEvent): string {
 	const data = activity.data;
@@ -71,10 +76,50 @@ function App() {
 	} = useRuntimeStore();
 
 	const [message, setMessage] = useState("");
-	const [view, setView] = useState<AppView>("agent");
+	const [view, setView] = useState<WorkspaceView>(() =>
+		parseWorkspaceHash(),
+	);
+
 	const activityEndRef = useRef<HTMLDivElement | null>(null);
 
 	useEffect(() => {
+		function syncViewFromLocation() {
+			setView(parseWorkspaceHash());
+		}
+
+		window.addEventListener("hashchange", syncViewFromLocation);
+		window.addEventListener("popstate", syncViewFromLocation);
+
+		const normalizedView = parseWorkspaceHash();
+		const normalizedHref = getWorkspaceHref(normalizedView);
+
+		if (window.location.href !== normalizedHref) {
+			window.history.replaceState(
+				null,
+				"",
+				normalizedHref,
+			);
+			setView(normalizedView);
+		}
+
+		return () => {
+			window.removeEventListener(
+				"hashchange",
+				syncViewFromLocation,
+			);
+			window.removeEventListener(
+				"popstate",
+				syncViewFromLocation,
+			);
+		};
+	}, []);
+
+	useEffect(() => {
+		if (view !== "agent") {
+			disconnectActivity();
+			return;
+		}
+
 		let cancelled = false;
 
 		void loadInitialState().then(() => {
@@ -87,7 +132,12 @@ function App() {
 			cancelled = true;
 			disconnectActivity();
 		};
-	}, [connectActivity, disconnectActivity, loadInitialState]);
+	}, [
+		view,
+		connectActivity,
+		disconnectActivity,
+		loadInitialState,
+	]);
 
 	useEffect(() => {
 		if (view !== "agent") {
@@ -110,8 +160,11 @@ function App() {
 
 	const loadedModels = models?.loaded ?? [];
 	const localModels = models?.local ?? [];
+	const activeLayer = getWorkspaceLayer(view);
 
-	async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+	async function handleSubmit(
+		event: FormEvent<HTMLFormElement>,
+	) {
 		event.preventDefault();
 
 		const value = message.trim();
@@ -149,10 +202,16 @@ function App() {
 		}
 	}
 
-	function changeView(nextView: AppView) {
+	function changeView(nextView: WorkspaceView) {
 		if (nextView === view) {
 			return;
 		}
+
+		window.history.pushState(
+			null,
+			"",
+			getWorkspaceHref(nextView),
+		);
 
 		setView(nextView);
 	}
@@ -166,19 +225,11 @@ function App() {
 					? "Connection error"
 					: "Offline";
 
-	const viewLabel =
-		view === "agent"
-			? "AGENT"
-			: view === "lab"
-				? "CODING LAB"
-				: "RESEARCH";
-
 	const viewTitle =
 		view === "agent"
-			? activeSession?.title || "Forge a new task"
-			: view === "lab"
-				? "Autonomous engineering"
-				: "External intelligence";
+			? activeSession?.title ||
+				activeLayer.title
+			: activeLayer.title;
 
 	return (
 		<div className="app-shell">
@@ -195,7 +246,9 @@ function App() {
 				<div className="topbar-status">
 					<span
 						className={`status-dot ${
-							connection === "connected" ? "ready" : ""
+							connection === "connected"
+								? "ready"
+								: ""
 						}`}
 					/>
 					<span>{statusLabel}</span>
@@ -210,71 +263,45 @@ function App() {
 				<aside className="sidebar">
 					<div className="sidebar-heading">
 						<div>
-							<span className="eyebrow">WORKSPACE</span>
+							<span className="eyebrow">
+								WORKSPACE
+							</span>
 							<strong>Navigation</strong>
 						</div>
 					</div>
 
-					<nav className="app-navigation" aria-label="Workspace">
-						<button
-							type="button"
-							className={`app-navigation-item ${
-								view === "agent" ? "active" : ""
-							}`}
-							onClick={() => changeView("agent")}
-							aria-pressed={view === "agent"}
-						>
-							<span className="app-navigation-icon">
-								◈
-							</span>
-
-							<span className="app-navigation-copy">
-								<strong>Agent</strong>
-								<span>
-									Interactive local intelligence
+					<nav
+						className="app-navigation"
+						aria-label="Workspace"
+					>
+						{WORKSPACE_LAYERS.map((layer) => (
+							<button
+								type="button"
+								key={layer.id}
+								className={`app-navigation-item ${
+									view === layer.id
+										? "active"
+										: ""
+								}`}
+								onClick={() =>
+									changeView(layer.id)
+								}
+								aria-pressed={
+									view === layer.id
+								}
+							>
+								<span className="app-navigation-icon">
+									{layer.icon}
 								</span>
-							</span>
-						</button>
 
-						<button
-							type="button"
-							className={`app-navigation-item ${
-								view === "lab" ? "active" : ""
-							}`}
-							onClick={() => changeView("lab")}
-							aria-pressed={view === "lab"}
-						>
-							<span className="app-navigation-icon">
-								◆
-							</span>
-
-							<span className="app-navigation-copy">
-								<strong>Coding Lab</strong>
-								<span>
-									Execute, verify, and repair
+								<span className="app-navigation-copy">
+									<strong>{layer.label}</strong>
+									<span>
+										{layer.description}
+									</span>
 								</span>
-							</span>
-						</button>
-
-						<button
-							type="button"
-							className={`app-navigation-item ${
-								view === "research" ? "active" : ""
-							}`}
-							onClick={() => changeView("research")}
-							aria-pressed={view === "research"}
-						>
-							<span className="app-navigation-icon">
-								⌕
-							</span>
-
-							<span className="app-navigation-copy">
-								<strong>Research</strong>
-								<span>
-									External evidence and sources
-								</span>
-							</span>
-						</button>
+							</button>
+						))}
 					</nav>
 
 					{view === "agent" ? (
@@ -301,46 +328,51 @@ function App() {
 							</div>
 
 							<div className="session-list">
-								{sessions.length === 0 && !loading ? (
+								{sessions.length === 0 &&
+								!loading ? (
 									<div className="empty-sidebar">
 										No sessions yet.
 									</div>
 								) : (
-									sessions.map((session) => (
-										<button
-											type="button"
-											key={session.id}
-											className={`session-item ${
-												session.id ===
-												activeSessionId
-													? "active"
-													: ""
-											}`}
-											onClick={() =>
-												selectSession(
-													session.id,
-												)
-											}
-										>
-											<span className="session-icon">
-												◈
-											</span>
-
-											<span className="session-copy">
-												<strong>
-													{session.title ||
-														"Untitled session"}
-												</strong>
-
-												<span>
-													{session.id.slice(
-														0,
-														8,
-													)}
+									sessions.map(
+										(session) => (
+											<button
+												type="button"
+												key={
+													session.id
+												}
+												className={`session-item ${
+													session.id ===
+													activeSessionId
+														? "active"
+														: ""
+												}`}
+												onClick={() =>
+													selectSession(
+														session.id,
+													)
+												}
+											>
+												<span className="session-icon">
+													◈
 												</span>
-											</span>
-										</button>
-									))
+
+												<span className="session-copy">
+													<strong>
+														{session.title ||
+															"Untitled session"}
+													</strong>
+
+													<span>
+														{session.id.slice(
+															0,
+															8,
+														)}
+													</span>
+												</span>
+											</button>
+										),
+									)
 								)}
 							</div>
 						</>
@@ -351,14 +383,13 @@ function App() {
 							</span>
 
 							<strong>
-								{view === "lab"
-									? "Coding Laboratory"
-									: "Research Engine"}
+								{activeLayer.title}
 							</strong>
 
 							<span>
-								Only the active workspace loads its
-								domain UI and data.
+								Only the active workspace
+								loads its domain UI and
+								data.
 							</span>
 						</div>
 					)}
@@ -372,7 +403,9 @@ function App() {
 				<main className="workspace">
 					<section className="workspace-header">
 						<div>
-							<span className="eyebrow">{viewLabel}</span>
+							<span className="eyebrow">
+								{activeLayer.eyebrow}
+							</span>
 
 							<h1>{viewTitle}</h1>
 						</div>
@@ -381,7 +414,9 @@ function App() {
 							{view === "agent" ? (
 								<>
 									<span className="runtime-pill">
-										{running ? "RUNNING" : "READY"}
+										{running
+											? "RUNNING"
+											: "READY"}
 									</span>
 
 									<button
@@ -390,7 +425,9 @@ function App() {
 										onClick={() =>
 											void handleDeleteSession()
 										}
-										disabled={!activeSessionId}
+										disabled={
+											!activeSessionId
+										}
 									>
 										Delete
 									</button>
@@ -425,7 +462,9 @@ function App() {
 												LIVE
 											</span>
 
-											<strong>Activity</strong>
+											<strong>
+												Activity
+											</strong>
 										</div>
 
 										<button
@@ -433,7 +472,8 @@ function App() {
 											className="text-button"
 											onClick={clearActivity}
 											disabled={
-												activity.length === 0
+												activity.length ===
+												0
 											}
 										>
 											Clear
@@ -448,58 +488,65 @@ function App() {
 												</div>
 
 												<strong>
-													Awaiting the first
-													operation
+													Awaiting the
+													first operation
 												</strong>
 
 												<span>
-													Send a task below to begin
-													a local agent run.
+													Send a task below
+													to begin a local
+													agent run.
 												</span>
 											</div>
 										) : (
-											activity.map((item) => (
-												<article
-													className="activity-item"
-													key={item.id}
-												>
-													<div className="activity-marker">
-														<span />
-													</div>
-
-													<div className="activity-content">
-														<div className="activity-meta">
-															<span>
-																{item.type}
-															</span>
-
-															<time>
-																{new Date(
-																	item.timestamp,
-																).toLocaleTimeString(
-																	[],
-																	{
-																		hour: "2-digit",
-																		minute:
-																			"2-digit",
-																		second:
-																			"2-digit",
-																	},
-																)}
-															</time>
+											activity.map(
+												(item) => (
+													<article
+														className="activity-item"
+														key={item.id}
+													>
+														<div className="activity-marker">
+															<span />
 														</div>
 
-														<p>
-															{formatActivity(
-																item,
-															)}
-														</p>
-													</div>
-												</article>
-											))
+														<div className="activity-content">
+															<div className="activity-meta">
+																<span>
+																	{
+																		item.type
+																	}
+																</span>
+
+																<time>
+																	{new Date(
+																		item.timestamp,
+																	).toLocaleTimeString(
+																		[],
+																		{
+																			hour: "2-digit",
+																			minute: "2-digit",
+																			second: "2-digit",
+																		},
+																	)}
+																</time>
+															</div>
+
+															<p>
+																{formatActivity(
+																	item,
+																)}
+															</p>
+														</div>
+													</article>
+												),
+											)
 										)}
 
-										<div ref={activityEndRef} />
+										<div
+											ref={
+												activityEndRef
+											}
+										/>
 									</div>
 								</div>
 
@@ -510,36 +557,54 @@ function App() {
 												RUNTIME
 											</span>
 
-											<strong>System</strong>
+											<strong>
+												System
+											</strong>
 										</div>
 									</div>
 
 									<div className="runtime-grid">
 										<div className="metric-card">
-											<span>Sessions</span>
+											<span>
+												Sessions
+											</span>
 											<strong>
-												{sessions.length}
+												{
+													sessions.length
+												}
 											</strong>
 										</div>
 
 										<div className="metric-card">
-											<span>Local models</span>
+											<span>
+												Local models
+											</span>
 											<strong>
-												{localModels.length}
+												{
+													localModels.length
+												}
 											</strong>
 										</div>
 
 										<div className="metric-card">
-											<span>Loaded</span>
+											<span>
+												Loaded
+											</span>
 											<strong>
-												{loadedModels.length}
+												{
+													loadedModels.length
+												}
 											</strong>
 										</div>
 
 										<div className="metric-card">
-											<span>Events</span>
+											<span>
+												Events
+											</span>
 											<strong>
-												{activity.length}
+												{
+													activity.length
+												}
 											</strong>
 										</div>
 									</div>
@@ -622,17 +687,18 @@ function App() {
 												: "Create a session to begin..."
 										}
 										disabled={
-											!activeSessionId || running
+											!activeSessionId ||
+											running
 										}
 										rows={3}
 										onKeyDown={(event) => {
 											if (
-												event.key === "Enter" &&
+												event.key ===
+													"Enter" &&
 												(event.ctrlKey ||
 													event.metaKey)
 											) {
 												event.preventDefault();
-
 												event.currentTarget.form?.requestSubmit();
 											}
 										}}
