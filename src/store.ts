@@ -59,9 +59,13 @@ type RuntimeState = {
 	researchError: string | null;
 
 	loadInitialState: () => Promise<void>;
+	refreshSysinfo: () => Promise<void>;
 	refreshModels: () => Promise<void>;
+	refreshPresets: () => Promise<void>;
 	refreshSessions: () => Promise<void>;
 	refreshTools: () => Promise<void>;
+	refreshAgentResources: () => Promise<void>;
+
 	refreshLab: () => Promise<void>;
 	loadLabTask: (id: string) => Promise<void>;
 
@@ -106,14 +110,19 @@ function normalizeActivity(
 		const value =
 			payload as Record<string, unknown>;
 
-		const rawTimestamp = value.timestamp;
+		const rawTimestamp =
+			value.timestamp;
 
 		let timestamp = Date.now();
 
 		if (typeof rawTimestamp === "number") {
 			timestamp = rawTimestamp;
-		} else if (typeof rawTimestamp === "string") {
-			const parsed = Date.parse(rawTimestamp);
+		} else if (
+			typeof rawTimestamp === "string"
+		) {
+			const parsed = Date.parse(
+				rawTimestamp,
+			);
 
 			if (!Number.isNaN(parsed)) {
 				timestamp = parsed;
@@ -139,6 +148,23 @@ function normalizeActivity(
 			value: payload,
 		},
 	};
+}
+
+function resolveActiveSessionID(
+	sessions: Session[],
+	currentID: string | null,
+): string | null {
+	if (
+		currentID &&
+		sessions.some(
+			(session) =>
+				session.id === currentID,
+		)
+	) {
+		return currentID;
+	}
+
+	return sessions[0]?.id ?? null;
 }
 
 export const useRuntimeStore =
@@ -179,41 +205,27 @@ export const useRuntimeStore =
 			try {
 				const [
 					app,
-					sysinfo,
-					presets,
 					models,
 					sessions,
-					tools,
 				] = await Promise.all([
 					api.state(),
-					api.sysinfo(),
-					api.presets(),
 					api.models(),
 					api.sessions(),
-					api.tools(),
 				]);
 
 				const current =
 					get().activeSessionId;
 
 				const activeSessionId =
-					current &&
-					sessions.some(
-						(session) =>
-							session.id ===
-							current,
-					)
-						? current
-						: (sessions[0]?.id ??
-							null);
+					resolveActiveSessionID(
+						sessions,
+						current,
+					);
 
 				set({
 					app,
-					sysinfo,
-					presets,
 					models,
 					sessions,
-					tools,
 					activeSessionId,
 					loading: false,
 				});
@@ -224,6 +236,22 @@ export const useRuntimeStore =
 						error instanceof Error
 							? error.message
 							: "Failed to initialize runtime state.",
+				});
+			}
+		},
+
+		refreshSysinfo: async () => {
+			try {
+				const sysinfo =
+					await api.sysinfo();
+
+				set({ sysinfo });
+			} catch (error) {
+				set({
+					error:
+						error instanceof Error
+							? error.message
+							: "Failed to refresh system information.",
 				});
 			}
 		},
@@ -244,6 +272,22 @@ export const useRuntimeStore =
 			}
 		},
 
+		refreshPresets: async () => {
+			try {
+				const presets =
+					await api.presets();
+
+				set({ presets });
+			} catch (error) {
+				set({
+					error:
+						error instanceof Error
+							? error.message
+							: "Failed to refresh presets.",
+				});
+			}
+		},
+
 		refreshSessions: async () => {
 			try {
 				const sessions =
@@ -253,15 +297,10 @@ export const useRuntimeStore =
 					get().activeSessionId;
 
 				const activeSessionId =
-					current &&
-					sessions.some(
-						(session) =>
-							session.id ===
-							current,
-					)
-						? current
-						: (sessions[0]?.id ??
-							null);
+					resolveActiveSessionID(
+						sessions,
+						current,
+					);
 
 				set({
 					sessions,
@@ -289,6 +328,37 @@ export const useRuntimeStore =
 						error instanceof Error
 							? error.message
 							: "Failed to refresh tools.",
+				});
+			}
+		},
+
+		refreshAgentResources: async () => {
+			set({
+				error: null,
+			});
+
+			try {
+				const [
+					sysinfo,
+					presets,
+					tools,
+				] = await Promise.all([
+					api.sysinfo(),
+					api.presets(),
+					api.tools(),
+				]);
+
+				set({
+					sysinfo,
+					presets,
+					tools,
+				});
+			} catch (error) {
+				set({
+					error:
+						error instanceof Error
+							? error.message
+							: "Failed to load Agent resources.",
 				});
 			}
 		},
@@ -339,6 +409,7 @@ export const useRuntimeStore =
 					activeLabTaskId: null,
 					activeLabTask: null,
 				});
+
 				return;
 			}
 
@@ -418,16 +489,17 @@ export const useRuntimeStore =
 				const sessions =
 					state.sessions.filter(
 						(session) =>
-							session.id !==
-							id,
+							session.id !== id,
 					);
 
 				const activeSessionId =
-					state.activeSessionId ===
-					id
-						? (sessions[0]?.id ??
-							null)
-						: state.activeSessionId;
+					resolveActiveSessionID(
+						sessions,
+						state.activeSessionId ===
+							id
+							? null
+							: state.activeSessionId,
+					);
 
 				return {
 					sessions,
@@ -487,6 +559,7 @@ export const useRuntimeStore =
 				set({
 					running: false,
 				});
+
 				return;
 			}
 
@@ -507,7 +580,9 @@ export const useRuntimeStore =
 
 			try {
 				const response =
-					await api.labAction(payload);
+					await api.labAction(
+						payload,
+					);
 
 				if (!response.ok) {
 					throw new Error(
@@ -655,8 +730,7 @@ export const useRuntimeStore =
 				}
 
 				set({
-					connection:
-						"connected",
+					connection: "connected",
 				});
 			};
 
@@ -712,8 +786,7 @@ export const useRuntimeStore =
 					get().activeSessionId
 				) {
 					set({
-						connection:
-							"error",
+						connection: "error",
 					});
 				}
 			};
