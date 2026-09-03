@@ -10,22 +10,17 @@ import {
 import { useRuntimeStore } from "./store";
 
 const AgentBody = lazy(() => import("./AgentBody"));
-
 const AgentHeader = lazy(() => import("./AgentHeader"));
-
 const AgentSidebar = lazy(() => import("./AgentSidebar"));
-
 const LabPanel = lazy(() => import("./LabPanel"));
-
 const ResearchPanel = lazy(() => import("./ResearchPanel"));
+const SettingsPanel = lazy(() => import("./SettingsPanel"));
 
 function PanelLoading({ label }: { label: string }) {
   return (
     <div className="panel-loading">
       <div className="panel-loading-mark">✦</div>
-
       <strong>Loading {label}</strong>
-
       <span>Initializing this workspace layer…</span>
     </div>
   );
@@ -35,9 +30,7 @@ function SidebarLayerLoading() {
   return (
     <div className="panel-loading">
       <div className="panel-loading-mark">✦</div>
-
       <strong>Loading Agent</strong>
-
       <span>Initializing session layer…</span>
     </div>
   );
@@ -45,7 +38,6 @@ function SidebarLayerLoading() {
 
 function App() {
   const appVersion = useRuntimeStore((state) => state.app?.appVersion ?? null);
-
   const connection = useRuntimeStore((state) => state.connection);
 
   const [view, setView] = useState<WorkspaceView>(() => parseWorkspaceHash());
@@ -56,22 +48,18 @@ function App() {
     }
 
     window.addEventListener("hashchange", syncViewFromLocation);
-
     window.addEventListener("popstate", syncViewFromLocation);
 
     const normalizedView = parseWorkspaceHash();
-
     const normalizedHref = getWorkspaceHref(normalizedView);
 
     if (window.location.href !== normalizedHref) {
       window.history.replaceState(null, "", normalizedHref);
-
       setView(normalizedView);
     }
 
     return () => {
       window.removeEventListener("hashchange", syncViewFromLocation);
-
       window.removeEventListener("popstate", syncViewFromLocation);
     };
   }, []);
@@ -82,7 +70,6 @@ function App() {
     }
 
     window.history.pushState(null, "", getWorkspaceHref(nextView));
-
     setView(nextView);
   }
 
@@ -105,7 +92,6 @@ function App() {
 
           <div className="brand-copy">
             <strong>SHEYTAN</strong>
-
             <span>Local Agent</span>
           </div>
         </div>
@@ -130,7 +116,6 @@ function App() {
           <div className="sidebar-heading">
             <div>
               <span className="eyebrow">WORKSPACE</span>
-
               <strong>Navigation</strong>
             </div>
           </div>
@@ -150,7 +135,6 @@ function App() {
 
                 <span className="app-navigation-copy">
                   <strong>{layer.label}</strong>
-
                   <span>{layer.description}</span>
                 </span>
               </button>
@@ -164,9 +148,7 @@ function App() {
           ) : (
             <div className="sidebar-layer-info">
               <span className="eyebrow">LAYER</span>
-
               <strong>{activeLayer.title}</strong>
-
               <span>
                 Only the active workspace loads its domain UI and data.
               </span>
@@ -175,7 +157,6 @@ function App() {
 
           <div className="sidebar-footer">
             <span>Native runtime</span>
-
             <span>Go + Wails</span>
           </div>
         </aside>
@@ -203,9 +184,13 @@ function App() {
             <Suspense fallback={<PanelLoading label="Coding Lab" />}>
               <LabPanel />
             </Suspense>
-          ) : (
+          ) : view === "research" ? (
             <Suspense fallback={<PanelLoading label="Research" />}>
               <ResearchPanel />
+            </Suspense>
+          ) : (
+            <Suspense fallback={<PanelLoading label="Settings" />}>
+              <SettingsPanel />
             </Suspense>
           )}
         </main>
