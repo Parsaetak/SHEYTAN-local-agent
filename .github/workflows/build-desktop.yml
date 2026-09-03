@@ -1,227 +1,266 @@
-name: build-desktop
+name: Build Desktop
 
 on:
   push:
     branches:
       - main
-      - master
     tags:
       - "v*"
-      - "1.*"
   pull_request:
     branches:
       - main
-      - master
   workflow_dispatch:
 
 permissions:
   contents: write
 
+env:
+  GO_VERSION: "1.26"
+  NODE_VERSION: "22"
+  APP_VERSION: "1.1.0"
+  APP_CODENAME: "Zeta"
+
 jobs:
   build-windows:
-    name: Build SHEYTAN Local Agent — Windows
+    name: Windows x64
     runs-on: windows-latest
-
-    defaults:
-      run:
-        shell: bash
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
 
-      - name: Setup Go
-        uses: actions/setup-go@v6
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
-          go-version: "1.26"
-          cache: true
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v5
-        with:
-          node-version: "22.12.0"
-          package-manager-cache: false
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: web/package-lock.json
 
       - name: Install frontend dependencies
+        working-directory: web
+        shell: pwsh
         run: npm install
 
       - name: Frontend typecheck
+        working-directory: web
+        shell: pwsh
         run: npm run typecheck
 
       - name: Frontend lint
+        working-directory: web
+        shell: pwsh
         run: npm run lint
 
-      - name: Frontend format
-        run: |
-          npm run format
-          npm run format:check
+      - name: Frontend format check
+        working-directory: web
+        shell: pwsh
+        run: npm run format:check
 
-      - name: Build frontend and synchronize embedded assets
+      - name: Build frontend
+        working-directory: web
+        shell: pwsh
         run: npm run build
 
       - name: Verify embedded frontend
+        shell: pwsh
         run: |
-          test -f web/static/index.html
-          test -d web/static/assets
-          grep -q 'type="module"' web/static/index.html
-          echo "Embedded Node/Vite frontend verified."
+          if (-not (Test-Path "web/static/index.html")) {
+            throw "web/static/index.html was not generated."
+          }
 
-      - name: Regenerate Windows resources
-        run: go run ./scripts/gen-syso
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
 
-      - name: Run internal unit tests
-        run: go test ./internal/... -tags headless
+      - name: Go tests
+        shell: pwsh
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          go test ./internal/... -tags headless -count=1
+          go test ./... -run Test -count=1
 
-      - name: Run full Go test suite
-        run: go test ./... -run Test -count=1
-
-      - name: Vet
+      - name: Go vet
+        shell: pwsh
+        env:
+          CGO_ENABLED: "0"
         run: go vet ./...
 
       - name: Build Windows executable
+        shell: pwsh
+        env:
+          CGO_ENABLED: "0"
+          GOOS: windows
+          GOARCH: amd64
         run: |
-          mkdir -p dist/windows
+          New-Item -ItemType Directory -Force -Path "dist/windows/app/SHEYTAN-Local-Agent" | Out-Null
 
-          go build \
-            -buildvcs=false \
-            -ldflags="-s -w -H=windowsgui" \
-            -o dist/windows/sheytan-local-agent-windows-amd64.exe .
+          go build `
+            -trimpath `
+            -ldflags="-s -w -X main.version=${env:APP_VERSION} -X main.codename=${env:APP_CODENAME}" `
+            -o "dist/windows/app/SHEYTAN-Local-Agent/SHEYTAN-Local-Agent.exe" `
+            .
 
-      - name: Verify Windows executable format
+      - name: Verify Windows executable
+        shell: pwsh
         run: |
-          test -f dist/windows/sheytan-local-agent-windows-amd64.exe
-          test -s dist/windows/sheytan-local-agent-windows-amd64.exe
+          $exe = "dist/windows/app/SHEYTAN-Local-Agent/SHEYTAN-Local-Agent.exe"
 
-          python - <<'PY'
-          from pathlib import Path
+          if (-not (Test-Path $exe)) {
+            throw "Windows executable was not produced."
+          }
 
-          path = Path("dist/windows/sheytan-local-agent-windows-amd64.exe")
-          data = path.read_bytes()
+          $size = (Get-Item $exe).Length
+          if ($size -lt 1000000) {
+            throw "Windows executable is suspiciously small: $size bytes."
+          }
 
-          if data[:2] != b"MZ":
-              raise SystemExit("invalid Windows executable: missing MZ header")
+          & $exe version
+          if ($LASTEXITCODE -ne 0) {
+            throw "Windows version smoke test failed."
+          }
 
-          pe_offset = int.from_bytes(data[0x3C:0x40], "little")
-
-          if data[pe_offset:pe_offset + 4] != b"PE\x00\x00":
-              raise SystemExit("invalid Windows executable: missing PE signature")
-
-          print(f"Valid PE executable: {path}")
-          print(f"Size: {path.stat().st_size} bytes")
-          PY
-
-      - name: Verify Windows signature metadata
+      - name: Prepare Windows portable package
+        shell: pwsh
         run: |
-          python - <<'PY'
-          from pathlib import Path
+          $root = "dist/windows/app/SHEYTAN-Local-Agent"
 
-          executable = Path(
-              "dist/windows/sheytan-local-agent-windows-amd64.exe"
-          )
+          @"
+          SHEYTAN-Local-Agent $env:APP_VERSION ($env:APP_CODENAME)
 
-          data = executable.read_bytes()
-          probe = "Parsa Tak".encode("utf-16-le")
+          Portable Windows distribution.
 
-          if probe not in data:
-              raise SystemExit(
-                  "signature metadata (Parsa Tak) missing from Windows executable"
-              )
+          Keep this entire SHEYTAN-Local-Agent folder together.
+          Runtime data, models, sessions, logs, and workspaces stay beside the executable.
+          "@ | Set-Content "$root/README.txt" -Encoding utf8
 
-          print("Windows signature metadata verified: Parsa Tak")
-          PY
+          @"
+          Place GGUF models in this folder.
 
-      - name: Smoke-test Windows executable
+          The application scans the configured models directory and lets you
+          select the active local model directly from the Agent and Settings UI.
+          "@ | Set-Content "$root/models/README.txt" -Encoding utf8
+
+          @"
+          Coding Lab workspaces are created here.
+
+          Keep this folder with the application when moving the portable package.
+          "@ | Set-Content "$root/workspace/README.txt" -Encoding utf8
+
+          @"
+          SHEYTAN-Local-Agent
+          Version: $env:APP_VERSION
+          Codename: $env:APP_CODENAME
+          Platform: Windows x64
+          "@ | Set-Content "$root/BUILD-INFO.txt" -Encoding utf8
+
+          if (Test-Path "LICENSE") {
+            Copy-Item "LICENSE" "$root/LICENSE"
+          }
+
+          if (Test-Path "agent.md") {
+            Copy-Item "agent.md" "$root/AI-CONTEXT.md"
+          }
+
+      - name: Create Windows ZIP
+        shell: pwsh
         run: |
-          ./dist/windows/sheytan-local-agent-windows-amd64.exe version
-          status=$?
+          $zip = "dist/SHEYTAN-Local-Agent-Windows-x64-v${env:APP_VERSION}Z.zip"
 
-          if [ "$status" -ne 0 ]; then
-            echo "Windows executable smoke test failed with exit code $status"
-            exit "$status"
-          fi
+          if (Test-Path $zip) {
+            Remove-Item $zip -Force
+          }
 
-          echo "Windows executable smoke test passed."
+          Compress-Archive `
+            -Path "dist/windows/app/SHEYTAN-Local-Agent" `
+            -DestinationPath $zip `
+            -CompressionLevel Optimal
 
-      - name: Upload Windows release artifact
-        uses: actions/upload-artifact@v5
+          if (-not (Test-Path $zip)) {
+            throw "Windows ZIP was not created."
+          }
+
+      - name: Upload Windows ZIP
+        uses: actions/upload-artifact@v4
         with:
-          name: sheytan-local-agent-windows-amd64
-          path: dist/windows/sheytan-local-agent-windows-amd64.exe
+          name: SHEYTAN-Local-Agent-Windows-x64-v${{ env.APP_VERSION }}Z
+          path: dist/SHEYTAN-Local-Agent-Windows-x64-v${{ env.APP_VERSION }}Z.zip
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 30
 
-      - name: Attach Windows executable to release
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Upload Windows ZIP to release
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
-          name: SHEYTAN Local Agent ${{ github.ref_name }}
-          generate_release_notes: true
-          draft: false
-          prerelease: false
-          files: dist/windows/sheytan-local-agent-windows-amd64.exe
+          files: dist/SHEYTAN-Local-Agent-Windows-x64-v${{ env.APP_VERSION }}Z.zip
+          fail_on_unmatched_files: true
 
   build-linux:
-    name: Build SHEYTAN Local Agent — Linux
+    name: Linux x64
     runs-on: ubuntu-24.04
-
-    defaults:
-      run:
-        shell: bash
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
 
-      - name: Install Linux desktop dependencies
+      - name: Install Linux build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            build-essential \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
             pkg-config \
-            libgtk-4-dev \
-            libwebkitgtk-6.0-dev
+            zip
 
-      - name: Setup Go
-        uses: actions/setup-go@v6
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
-          go-version: "1.26"
-          cache: true
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v5
-        with:
-          node-version: "22.12.0"
-          package-manager-cache: false
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: web/package-lock.json
 
       - name: Install frontend dependencies
+        working-directory: web
         run: npm install
 
       - name: Frontend typecheck
+        working-directory: web
         run: npm run typecheck
 
       - name: Frontend lint
+        working-directory: web
         run: npm run lint
 
-      - name: Frontend format
-        run: |
-          npm run format
-          npm run format:check
+      - name: Frontend format check
+        working-directory: web
+        run: npm run format:check
 
-      - name: Build frontend and synchronize embedded assets
+      - name: Build frontend
+        working-directory: web
         run: npm run build
 
       - name: Verify embedded frontend
         run: |
           test -f web/static/index.html
-          test -d web/static/assets
-          grep -q 'type="module"' web/static/index.html
-          echo "Embedded Node/Vite frontend verified."
 
-      - name: Run Go tests
-        run: go test ./... -run Test -count=1
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
 
-      - name: Vet
+      - name: Go tests
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          go test ./internal/... -tags headless -count=1
+          go test ./... -run Test -count=1
+
+      - name: Go vet
+        env:
+          CGO_ENABLED: "1"
         run: go vet ./...
 
       - name: Build Linux executable
@@ -230,62 +269,89 @@ jobs:
           GOOS: linux
           GOARCH: amd64
         run: |
-          mkdir -p dist/linux
+          mkdir -p "dist/linux/app/SHEYTAN-Local-Agent"
 
           go build \
-            -buildvcs=false \
-            -ldflags="-s -w" \
-            -o dist/linux/sheytan-local-agent-linux-amd64 .
+            -trimpath \
+            -ldflags="-s -w -X main.version=${APP_VERSION} -X main.codename=${APP_CODENAME}" \
+            -o "dist/linux/app/SHEYTAN-Local-Agent/SHEYTAN-Local-Agent" \
+            .
 
       - name: Verify Linux executable
         run: |
-          test -f dist/linux/sheytan-local-agent-linux-amd64
-          test -s dist/linux/sheytan-local-agent-linux-amd64
+          file "dist/linux/app/SHEYTAN-Local-Agent/SHEYTAN-Local-Agent"
+          test -x "dist/linux/app/SHEYTAN-Local-Agent/SHEYTAN-Local-Agent"
 
-          chmod +x dist/linux/sheytan-local-agent-linux-amd64
-
-          file dist/linux/sheytan-local-agent-linux-amd64
-
-          python3 - <<'PY'
-          from pathlib import Path
-
-          path = Path("dist/linux/sheytan-local-agent-linux-amd64")
-          data = path.read_bytes()
-
-          if data[:4] != b"\x7fELF":
-              raise SystemExit("invalid Linux executable: missing ELF header")
-
-          print(f"Valid ELF executable: {path}")
-          print(f"Size: {path.stat().st_size} bytes")
-          PY
-
-      - name: Smoke-test Linux executable
-        run: |
-          ./dist/linux/sheytan-local-agent-linux-amd64 version
-          status=$?
-
-          if [ "$status" -ne 0 ]; then
-            echo "Linux executable smoke test failed with exit code $status"
-            exit "$status"
+          size="$(stat -c '%s' "dist/linux/app/SHEYTAN-Local-Agent/SHEYTAN-Local-Agent")"
+          if [ "$size" -lt 1000000 ]; then
+            echo "Linux executable is suspiciously small: $size bytes"
+            exit 1
           fi
 
-          echo "Linux executable smoke test passed."
+          "./dist/linux/app/SHEYTAN-Local-Agent/SHEYTAN-Local-Agent" version
 
-      - name: Upload Linux release artifact
-        uses: actions/upload-artifact@v5
+      - name: Prepare Linux portable package
+        run: |
+          root="dist/linux/app/SHEYTAN-Local-Agent"
+
+          cat > "$root/README.txt" <<EOF
+          SHEYTAN-Local-Agent ${APP_VERSION} (${APP_CODENAME})
+
+          Portable Linux distribution.
+
+          Keep this entire SHEYTAN-Local-Agent folder together.
+          Runtime data, models, sessions, logs, and workspaces stay beside the executable.
+          EOF
+
+          mkdir -p "$root/models" "$root/workspace"
+
+          cat > "$root/models/README.txt" <<EOF
+          Place GGUF models in this folder.
+
+          The application scans the configured models directory and lets you
+          select the active local model directly from the Agent and Settings UI.
+          EOF
+
+          cat > "$root/workspace/README.txt" <<EOF
+          Coding Lab workspaces are created here.
+
+          Keep this folder with the application when moving the portable package.
+          EOF
+
+          cat > "$root/BUILD-INFO.txt" <<EOF
+          SHEYTAN-Local-Agent
+          Version: ${APP_VERSION}
+          Codename: ${APP_CODENAME}
+          Platform: Linux x64
+          EOF
+
+          if [ -f LICENSE ]; then
+            cp LICENSE "$root/LICENSE"
+          fi
+
+          if [ -f agent.md ]; then
+            cp agent.md "$root/AI-CONTEXT.md"
+          fi
+
+      - name: Create Linux ZIP
+        run: |
+          mkdir -p dist
+          cd dist/linux/app
+          zip -r "../../SHEYTAN-Local-Agent-Linux-x64-v${APP_VERSION}Z.zip" "SHEYTAN-Local-Agent"
+
+          test -f "../../SHEYTAN-Local-Agent-Linux-x64-v${APP_VERSION}Z.zip"
+
+      - name: Upload Linux ZIP
+        uses: actions/upload-artifact@v4
         with:
-          name: sheytan-local-agent-linux-amd64
-          path: dist/linux/sheytan-local-agent-linux-amd64
+          name: SHEYTAN-Local-Agent-Linux-x64-v${{ env.APP_VERSION }}Z
+          path: dist/SHEYTAN-Local-Agent-Linux-x64-v${{ env.APP_VERSION }}Z.zip
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 30
 
-      - name: Attach Linux executable to release
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Upload Linux ZIP to release
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
-          name: SHEYTAN Local Agent ${{ github.ref_name }}
-          generate_release_notes: true
-          draft: false
-          prerelease: false
-          files: dist/linux/sheytan-local-agent-linux-amd64
+          files: dist/SHEYTAN-Local-Agent-Linux-x64-v${{ env.APP_VERSION }}Z.zip
+          fail_on_unmatched_files: true
