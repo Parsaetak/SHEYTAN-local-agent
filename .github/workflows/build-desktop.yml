@@ -1,0 +1,233 @@
+name: build-desktop
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - "v*"
+      - "1.*"
+  pull_request:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Build SHEYTAN Local Agent — Windows
+    runs-on: windows-latest
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+          cache: true
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22.12.0"
+          package-manager-cache: false
+
+      - name: Install frontend dependencies
+        run: npm install
+
+      - name: Frontend typecheck
+        run: npm run typecheck
+
+      - name: Frontend lint
+        run: npm run lint
+
+      - name: Frontend format
+        run: |
+          npm run format
+          npm run format:check
+
+      - name: Build frontend and synchronize embedded assets
+        run: npm run build
+
+      - name: Verify embedded frontend
+        run: |
+          test -f web/static/index.html
+          test -d web/static/assets
+          grep -q 'type="module"' web/static/index.html
+          echo "Embedded Node/Vite frontend verified."
+
+      - name: Regenerate Windows resources
+        run: go run ./scripts/gen-syso
+
+      - name: Run internal unit tests
+        run: go test ./internal/... -tags headless
+
+      - name: Run full Go test suite
+        run: go test ./... -run Test -count=1
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Build Windows executable
+        run: |
+          mkdir -p dist/windows
+
+          go build \
+            -buildvcs=false \
+            -ldflags="-s -w -H=windowsgui" \
+            -o dist/windows/sheytan-local-agent-windows-amd64.exe .
+
+      - name: Verify Windows executable
+        run: |
+          test -f dist/windows/sheytan-local-agent-windows-amd64.exe
+          test -s dist/windows/sheytan-local-agent-windows-amd64.exe
+
+          echo "Windows executable created successfully:"
+          ls -lh dist/windows/sheytan-local-agent-windows-amd64.exe
+
+      - name: Verify Windows signature metadata
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          executable = Path(
+              "dist/windows/sheytan-local-agent-windows-amd64.exe"
+          )
+
+          data = executable.read_bytes()
+          probe = "Parsa Tak".encode("utf-16-le")
+
+          if probe not in data:
+              raise SystemExit(
+                  "signature metadata (Parsa Tak) missing from Windows executable"
+              )
+
+          print("Windows signature metadata verified: Parsa Tak")
+          PY
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: sheytan-local-agent-windows-amd64
+          path: dist/windows/sheytan-local-agent-windows-amd64.exe
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Attach Windows executable to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/windows/sheytan-local-agent-windows-amd64.exe
+          fail_on_unmatched_files: true
+
+  build-linux:
+    name: Build SHEYTAN Local Agent — Linux
+    runs-on: ubuntu-24.04
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Linux desktop dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            pkg-config \
+            libgtk-4-dev \
+            libwebkitgtk-6.0-dev
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+          cache: true
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22.12.0"
+          package-manager-cache: false
+
+      - name: Install frontend dependencies
+        run: npm install
+
+      - name: Frontend typecheck
+        run: npm run typecheck
+
+      - name: Frontend lint
+        run: npm run lint
+
+      - name: Frontend format
+        run: |
+          npm run format
+          npm run format:check
+
+      - name: Build frontend and synchronize embedded assets
+        run: npm run build
+
+      - name: Verify embedded frontend
+        run: |
+          test -f web/static/index.html
+          test -d web/static/assets
+          grep -q 'type="module"' web/static/index.html
+          echo "Embedded Node/Vite frontend verified."
+
+      - name: Run Go tests
+        run: go test ./... -run Test -count=1
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Build Linux executable
+        env:
+          CGO_ENABLED: "1"
+          GOOS: linux
+          GOARCH: amd64
+        run: |
+          mkdir -p dist/linux
+
+          go build \
+            -buildvcs=false \
+            -ldflags="-s -w" \
+            -o dist/linux/sheytan-local-agent-linux-amd64 .
+
+      - name: Verify Linux executable
+        run: |
+          test -f dist/linux/sheytan-local-agent-linux-amd64
+          test -s dist/linux/sheytan-local-agent-linux-amd64
+
+          chmod +x dist/linux/sheytan-local-agent-linux-amd64
+
+          echo "Linux executable created successfully:"
+          file dist/linux/sheytan-local-agent-linux-amd64
+          ls -lh dist/linux/sheytan-local-agent-linux-amd64
+
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: sheytan-local-agent-linux-amd64
+          path: dist/linux/sheytan-local-agent-linux-amd64
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Attach Linux executable to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/linux/sheytan-local-agent-linux-amd64
+          fail_on_unmatched_files: true
