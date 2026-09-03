@@ -58,11 +58,16 @@ export interface SysInfo {
 
 export interface Preset {
   id: string;
-  name: string;
+  name?: string;
+  label?: string;
   description?: string;
-  model?: string;
   temperature?: number;
-  maxTokens?: number;
+  top_p?: number;
+  top_k?: number;
+  max_tokens?: number;
+  repeat_penalty?: number;
+  mirostat?: number;
+  num_ctx?: number;
 }
 
 export interface Model {
@@ -84,6 +89,123 @@ export interface ToolInfo {
   name: string;
   description?: string;
   enabled?: boolean;
+}
+
+export interface LLMConfig {
+  temperature: number;
+  topP: number;
+  topK: number;
+  minP: number;
+  maxTokens: number;
+  stop: string;
+  seed: number;
+  repeatPenalty: number;
+  repeatLastN: number;
+  presencePenalty: number;
+  frequencyPenalty: number;
+  mirostat: number;
+  mirostatTau: number;
+  mirostatEta: number;
+  numCtx: number;
+  numBatch: number;
+  numGpu: number;
+  numThread: number;
+  stream: boolean;
+  preset: string;
+}
+
+export interface RuntimeConfig {
+  dataDir: string;
+  modelsDir: string;
+  sessionsDir: string;
+
+  host: string;
+  port: number;
+
+  llmBaseUrl: string;
+  model: string;
+
+  provider: string;
+  remoteBaseUrl: string;
+  remoteApiKey: string;
+  remoteModel: string;
+
+  llamaBinPath: string;
+  llamaHost: string;
+  llamaPort: number;
+  llamaAutoStart: boolean;
+  llamaExtraArgs: string;
+
+  maxIterations: number;
+  parallelTools: boolean;
+  verboseAgent: boolean;
+
+  sandboxEnabled: boolean;
+  sandboxMemory: string;
+  sandboxCPU: number;
+
+  llm: LLMConfig;
+
+  browserExecutablePath: string;
+  browserHeadless: boolean;
+  browserSlowMoMs: number;
+
+  proMode: boolean;
+  updateSchedule: string;
+  lastUpdateCheck: string;
+
+  thinkingMode: boolean;
+  enabledTools: string[];
+  attachmentsBudgetKb: number;
+  historyWindowPct: number;
+  recallEnabled: boolean;
+  recallTopK: number;
+
+  gpuAutoOffload: boolean;
+  engineCompat: number;
+  flashAttention: boolean;
+  cacheReuse: number;
+  ubatchSize: number;
+  threadsBatch: number;
+  kvCacheQuant: string;
+  mlock: boolean;
+  draftModel: string;
+  showPerfHud: boolean;
+
+  visionEnabled: boolean;
+  visionMmproj: string;
+
+  maxWorkspaceMb: number;
+  maxSessionsKept: number;
+  maxLogMb: number;
+
+  multiAgentDepth: number;
+
+  continuumEnabled: boolean;
+  continuumThresholdPct: number;
+  continuumCarryMessages: number;
+  continuumFrameworkTokens: number;
+
+  smoothStream: boolean;
+  targetFps: number;
+
+  labEnabled: boolean;
+  labWorkspaceRoot: string;
+  labCommandTimeoutSec: number;
+  labMaxIterations: number;
+  labKeepWorkspaces: boolean;
+  labAllowNetwork: boolean;
+
+  researchEnabled: boolean;
+  researchBackend: string;
+  researchSearxngUrl: string;
+  researchMaxResults: number;
+  researchTimeoutSec: number;
+  researchCacheTtlMin: number;
+  researchGitHub: boolean;
+  researchReddit: boolean;
+  researchWeb: boolean;
+  researchUserAgent: string;
 }
 
 export interface Session {
@@ -159,7 +281,10 @@ export interface LabCommandResult {
 }
 
 export type LabVerificationStatus =
-  "passed" | "failed" | "canceled" | "skipped";
+  | "passed"
+  | "failed"
+  | "canceled"
+  | "skipped";
 
 export interface LabVerificationResult {
   name: string;
@@ -186,7 +311,12 @@ export interface LabVerificationSummary {
 }
 
 export type LabTaskStatus =
-  "pending" | "running" | "succeeded" | "failed" | "canceled" | "blocked";
+  | "pending"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "canceled"
+  | "blocked";
 
 export interface LabTaskSnapshot {
   id: string;
@@ -311,7 +441,7 @@ async function request<T>(
           message = parsed.error;
         }
       } catch {
-        // Preserve the raw response body.
+        // Preserve raw response text.
       }
 
       throw new Error(message || `Request failed with HTTP ${response.status}`);
@@ -358,6 +488,24 @@ export const api = {
 
   tools(): Promise<ToolInfo[]> {
     return request<ToolInfo[]>("/tools");
+  },
+
+  config(): Promise<RuntimeConfig> {
+    return request<RuntimeConfig>("/config");
+  },
+
+  updateConfig(payload: Record<string, unknown>): Promise<RuntimeConfig> {
+    return request<RuntimeConfig>("/config", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  llama(action: "start" | "stop"): Promise<unknown> {
+    return request<unknown>("/llama", {
+      method: "POST",
+      body: JSON.stringify({ action }),
+    }, LONG_OPERATION_TIMEOUT_MS);
   },
 
   sessions(): Promise<Session[]> {
@@ -423,7 +571,9 @@ export const api = {
   },
 
   labTask(id: string): Promise<LabTaskSessionSnapshot> {
-    return request<LabTaskSessionSnapshot>(`/lab/${encodeURIComponent(id)}`);
+    return request<LabTaskSessionSnapshot>(
+      `/lab/${encodeURIComponent(id)}`,
+    );
   },
 
   labAction(payload: Record<string, unknown>): Promise<LabActionResponse> {
@@ -523,7 +673,6 @@ export function connectActivity(
     socket.addEventListener("message", (message) => {
       try {
         const event = JSON.parse(message.data) as ActivityEvent;
-
         onEvent(event);
       } catch {
         onEvent({
@@ -542,7 +691,6 @@ export function connectActivity(
       }
 
       onStateChange?.("disconnected");
-
       reconnectTimer = setTimeout(connect, 1500);
     });
 
