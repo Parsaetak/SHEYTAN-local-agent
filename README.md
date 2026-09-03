@@ -16,7 +16,7 @@ Licensed under the **Parsaetak Proprietary License v1.1**.
 
 ```text
 Application:  SHEYTAN-Local-Agent
-Version:     1.1.0
+Version:     1.1.1
 Codename:    Zeta
 ```
 
@@ -890,7 +890,8 @@ Artifacts
  └── future SVG workspace
 ```
 
-Lab and Research UI panels are part of the next frontend feature stage.
+Lab and Research UI panels shipped in v1.1.1Z (`LabPanel.tsx`, `ResearchPanel.tsx`,
+`SettingsPanel.tsx` — all embedded in the release binary).
 
 The SVG editor/preview remains later work.
 
@@ -1167,6 +1168,31 @@ A test command itself is not sufficient evidence when the test suite does not co
 
 ---
 
+# Releases
+
+CI is `.github/workflows/build-desktop.yml`. Every push to `main` builds
+both platforms; pushing a tag publishes a GitHub Release:
+
+```bash
+git tag v1.1.1Z
+git push origin v1.1.1Z
+```
+
+The release assets are produced by the workflow itself:
+
+```text
+SHEYTAN-Local-Agent-Windows-x64-v1.1.1Z.zip
+SHEYTAN-Local-Agent-Linux-x64-v1.1.1Z.zip
+```
+
+Both zips are portable: extract, double-click `SHEYTAN-Local-Agent.exe`
+(Windows) or run `SHEYTAN-Local-Agent` (Linux). Models, sessions, logs, and
+Coding Lab workspaces live next to the executable. The Windows zip also
+ships the `sheytan-local-agent.bat` launcher, and the exe carries the brand
+icon, the Parsa Tak signature, and a DPI-aware manifest.
+
+---
+
 # Repository Hygiene
 
 Before committing:
@@ -1237,14 +1263,18 @@ Run relevant Go tests and vet checks.
 ✓ REST API integration
 ✓ Wails v3 desktop shell (single self-contained exe)
 ✓ legacy Fyne UI fully removed (Zeta)
+✓ Coding Lab frontend panel
+✓ Research frontend panel
+✓ Settings frontend panel
+✓ repaired Linux CI (GTK4 + WebKitGTK-6.0 for Wails v3)
+✓ pinned Node 24 / Go 1.26 toolchains in CI
+✓ versioned legacy sources retired (v1.1.1Z)
 ```
 
 ## In Progress
 
 ```text
-□ complete React feature parity with the pre-migration desktop UI
-□ Coding Lab frontend panel
-□ Research frontend panel
+□ complete React feature parity polish with the pre-migration desktop UI
 □ richer project/task inspection
 □ end-to-end autonomous coding workflows
 □ broader verification coverage

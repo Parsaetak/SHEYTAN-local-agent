@@ -1,7 +1,7 @@
 info:
   productName: "SHEYTAN Local Agent"
   productIdentifier: "com.sheytan.localagent"
-  productVersion: "0.0.0-zeta"
+  productVersion: "1.1.1-zeta"
   companyName: "SHEYTAN"
   productDescription: "SHEYTAN Local Agent — native local AI agent runtime"
 

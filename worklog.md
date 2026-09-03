@@ -1,5 +1,108 @@
 # SHEYTAN-Local-Agent — Worklog
 
+## 2026-09-03 — v1.1.1Z (Zeta): CI Repair + Legacy Cleanup
+
+### The problem
+
+GitHub Actions runs 13–19 (seven consecutive failures) all broke at the
+**Linux x64 → "Go tests"** step. The Windows job was green. Root cause,
+reproduced locally with Go 1.26.8:
+
+```text
+go test ./internal/... -tags headless
+→ internal/desktop [build failed]
+→ pkg-config: Package gtk4 was not found
+→ Package 'webkitgtk-6.0', required by 'virtual:world', not found
+```
+
+Wails v3 (beta.16) links its Linux webview through cgo + pkg-config and
+asks for **glib-2.0, gtk4, webkitgtk-6.0, gio-unix-2.0, libsoup-3.0**. The
+v1.1.0 workflow installed the Wails **v2** era packages
+(`libgtk-3-dev`, `libwebkit2gtk-4.1-dev`) — nothing satisfied the Wails v3
+link, so `internal/desktop` never compiled on the Linux runner.
+
+### The fix (workflow)
+
+- Linux job now installs `libgtk-4-dev`, `libwebkitgtk-6.0-dev`,
+  `libsoup-3.0-dev` (all available on ubuntu-24.04 / noble).
+- `APP_VERSION: "1.1.1"` — release assets become
+  `SHEYTAN-Local-Agent-{Windows,Linux}-x64-v1.1.1Z.zip`.
+- Node is now **pinned**: `actions/setup-node@v4` with `node-version: "24"`
+  and npm caching in both jobs. The new React/Vite UI must never depend on
+  whatever Node the hosted runner happens to ship.
+- Windows job regenerates the exe resources in CI:
+  `go run ./scripts/gen-syso` (brand icon, Parsa Tak signature, DPI-aware
+  PerMonitorV2 manifest) and links with `-H=windowsgui`.
+- `sheytan-local-agent.bat` ships inside the Windows portable ZIP.
+
+### The cleanup (old code removed)
+
+- **Deleted 16 versioned stress files**: `cmd/stress_v08.go` through
+  `cmd/stress_v110.go` plus `cmd/version_check.go` (dead after the
+  retirement). The suite is now the Zeta chaos suite:
+  `cmd/stress.go` (core hostile scenarios + subsystem contracts) and
+  `cmd/stress_zeta.go` (release-surface contract). Feature coverage that
+  the old versioned files provided lives in the `internal/` unit tests
+  (vision, continuum, chunking, lab, llm, memory, recall, research, tools).
+- **Deleted old e2e tooling**: `scripts/e2e-v102.sh`, `e2e-v106.sh`,
+  `e2e-v107.sh`, `e2e-v108.sh`, `scripts/e2e-v107/`, and
+  `scripts/glm-proxy.mjs` (only used by those scripts).
+- **Fresh embedded UI**: the committed `web/static` was a stale build
+  (missing the `SettingsPanel` chunk, still carrying the pre-Vite
+  `app.js`/`styles.css`/`icons/`). It was regenerated with the Node 24 /
+  Vite pipeline (`npm run build` → `scripts/sync-web.mjs`) and now embeds
+  the complete current React UI.
+
+### Version surface (v1.1.1Z)
+
+```text
+internal/config/config.go  AppVersion  = "1.1.1"
+package.json                "version": "1.1.1-zeta"
+build/config.yml            productVersion: "1.1.1-zeta"
+.github/workflows           APP_VERSION: "1.1.1"
+SIGNATURE                   v1.1.1 (regenerated)
+sheytan-local-agent.bat     v1.1.1 header, history comments condensed
+```
+
+A pre-existing contract bug was also fixed: `v111_release_surface` required
+the literal `go-version: "1.26"` while the workflow (correctly) pins via
+`GO_VERSION: "1.26"` in the env block — the suite could never pass against
+the real workflow. `stressZetaReleaseSurface` now checks the env pin, and
+additionally guards every v1.1.1Z fix (Linux deps, Node pin, gen-syso,
+windowsgui, .bat packaging) so a regression fails the suite before it can
+fail CI.
+
+### Verification (all green)
+
+```text
+npm run typecheck / lint          0 errors
+npm run build                     fresh Vite bundle → web/static
+go test ./internal/... (headless) all ok except internal/desktop
+                                  (local host lacks GTK4 headers; CI now
+                                  installs them — this was the fix)
+stress suite                      32 pass / 0 fail
+  (zeta_release_surface, zeta_memory_unique_ids, zeta_trimlogs_rotate)
+serve smoke test                  /api/state reports 1.1.1, UI index and
+                                  assets serve 200 from the embedded FS
+windows cross-build               17.7 MB PE32+ GUI exe; gen-syso ok;
+                                  "Parsa Tak" + "1.1.1" UTF-16 present
+go vet (all packages)             clean
+go mod tidy                       no changes
+gofmt                             stress.go / stress_zeta.go canonical
+```
+
+### Release procedure for v1.1.1Z
+
+```bash
+git tag v1.1.1Z
+git push origin v1.1.1Z
+```
+
+The workflow builds both platforms, verifies the ZIPs, uploads artifacts,
+and attaches them to the GitHub Release.
+
+---
+
 ## 2026-09-02 — Version Zeta Stabilization
 
 ### Project direction

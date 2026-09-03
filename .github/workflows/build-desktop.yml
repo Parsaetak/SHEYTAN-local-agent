@@ -16,7 +16,7 @@ permissions:
 
 env:
   GO_VERSION: "1.26"
-  APP_VERSION: "1.1.0"
+  APP_VERSION: "1.1.1"
   APP_CODENAME: "Zeta"
 
 jobs:
@@ -27,6 +27,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
 
       - name: Verify Node and repository
         shell: pwsh
@@ -98,6 +104,15 @@ jobs:
           CGO_ENABLED: "0"
         run: go vet ./...
 
+      - name: Generate Windows resources
+        shell: pwsh
+        run: |
+          go run ./scripts/gen-syso
+
+          if (-not (Test-Path "rsrc_windows_amd64.syso")) {
+            throw "rsrc_windows_amd64.syso was not generated."
+          }
+
       - name: Build Windows executable
         shell: pwsh
         env:
@@ -109,7 +124,7 @@ jobs:
 
           go build `
             -trimpath `
-            -ldflags="-s -w" `
+            -ldflags="-s -w -H=windowsgui" `
             -o "dist/windows/app/SHEYTAN-Local-Agent/SHEYTAN-Local-Agent.exe" `
             .
 
@@ -193,6 +208,10 @@ jobs:
 
           if (Test-Path "SIGNATURE") {
             Copy-Item "SIGNATURE" "$root/SIGNATURE" -Force
+          }
+
+          if (Test-Path "sheytan-local-agent.bat") {
+            Copy-Item "sheytan-local-agent.bat" "$root/sheytan-local-agent.bat" -Force
           }
 
       - name: Create Windows ZIP
@@ -280,14 +299,27 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Wails v3 (beta.16) on Linux links GTK4 + WebKitGTK 6.0 through cgo
+      # and pkg-config. The v1.1.0 workflow installed the Wails v2 era
+      # GTK3/WebKit2 dev packages instead, so every Linux job since run 13
+      # failed at "Go tests" with "Package gtk4 was not found". These are
+      # the packages the toolchain actually asks pkg-config for:
+      # glib-2.0, gtk4, webkitgtk-6.0, gio-unix-2.0, libsoup-3.0.
       - name: Install Linux build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            libgtk-3-dev \
-            libwebkit2gtk-4.1-dev \
+            libgtk-4-dev \
+            libwebkitgtk-6.0-dev \
+            libsoup-3.0-dev \
             pkg-config \
             zip
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
 
       - name: Verify Node and repository
         shell: bash

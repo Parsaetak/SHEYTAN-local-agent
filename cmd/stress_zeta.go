@@ -13,27 +13,29 @@ import (
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/resources"
 )
 
-// --- v1.0.11 (GRANITE) stress scenarios, carried into Zeta ---
+// --- v1.1.1Z (ZETA) release-surface scenarios ---
 //
-// GRANITE was the build-integrity release. v1.0.10 shipped with two source
-// packages (internal/sessions, internal/sandbox) silently swallowed by an
-// UNANCHORED .gitignore pattern, a timestamp-based memory ID that collided
-// on Windows clock granularity, and a log rotator that renamed over a file
-// it still held open.
+// v1.1.1Z is the CI-repair + legacy-cleanup release. The v1.1.0 workflow
+// installed the Wails v2 era GTK packages (libgtk-3-dev /
+// libwebkit2gtk-4.1-dev) while the app links Wails v3, whose Linux webview
+// asks pkg-config for gtk4 + webkitgtk-6.0 — so every Linux job since run
+// 13 failed at "Go tests" with "Package gtk4 was not found". The versioned
+// stress files (v0.8 ... v1.0.11) and the versioned e2e scripts were also
+// retired in this release: the Zeta suite keeps the core chaos scenarios
+// plus this release-surface contract.
 //
-// These scenarios pin those fixes and validate the current Zeta release
-// surface: anchored runtime .gitignore rules, the portable desktop workflow,
-// pinned Go toolchain, main-branch builds, workflow_dispatch support,
-// current GitHub Action majors, portable ZIP packaging, collision-proof
-// memory IDs, and Windows-safe log rotation.
+// These scenarios pin the v1.1.1Z surface: the repaired Linux CI
+// dependencies, the pinned Node 24 + Go 1.26 toolchain, the Windows
+// resource/icon pipeline, the packaged .bat launcher, portable ZIP
+// packaging, collision-proof memory IDs, and Windows-safe log rotation.
 
-func stressV111ReleaseSurface() error {
-	// Zeta floor: 1.1.0. This is a minimum rather than an exact pin so
-	// future compatible point releases cannot silently downgrade the release
-	// surface.
-	if versionLessThan(config.AppVersion, "1.1.0") {
+func stressZetaReleaseSurface() error {
+	// Zeta floor: 1.1.1. This is a minimum rather than an exact pin so
+	// future compatible point releases cannot silently downgrade the
+	// release surface.
+	if versionLessThan(config.AppVersion, "1.1.1") {
 		return fmt.Errorf(
-			"AppVersion = %q, want >= 1.1.0 (Zeta)",
+			"AppVersion = %q, want >= 1.1.1 (Zeta)",
 			config.AppVersion,
 		)
 	}
@@ -65,6 +67,7 @@ func stressV111ReleaseSurface() error {
 		"internal/sessions/sessions.go",
 		"internal/sandbox/sandbox.go",
 		"internal/releasegate/releasegate_test.go",
+		"internal/desktop/desktop.go",
 	} {
 		if _, err := os.Stat(p); err != nil {
 			return fmt.Errorf(
@@ -78,7 +81,7 @@ func stressV111ReleaseSurface() error {
 	// 2. Runtime directories in .gitignore must be root-anchored.
 	//
 	// An unanchored "sessions/" pattern also matches internal/sessions/,
-	// which was the release-integrity regression this suite was created to
+	// which was the release-integrity regression this gate was created to
 	// catch.
 	gi, err := os.ReadFile(".gitignore")
 	if err != nil {
@@ -116,9 +119,6 @@ func stressV111ReleaseSurface() error {
 	}
 
 	// 3. Current desktop CI release contract.
-	//
-	// The workflow was renamed from build-windows.yml to
-	// build-desktop.yml. Do not hard-code the historical filename.
 	workflowsDir := filepath.Join(".github", "workflows")
 
 	workflowCandidates := []string{
@@ -166,9 +166,11 @@ func stressV111ReleaseSurface() error {
 		)
 	}
 
-	if !strings.Contains(w, `go-version: "1.26"`) {
+	// Both jobs consume the shared GO_VERSION env, so the pin itself
+	// lives in the workflow-level env block.
+	if !strings.Contains(w, `GO_VERSION: "1.26"`) {
 		return fmt.Errorf(
-			"CI toolchain not pinned to 1.26",
+			"CI toolchain not pinned to 1.26 (expected GO_VERSION: \"1.26\" in the workflow env block)",
 		)
 	}
 
@@ -203,8 +205,6 @@ func stressV111ReleaseSurface() error {
 		)
 	}
 
-	// The old stress test required a master trigger. Zeta no longer does;
-	// main is the canonical development/release branch.
 	if strings.Contains(w, "- master") {
 		return fmt.Errorf(
 			"stale master branch trigger found in Zeta workflow",
@@ -212,12 +212,10 @@ func stressV111ReleaseSurface() error {
 	}
 
 	// 3d. Validate the action versions used by the current workflow.
-	//
-	// setup-node is deliberately absent from Zeta CI because the hosted
-	// runners already provide a sufficiently recent Node.js runtime.
 	for _, action := range []string{
 		"actions/checkout@v4",
 		"actions/setup-go@v5",
+		"actions/setup-node@v4",
 		"actions/upload-artifact@v4",
 		"softprops/action-gh-release@v2",
 	} {
@@ -229,13 +227,62 @@ func stressV111ReleaseSurface() error {
 		}
 	}
 
-	if strings.Contains(w, "actions/setup-node@") {
+	// 3e. The Node toolchain is PINNED (v1.1.1Z): the new React/Vite UI
+	// must never depend on whatever Node version the hosted runner
+	// happens to ship.
+	if !strings.Contains(w, `node-version: "24"`) {
 		return fmt.Errorf(
-			"stale setup-node action found — Zeta intentionally uses the hosted Node.js runtime",
+			"CI does not pin Node 24 for the frontend build",
 		)
 	}
 
-	// 3e. The workflow must build and validate the portable ZIPs.
+	// 3f. THE v1.1.1Z FIX: the Linux job must install the GTK4 /
+	// WebKitGTK-6.0 development packages that Wails v3 actually links
+	// through cgo + pkg-config. The v1.1.0 workflow installed the Wails
+	// v2 era packages (libgtk-3-dev / libwebkit2gtk-4.1-dev) and every
+	// Linux build failed at "Go tests" with "Package gtk4 was not
+	// found".
+	for _, linuxDep := range []string{
+		"libgtk-4-dev",
+		"libwebkitgtk-6.0-dev",
+	} {
+		if !strings.Contains(w, linuxDep) {
+			return fmt.Errorf(
+				"Linux CI dependencies missing %q — Wails v3 needs GTK4 + WebKitGTK 6.0 (the exact cause of the v1.1.0 CI failures)",
+				linuxDep,
+			)
+		}
+	}
+
+	for _, staleDep := range []string{
+		"libgtk-3-dev",
+		"libwebkit2gtk-4.1-dev",
+	} {
+		if strings.Contains(w, staleDep) {
+			return fmt.Errorf(
+				"stale Wails v2 era dependency %q still installed by Linux CI",
+				staleDep,
+			)
+		}
+	}
+
+	// 3g. The Windows build must carry the brand resources: gen-syso
+	// (icon + Parsa Tak signature + DPI-aware manifest) and the
+	// windowsgui subsystem flag (no console flash on double-click).
+	if !strings.Contains(w, "go run ./scripts/gen-syso") {
+		return fmt.Errorf(
+			"Windows build lost the gen-syso resource step (icon + version info + DPI manifest)",
+		)
+	}
+
+	if !strings.Contains(w, "-H=windowsgui") &&
+		!strings.Contains(w, "-H windowsgui") {
+		return fmt.Errorf(
+			"Windows build lost the -H=windowsgui subsystem flag",
+		)
+	}
+
+	// 3h. The workflow must build and validate the portable ZIPs.
 	requiredWorkflowFragments := []string{
 		"SHEYTAN-Local-Agent-Windows-x64-v${env:APP_VERSION}Z.zip",
 		"SHEYTAN-Local-Agent-Linux-x64-v${APP_VERSION}Z.zip",
@@ -256,7 +303,7 @@ func stressV111ReleaseSurface() error {
 		}
 	}
 
-	// 3f. ZIPs must preserve the portable application folder structure.
+	// 3i. ZIPs must preserve the portable application folder structure.
 	for _, fragment := range []string{
 		"SHEYTAN-Local-Agent/SHEYTAN-Local-Agent.exe",
 		"SHEYTAN-Local-Agent/SHEYTAN-Local-Agent",
@@ -271,22 +318,24 @@ func stressV111ReleaseSurface() error {
 		}
 	}
 
-	// 3g. The workflow must perform frontend verification before Go build.
+	// 3j. The workflow must perform frontend verification before the Go
+	// build, and the Windows package must ship the .bat launcher.
 	for _, fragment := range []string{
 		"npm run typecheck",
 		"npm run lint",
 		"npm run build",
 		"web/static/index.html",
+		"sheytan-local-agent.bat",
 	} {
 		if !strings.Contains(w, fragment) {
 			return fmt.Errorf(
-				"frontend release gate missing %q",
+				"frontend/package release gate missing %q",
 				fragment,
 			)
 		}
 	}
 
-	// 3h. The current workflow intentionally does not use the broken,
+	// 3k. The current workflow intentionally does not use the broken,
 	// repository-wide Prettier gate that previously stopped CI before the
 	// actual build.
 	if strings.Contains(w, "npm run format:check") {
@@ -336,14 +385,23 @@ func parseVersionParts(v string) [3]int {
 	return out
 }
 
-// stressV111MemoryUniqueIDs: rapid Appends must produce distinct IDs even
+// tTempDir creates a scratch directory for stress scenarios.
+func tTempDir(name string) string {
+	dir, err := os.MkdirTemp("", "sheytan-"+name+"-*")
+	if err != nil {
+		return name
+	}
+	return dir
+}
+
+// stressZetaMemoryUniqueIDs: rapid Appends must produce distinct IDs even
 // when the OS clock returns the same instant for consecutive calls (Windows
 // granularity), and DeleteByID must remove EXACTLY one entry.
 //
 // The old timestamp-only scheme made two entries share an ID so one
 // DeleteByID wiped both.
-func stressV111MemoryUniqueIDs() error {
-	dir := tTempDir("mem111")
+func stressZetaMemoryUniqueIDs() error {
+	dir := tTempDir("mem-zeta")
 	defer os.RemoveAll(dir)
 
 	st := memory.New(filepath.Join(dir, "mem.jsonl"))
@@ -352,7 +410,7 @@ func stressV111MemoryUniqueIDs() error {
 
 	for i := 0; i < n; i++ {
 		if err := st.Append(
-			[]string{"v111"},
+			[]string{"zeta"},
 			fmt.Sprintf("rapid entry %d", i),
 			"stress",
 		); err != nil {
@@ -401,15 +459,15 @@ func stressV111MemoryUniqueIDs() error {
 	return nil
 }
 
-// stressV111TrimLogsRotate: an over-budget log folder must actually shrink
+// stressZetaTrimLogsRotate: an over-budget log folder must actually shrink
 // (bytes freed > 0), the rotated file must end at a line boundary, and no
 // .rot temp files may be left behind.
 //
 // The v1.0.10 rotateTail held the source file open across the rename, which
 // Windows refuses — TrimLogs previously swallowed the error and freed
 // nothing.
-func stressV111TrimLogsRotate() error {
-	dir := tTempDir("logs111")
+func stressZetaTrimLogsRotate() error {
+	dir := tTempDir("logs-zeta")
 	defer os.RemoveAll(dir)
 
 	// ~6.7 MB single log (64-byte lines) against a 1 MB budget.
