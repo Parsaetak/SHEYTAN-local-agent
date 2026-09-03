@@ -6,10 +6,10 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/sheytan/local-agent/internal/brand"
-	"github.com/sheytan/local-agent/internal/config"
-	"github.com/sheytan/local-agent/internal/logging"
-	"github.com/sheytan/local-agent/internal/sysinfo"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/brand"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/logging"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/sysinfo"
 )
 
 // License prints the SHEYTAN™ trademark + full license text.

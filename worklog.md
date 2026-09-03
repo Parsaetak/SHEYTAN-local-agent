@@ -1122,3 +1122,87 @@ bounded autonomy
 The architectural target remains:
 
 > **An AI software engineer whose important claims are backed by executable evidence.**
+
+---
+
+# 2026-09-03 — Zeta Build Repair Session
+
+The repository stopped building on GitHub Actions (runs #100–#232 failed).
+Root causes, fixes, and verification for this session are recorded here.
+
+## Frontend (Node/TypeScript/Vite)
+
+- `tsc -b` failed because TypeScript 7 removed `baseUrl`.
+  `tsconfig.app.json` now uses `paths: {"@/*": ["./src/*"]}`.
+- `store.ts` imported `activityWebSocketURL` from `./api`; the function lives
+  in `./config`. The import was corrected.
+- `workspace.ts` returned `WORKSPACE_LAYERS[0]` under
+  `noUncheckedIndexedAccess`, which is `WorkspaceLayer | undefined`.
+  The default layer is now the named `AGENT_LAYER` constant.
+- `src/vite-env.d.ts` was missing, so side-effect CSS imports failed under
+  TS7. The standard `vite/client` reference was added.
+- `.prettierignore` and `.oxlintrc.json` now exclude `node_modules`,
+  `dist`, and `web/static` so lint/format operate on sources only.
+
+## Go module integrity
+
+- `go.mod` declared `module github.com/Parsaetak/SHEYTAN-local-agent` while
+  63 files still imported `github.com/sheytan/local-agent/...`. All imports
+  now use the canonical module path and `go mod tidy` regenerated `go.sum`.
+- The obsolete Fyne desktop UI (`internal/ui`) was dead code — nothing
+  imported it — and it dragged unnecessary cgo dependencies into every
+  build. It was deleted together with the superseded vanilla JS UI in
+  `web/static` and the version-specific `scripts/e2e-v10x` harnesses.
+- `sheytan-local-agent.bat` and `scripts/build-and-zip.sh` version strings
+  were normalized to v1.1.0 (Zeta).
+
+## Go compile errors
+
+- `internal/lab/tool.go`: three call sites used the two-value
+  `encodeLabResponse` in a single-value context. They now join encode
+  errors with `errors.Join`.
+- `internal/api/lifecycle.go`: called `orch.Abort()`, which does not exist.
+  Orchestrator cancellation is context-driven; the API already cancels all
+  registered runs, so the stale call was removed.
+- `internal/api/server.go`: removed an unused `gorilla/websocket` import.
+- `cmd/stress.go`: replaced `orch.Abort()` with caller-context cancellation
+  in the abort stress scenarios.
+
+## Go test failures
+
+- `internal/lab/repair_test.go`: missing parenthesis broke package compile.
+- `internal/research`: provider contracts were reconciled with tests —
+  SearXNG sends `categories=general`; DuckDuckGo test moved to the modern
+  `/html` endpoint with `kl`/`kp`; GitHub and Reddit preserve
+  operator-configured query parameters (Reddit built its URL by string
+  concatenation, which mangled base URLs carrying a query); provider names
+  are canonicalized through `NormalizeResult`; `searchProvider` stamps the
+  registry name before normalization; `Validate` rejects negative
+  `MaxResults` before `Normalize` zeroes it; the auto search concurrency
+  test now uses delayed mocks; the raw-query security test was rewritten
+  to exercise the real endpoint builders.
+- `internal/lab`: output truncation marker moved from `Stdout`/`Stderr`
+  into the combined `Output` so captured bytes stay within
+  `MaxOutputBytes`; policy no longer double-rejects absolute working
+  directories (`Workspace.PathFor` remains the authoritative boundary);
+  repair-loop repeated-command protection yields to the iteration cap on
+  the final permitted iteration; verification invalidation keeps the stale
+  summary so `Finish` can report stale instead of unverified; tests use
+  meaningful content checks instead of `echo`.
+- `internal/memory`: search trust weighting no longer matches every entry
+  for every query; external provenance always quarantines to
+  `provisional`; authority is granted exactly to trusted/verified user
+  facts, so trusted provenance survives persistence.
+- `internal/aicontext`: the connectivity line no longer advertises
+  `webSearch`/`browser` when they are not in the registered tool set.
+
+## Verification performed
+
+```bash
+npm run lint          # 0 warnings, 0 errors
+npm run format:check  # clean
+npm run build         # tsc -b + vite build + sync:web
+CGO_ENABLED=0 GOOS=windows go build ./...  # full Windows target build
+CGO_ENABLED=0 GOOS=windows go vet ./...    # full Windows target vet
+go test ./internal/... -tags headless -count=1  # all packages pass
+```

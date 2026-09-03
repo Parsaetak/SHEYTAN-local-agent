@@ -190,8 +190,8 @@ func (m *MultiAgent) Run(
 		if err != nil {
 			// A failed critic call cannot establish satisfaction.
 			onActivity(agent.Activity{
-				Type: "thinking",
-				Caption: "Critic unavailable; treating result as unsatisfied: " + err.Error(),
+				Type:      "thinking",
+				Caption:   "Critic unavailable; treating result as unsatisfied: " + err.Error(),
 				Timestamp: time.Now(),
 			})
 

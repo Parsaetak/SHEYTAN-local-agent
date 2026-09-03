@@ -302,7 +302,7 @@ func TestNormalizeEntryVerifiedUserFactRemainsM1(t *testing.T) {
 		Content: "Verified user fact.",
 		Trust:   TrustVerified,
 		Provenance: Provenance{
-			Kind: "user",
+			Kind:   "user",
 			Source: "conversation",
 		},
 	})

@@ -34,8 +34,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/sheytan/local-agent/internal/config"
-	"github.com/sheytan/local-agent/internal/sysinfo"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/sysinfo"
 )
 
 // threadsFor resolves the generation thread count: explicit config value

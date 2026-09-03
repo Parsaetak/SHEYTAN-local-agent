@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -215,8 +216,14 @@ func TestGitHubProviderSearch(t *testing.T) {
 		t.Fatalf("unexpected authority: %v", first.Authority)
 	}
 
-	if first.MatchScore != 1 {
-		t.Fatalf("expected clamped score 1, got %v", first.MatchScore)
+	// GitHub scores are opaque ranking values; the provider normalizes them
+	// monotonically into [0,1) via score/(score+1) rather than clamping.
+	if first.MatchScore <= 0 || first.MatchScore >= 1 {
+		t.Fatalf("expected normalized score in (0,1), got %v", first.MatchScore)
+	}
+
+	if want := 2.75 / 3.75; math.Abs(first.MatchScore-want) > 1e-9 {
+		t.Fatalf("expected normalized score %v, got %v", want, first.MatchScore)
 	}
 
 	expectedTime, err := time.Parse(time.RFC3339, "2026-09-01T12:34:56Z")

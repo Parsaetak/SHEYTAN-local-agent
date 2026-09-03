@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -85,30 +86,30 @@ type redditListing struct {
 }
 
 type redditSearchThing struct {
-	Kind string            `json:"kind"`
+	Kind string           `json:"kind"`
 	Data redditSearchPost `json:"data"`
 }
 
 type redditSearchPost struct {
-	ID          string  `json:"id"`
-	Name        string  `json:"name"`
-	Title       string  `json:"title"`
-	SelfText    string  `json:"selftext"`
-	Author      string  `json:"author"`
-	Subreddit   string  `json:"subreddit"`
-	Permalink   string  `json:"permalink"`
-	URL         string  `json:"url"`
-	CreatedUTC  float64 `json:"created_utc"`
-	Edited      any     `json:"edited"`
-	Score       int     `json:"score"`
-	NumComments int     `json:"num_comments"`
-	Ups         int     `json:"ups"`
-	Downs       int     `json:"downs"`
-	Over18      bool    `json:"over_18"`
-	Locked      bool    `json:"locked"`
-	Stickied    bool    `json:"stickied"`
-	Distinguished any   `json:"distinguished"`
-	IsSelf      bool    `json:"is_self"`
+	ID            string  `json:"id"`
+	Name          string  `json:"name"`
+	Title         string  `json:"title"`
+	SelfText      string  `json:"selftext"`
+	Author        string  `json:"author"`
+	Subreddit     string  `json:"subreddit"`
+	Permalink     string  `json:"permalink"`
+	URL           string  `json:"url"`
+	CreatedUTC    float64 `json:"created_utc"`
+	Edited        any     `json:"edited"`
+	Score         int     `json:"score"`
+	NumComments   int     `json:"num_comments"`
+	Ups           int     `json:"ups"`
+	Downs         int     `json:"downs"`
+	Over18        bool    `json:"over_18"`
+	Locked        bool    `json:"locked"`
+	Stickied      bool    `json:"stickied"`
+	Distinguished any     `json:"distinguished"`
+	IsSelf        bool    `json:"is_self"`
 }
 
 // Search executes a bounded Reddit post search.
@@ -121,11 +122,11 @@ func (p *RedditProvider) Search(
 	ctx context.Context,
 	req SearchRequest,
 ) (SearchResponse, error) {
-	req = req.Normalize()
-
 	if err := req.Validate(); err != nil {
 		return SearchResponse{}, err
 	}
+
+	req = req.Normalize()
 
 	if strings.TrimSpace(p.AccessToken) == "" {
 		return SearchResponse{}, fmt.Errorf(
@@ -146,7 +147,7 @@ func (p *RedditProvider) Search(
 	started := time.Now()
 
 	endpoint, err := url.Parse(
-		p.BaseURL + "/search",
+		p.BaseURL,
 	)
 	if err != nil {
 		return SearchResponse{}, fmt.Errorf(
@@ -155,6 +156,19 @@ func (p *RedditProvider) Search(
 			err,
 		)
 	}
+
+	if endpoint.Scheme == "" || endpoint.Host == "" {
+		return SearchResponse{}, fmt.Errorf(
+			"%w: Reddit base URL must include scheme and host",
+			ErrProviderUnavailable,
+		)
+	}
+
+	endpoint.Path = path.Join(
+		endpoint.Path,
+		"search",
+	)
+	endpoint.Fragment = ""
 
 	query := endpoint.Query()
 	query.Set("q", req.Query)

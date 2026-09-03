@@ -11,29 +11,29 @@ package brand
 import "time"
 
 const (
-        // Name is the short product name.
-        Name = "SHEYTAN"
-        // FullName is the complete product name.
-        FullName = "SHEYTAN-Local-Agent"
-        // Trademark is the brand with the ™ mark, for display surfaces.
-        Trademark = "SHEYTAN™"
-        // Licensor is the legal entity that owns the copyright and license.
-        Licensor = "Parsaetak"
-        // LicensorURL is the official licensor contact point.
-        LicensorURL = "https://github.com/Parsaetak"
-        // TrademarkNotice is the formal trademark attribution line.
-        TrademarkNotice = "SHEYTAN and the SHEYTAN logo are trademarks of Parsaetak."
-        // LicenseName is the human name of the license.
-        LicenseName = "Parsaetak Proprietary License v1.1"
+	// Name is the short product name.
+	Name = "SHEYTAN"
+	// FullName is the complete product name.
+	FullName = "SHEYTAN-Local-Agent"
+	// Trademark is the brand with the ™ mark, for display surfaces.
+	Trademark = "SHEYTAN™"
+	// Licensor is the legal entity that owns the copyright and license.
+	Licensor = "Parsaetak"
+	// LicensorURL is the official licensor contact point.
+	LicensorURL = "https://github.com/Parsaetak"
+	// TrademarkNotice is the formal trademark attribution line.
+	TrademarkNotice = "SHEYTAN and the SHEYTAN logo are trademarks of Parsaetak."
+	// LicenseName is the human name of the license.
+	LicenseName = "Parsaetak Proprietary License v1.1"
 
-        // SignedBy is the application author/signer — v1.0.8. Every release
-        // of SHEYTAN-Local-Agent is authored and signed under this name; it
-        // is embedded in the exe version resource (CompanyName), printed in
-        // the About dialog, and carried in the SIGNATURE block of each
-        // distribution archive.
-        SignedBy = "Parsa Tak"
-        // SignedByRole is the role line printed under the signature.
-        SignedByRole = "Author & Application Signer"
+	// SignedBy is the application author/signer — v1.0.8. Every release
+	// of SHEYTAN-Local-Agent is authored and signed under this name; it
+	// is embedded in the exe version resource (CompanyName), printed in
+	// the About dialog, and carried in the SIGNATURE block of each
+	// distribution archive.
+	SignedBy = "Parsa Tak"
+	// SignedByRole is the role line printed under the signature.
+	SignedByRole = "Author & Application Signer"
 )
 
 // LogoSVG is the full-color flame mark (gradient flame on a deep ember
@@ -61,55 +61,55 @@ const LogoSVG = `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512
 
 // CopyrightYears returns the copyright range "2024–<current year>".
 func CopyrightYears() string {
-        y := time.Now().Year()
-        if y <= 2024 {
-                return "2024"
-        }
-        return "2024–" + itoa(y)
+	y := time.Now().Year()
+	if y <= 2024 {
+		return "2024"
+	}
+	return "2024–" + itoa(y)
 }
 
 // Copyright returns the canonical copyright line, e.g.
 // "© 2024–2026 Parsaetak. All rights reserved."
 func Copyright() string {
-        return "© " + CopyrightYears() + " " + Licensor + ". All rights reserved."
+	return "© " + CopyrightYears() + " " + Licensor + ". All rights reserved."
 }
 
 // Notice returns the short one-line legal footer used in the UI.
 func Notice() string {
-        return Trademark + " · " + Copyright()
+	return Trademark + " · " + Copyright()
 }
 
 // SignatureLine returns the one-line authorship attribution, e.g.
 // "Signed by Parsa Tak — Author & Application Signer".
 func SignatureLine() string {
-        return "Signed by " + SignedBy + " — " + SignedByRole
+	return "Signed by " + SignedBy + " — " + SignedByRole
 }
 
 // SignatureBlock returns the full signature text carried in the About
 // dialog and the SIGNATURE file of every distribution archive.
 func SignatureBlock(version string) string {
-        return "SHEYTAN-Local-Agent v" + version + "\n" +
-                "Signed by: " + SignedBy + "\n" +
-                "Role:      " + SignedByRole + "\n" +
-                "Product:   " + FullName + " (" + Trademark + ")\n" +
-                "Licensor:  " + Licensor + " <" + LicensorURL + ">\n" +
-                Copyright() + "\n" +
-                TrademarkNotice + "\n"
+	return "SHEYTAN-Local-Agent v" + version + "\n" +
+		"Signed by: " + SignedBy + "\n" +
+		"Role:      " + SignedByRole + "\n" +
+		"Product:   " + FullName + " (" + Trademark + ")\n" +
+		"Licensor:  " + Licensor + " <" + LicensorURL + ">\n" +
+		Copyright() + "\n" +
+		TrademarkNotice + "\n"
 }
 
 // LicenseFooter is the compact attribution block shown in About dialogs.
 const LicenseFooter = "SHEYTAN™ is a trademark of Parsaetak.\nLicensed under the Parsaetak Proprietary License v1.1.\n" + LicensorURL
 
 func itoa(n int) string {
-        if n == 0 {
-                return "0"
-        }
-        var b []byte
-        for n > 0 {
-                b = append([]byte{byte('0' + n%10)}, b...)
-                n /= 10
-        }
-        return string(b)
+	if n == 0 {
+		return "0"
+	}
+	var b []byte
+	for n > 0 {
+		b = append([]byte{byte('0' + n%10)}, b...)
+		n /= 10
+	}
+	return string(b)
 }
 
 // LicenseText is the full end-user license agreement shipped with the app.

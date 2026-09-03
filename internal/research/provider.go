@@ -161,8 +161,17 @@ func NormalizeResult(result Result, provider string) Result {
 	result.Snippet = strings.TrimSpace(result.Snippet)
 	result.Source = strings.TrimSpace(result.Source)
 
+	result.Provider = strings.TrimSpace(result.Provider)
+
 	if result.Provider == "" {
-		result.Provider = provider
+		result.Provider = strings.TrimSpace(provider)
+	}
+
+	// Provider labels are canonical backend names: lowercase, trimmed, and
+	// resolved through the compatibility alias table so "GITHUB", " Web ",
+	// and friends cannot bypass provider-based trust decisions.
+	if result.Provider != "" {
+		result.Provider = canonicalBackendName(result.Provider)
 	}
 
 	if result.MatchScore < 0 {

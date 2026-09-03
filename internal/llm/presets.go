@@ -3,7 +3,7 @@
 package llm
 
 import (
-	"github.com/sheytan/local-agent/internal/config"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
 )
 
 // Preset is a named bundle of sampling/runtime knobs.

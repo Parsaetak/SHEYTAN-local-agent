@@ -5,9 +5,9 @@
 // drops. The archive tool gives them:
 //
 //   - zip:   create a .zip from a list of files/dirs (recursive, 1 MB
-//            chunked copies — never a whole file in memory)
+//     chunked copies — never a whole file in memory)
 //   - unzip: extract (path-traversal guard: ../ and absolute entries are
-//            rejected; total-size cap; entry count cap)
+//     rejected; total-size cap; entry count cap)
 //   - tar / untar (+ gzip via .gz / .tgz suffixes)
 //   - list:  inventory an archive without extracting
 package tools
@@ -51,9 +51,9 @@ func (ArchiveTool) Parameters() any {
 }
 
 const (
-	archiveChunk   = 1 << 20 // 1 MB streaming buffer
-	archiveMaxOut  = 1 << 30 // 1 GB total extracted cap
-	archiveMaxN    = 20000   // entry count cap
+	archiveChunk  = 1 << 20 // 1 MB streaming buffer
+	archiveMaxOut = 1 << 30 // 1 GB total extracted cap
+	archiveMaxN   = 20000   // entry count cap
 )
 
 // Run implements the agent tool interface.

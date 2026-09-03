@@ -11,9 +11,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/sheytan/local-agent/internal/api"
-	"github.com/sheytan/local-agent/internal/config"
-	"github.com/sheytan/local-agent/internal/proc"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/api"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/proc"
 )
 
 // Serve starts the HTTP server and (optionally) opens the browser.

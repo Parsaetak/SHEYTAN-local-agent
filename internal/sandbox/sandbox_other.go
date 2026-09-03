@@ -19,7 +19,7 @@ import (
 type prlimitGovernor struct {
 	cpuPct int
 	// prlimit availability is probed once per process.
-	once    sync.Once
+	once   sync.Once
 	hasPrl bool
 }
 

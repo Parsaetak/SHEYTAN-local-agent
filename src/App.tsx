@@ -1,383 +1,217 @@
-import {
-	Suspense,
-	lazy,
-	useEffect,
-	useState,
-} from "react";
+import { Suspense, lazy, useEffect, useState } from "react";
 
 import {
-	getWorkspaceHref,
-	getWorkspaceLayer,
-	parseWorkspaceHash,
-	type WorkspaceView,
-	WORKSPACE_LAYERS,
+  getWorkspaceHref,
+  getWorkspaceLayer,
+  parseWorkspaceHash,
+  type WorkspaceView,
+  WORKSPACE_LAYERS,
 } from "./workspace";
 import { useRuntimeStore } from "./store";
 
-const AgentBody = lazy(
-	() => import("./AgentBody"),
-);
+const AgentBody = lazy(() => import("./AgentBody"));
 
-const AgentHeader = lazy(
-	() => import("./AgentHeader"),
-);
+const AgentHeader = lazy(() => import("./AgentHeader"));
 
-const AgentSidebar = lazy(
-	() => import("./AgentSidebar"),
-);
+const AgentSidebar = lazy(() => import("./AgentSidebar"));
 
-const LabPanel = lazy(
-	() => import("./LabPanel"),
-);
+const LabPanel = lazy(() => import("./LabPanel"));
 
-const ResearchPanel = lazy(
-	() => import("./ResearchPanel"),
-);
+const ResearchPanel = lazy(() => import("./ResearchPanel"));
 
-function PanelLoading({
-	label,
-}: {
-	label: string;
-}) {
-	return (
-		<div className="panel-loading">
-			<div className="panel-loading-mark">
-				✦
-			</div>
+function PanelLoading({ label }: { label: string }) {
+  return (
+    <div className="panel-loading">
+      <div className="panel-loading-mark">✦</div>
 
-			<strong>
-				Loading {label}
-			</strong>
+      <strong>Loading {label}</strong>
 
-			<span>
-				Initializing this workspace
-				layer…
-			</span>
-		</div>
-	);
+      <span>Initializing this workspace layer…</span>
+    </div>
+  );
 }
 
 function SidebarLayerLoading() {
-	return (
-		<div className="panel-loading">
-			<div className="panel-loading-mark">
-				✦
-			</div>
+  return (
+    <div className="panel-loading">
+      <div className="panel-loading-mark">✦</div>
 
-			<strong>
-				Loading Agent
-			</strong>
+      <strong>Loading Agent</strong>
 
-			<span>
-				Initializing session layer…
-			</span>
-		</div>
-	);
+      <span>Initializing session layer…</span>
+    </div>
+  );
 }
 
 function App() {
-	const appVersion = useRuntimeStore(
-		(state) => state.app?.appVersion ?? null,
-	);
+  const appVersion = useRuntimeStore((state) => state.app?.appVersion ?? null);
 
-	const connection = useRuntimeStore(
-		(state) => state.connection,
-	);
+  const connection = useRuntimeStore((state) => state.connection);
 
-	const [view, setView] =
-		useState<WorkspaceView>(() =>
-			parseWorkspaceHash(),
-		);
+  const [view, setView] = useState<WorkspaceView>(() => parseWorkspaceHash());
 
-	useEffect(() => {
-		function syncViewFromLocation() {
-			setView(
-				parseWorkspaceHash(),
-			);
-		}
+  useEffect(() => {
+    function syncViewFromLocation() {
+      setView(parseWorkspaceHash());
+    }
 
-		window.addEventListener(
-			"hashchange",
-			syncViewFromLocation,
-		);
+    window.addEventListener("hashchange", syncViewFromLocation);
 
-		window.addEventListener(
-			"popstate",
-			syncViewFromLocation,
-		);
+    window.addEventListener("popstate", syncViewFromLocation);
 
-		const normalizedView =
-			parseWorkspaceHash();
+    const normalizedView = parseWorkspaceHash();
 
-		const normalizedHref =
-			getWorkspaceHref(
-				normalizedView,
-			);
+    const normalizedHref = getWorkspaceHref(normalizedView);
 
-		if (
-			window.location.href !==
-			normalizedHref
-		) {
-			window.history.replaceState(
-				null,
-				"",
-				normalizedHref,
-			);
+    if (window.location.href !== normalizedHref) {
+      window.history.replaceState(null, "", normalizedHref);
 
-			setView(normalizedView);
-		}
+      setView(normalizedView);
+    }
 
-		return () => {
-			window.removeEventListener(
-				"hashchange",
-				syncViewFromLocation,
-			);
+    return () => {
+      window.removeEventListener("hashchange", syncViewFromLocation);
 
-			window.removeEventListener(
-				"popstate",
-				syncViewFromLocation,
-			);
-		};
-	}, []);
+      window.removeEventListener("popstate", syncViewFromLocation);
+    };
+  }, []);
 
-	function changeView(
-		nextView: WorkspaceView,
-	) {
-		if (nextView === view) {
-			return;
-		}
+  function changeView(nextView: WorkspaceView) {
+    if (nextView === view) {
+      return;
+    }
 
-		window.history.pushState(
-			null,
-			"",
-			getWorkspaceHref(
-				nextView,
-			),
-		);
+    window.history.pushState(null, "", getWorkspaceHref(nextView));
 
-		setView(nextView);
-	}
+    setView(nextView);
+  }
 
-	const activeLayer =
-		getWorkspaceLayer(view);
+  const activeLayer = getWorkspaceLayer(view);
 
-	const statusLabel =
-		connection === "connected"
-			? "Connected"
-			: connection === "connecting"
-				? "Connecting"
-				: connection === "error"
-					? "Connection error"
-					: "Offline";
+  const statusLabel =
+    connection === "connected"
+      ? "Connected"
+      : connection === "connecting"
+        ? "Connecting"
+        : connection === "error"
+          ? "Connection error"
+          : "Offline";
 
-	return (
-		<div className="app-shell">
-			<header className="topbar">
-				<div className="brand">
-					<div className="brand-mark">
-						S
-					</div>
+  return (
+    <div className="app-shell">
+      <header className="topbar">
+        <div className="brand">
+          <div className="brand-mark">S</div>
 
-					<div className="brand-copy">
-						<strong>
-							SHEYTAN
-						</strong>
+          <div className="brand-copy">
+            <strong>SHEYTAN</strong>
 
-						<span>
-							Local Agent
-						</span>
-					</div>
-				</div>
+            <span>Local Agent</span>
+          </div>
+        </div>
 
-				<div className="topbar-status">
-					<span
-						className={`status-dot ${
-							connection ===
-							"connected"
-								? "ready"
-								: ""
-						}`}
-					/>
+        <div className="topbar-status">
+          <span
+            className={`status-dot ${
+              connection === "connected" ? "ready" : ""
+            }`}
+          />
 
-					<span>
-						{statusLabel}
-					</span>
-				</div>
+          <span>{statusLabel}</span>
+        </div>
 
-				<div className="topbar-meta">
-					<span>
-						{appVersion ??
-							"ZETA"}
-					</span>
-				</div>
-			</header>
+        <div className="topbar-meta">
+          <span>{appVersion ?? "ZETA"}</span>
+        </div>
+      </header>
 
-			<div className="app-body">
-				<aside className="sidebar">
-					<div className="sidebar-heading">
-						<div>
-							<span className="eyebrow">
-								WORKSPACE
-							</span>
+      <div className="app-body">
+        <aside className="sidebar">
+          <div className="sidebar-heading">
+            <div>
+              <span className="eyebrow">WORKSPACE</span>
 
-							<strong>
-								Navigation
-							</strong>
-						</div>
-					</div>
+              <strong>Navigation</strong>
+            </div>
+          </div>
 
-					<nav
-						className="app-navigation"
-						aria-label="Workspace"
-					>
-						{WORKSPACE_LAYERS.map(
-							(layer) => (
-								<button
-									type="button"
-									key={
-										layer.id
-									}
-									className={`app-navigation-item ${
-										view ===
-										layer.id
-											? "active"
-											: ""
-									}`}
-									onClick={() =>
-										changeView(
-											layer.id,
-										)
-									}
-									aria-pressed={
-										view ===
-										layer.id
-									}
-								>
-									<span className="app-navigation-icon">
-										{
-											layer.icon
-										}
-									</span>
+          <nav className="app-navigation" aria-label="Workspace">
+            {WORKSPACE_LAYERS.map((layer) => (
+              <button
+                type="button"
+                key={layer.id}
+                className={`app-navigation-item ${
+                  view === layer.id ? "active" : ""
+                }`}
+                onClick={() => changeView(layer.id)}
+                aria-pressed={view === layer.id}
+              >
+                <span className="app-navigation-icon">{layer.icon}</span>
 
-									<span className="app-navigation-copy">
-										<strong>
-											{
-												layer.label
-											}
-										</strong>
+                <span className="app-navigation-copy">
+                  <strong>{layer.label}</strong>
 
-										<span>
-											{
-												layer.description
-											}
-										</span>
-									</span>
-								</button>
-							),
-						)}
-					</nav>
+                  <span>{layer.description}</span>
+                </span>
+              </button>
+            ))}
+          </nav>
 
-					{view === "agent" ? (
-						<Suspense
-							fallback={
-								<SidebarLayerLoading />
-							}
-						>
-							<AgentSidebar />
-						</Suspense>
-					) : (
-						<div className="sidebar-layer-info">
-							<span className="eyebrow">
-								LAYER
-							</span>
+          {view === "agent" ? (
+            <Suspense fallback={<SidebarLayerLoading />}>
+              <AgentSidebar />
+            </Suspense>
+          ) : (
+            <div className="sidebar-layer-info">
+              <span className="eyebrow">LAYER</span>
 
-							<strong>
-								{
-									activeLayer.title
-								}
-							</strong>
+              <strong>{activeLayer.title}</strong>
 
-							<span>
-								Only the active
-								workspace loads
-								its domain UI
-								and data.
-							</span>
-						</div>
-					)}
+              <span>
+                Only the active workspace loads its domain UI and data.
+              </span>
+            </div>
+          )}
 
-					<div className="sidebar-footer">
-						<span>
-							Native runtime
-						</span>
+          <div className="sidebar-footer">
+            <span>Native runtime</span>
 
-						<span>
-							Go + Wails
-						</span>
-					</div>
-				</aside>
+            <span>Go + Wails</span>
+          </div>
+        </aside>
 
-				<main className="workspace">
-					<section className="workspace-header">
-						<div>
-							<span className="eyebrow">
-								{
-									activeLayer.eyebrow
-								}
-							</span>
+        <main className="workspace">
+          <section className="workspace-header">
+            <div>
+              <span className="eyebrow">{activeLayer.eyebrow}</span>
 
-							{view ===
-							"agent" ? (
-								<Suspense
-									fallback={
-										<h1>
-											{
-												activeLayer.title
-											}
-										</h1>
-									}
-								>
-									<AgentHeader />
-								</Suspense>
-							) : (
-								<h1>
-									{
-										activeLayer.title
-									}
-								</h1>
-							)}
-						</div>
-					</section>
+              {view === "agent" ? (
+                <Suspense fallback={<h1>{activeLayer.title}</h1>}>
+                  <AgentHeader />
+                </Suspense>
+              ) : (
+                <h1>{activeLayer.title}</h1>
+              )}
+            </div>
+          </section>
 
-					{view === "agent" ? (
-						<Suspense
-							fallback={
-								<PanelLoading label="Agent" />
-							}
-						>
-							<AgentBody />
-						</Suspense>
-					) : view === "lab" ? (
-						<Suspense
-							fallback={
-								<PanelLoading label="Coding Lab" />
-							}
-						>
-							<LabPanel />
-						</Suspense>
-					) : (
-						<Suspense
-							fallback={
-								<PanelLoading label="Research" />
-							}
-						>
-							<ResearchPanel />
-						</Suspense>
-					)}
-				</main>
-			</div>
-		</div>
-	);
+          {view === "agent" ? (
+            <Suspense fallback={<PanelLoading label="Agent" />}>
+              <AgentBody />
+            </Suspense>
+          ) : view === "lab" ? (
+            <Suspense fallback={<PanelLoading label="Coding Lab" />}>
+              <LabPanel />
+            </Suspense>
+          ) : (
+            <Suspense fallback={<PanelLoading label="Research" />}>
+              <ResearchPanel />
+            </Suspense>
+          )}
+        </main>
+      </div>
+    </div>
+  );
 }
 
 export default App;

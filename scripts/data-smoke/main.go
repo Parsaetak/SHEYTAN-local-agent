@@ -12,8 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/sheytan/local-agent/internal/config"
-	"github.com/sheytan/local-agent/internal/tools"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/tools"
 )
 
 func run(t *tools.DataTool, args string) {

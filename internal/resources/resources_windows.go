@@ -24,11 +24,11 @@ type processMemoryCounters struct {
 }
 
 var (
-	kernel32           = windows.NewLazySystemDLL("kernel32.dll")
-	psapi              = windows.NewLazySystemDLL("psapi.dll")
-	pOpenProcess       = kernel32.NewProc("OpenProcess")
-	pGetProcessMemory  = psapi.NewProc("GetProcessMemoryInfo")
-	pCloseHandle       = kernel32.NewProc("CloseHandle")
+	kernel32          = windows.NewLazySystemDLL("kernel32.dll")
+	psapi             = windows.NewLazySystemDLL("psapi.dll")
+	pOpenProcess      = kernel32.NewProc("OpenProcess")
+	pGetProcessMemory = psapi.NewProc("GetProcessMemoryInfo")
+	pCloseHandle      = kernel32.NewProc("CloseHandle")
 )
 
 const processQueryLimited = 0x1000

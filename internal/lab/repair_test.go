@@ -136,7 +136,7 @@ func TestRepairLoopDoesNotRetryIdenticalCommandForever(t *testing.T) {
 		t.Fatalf(
 			"agent calls = %d, want 3",
 			agent.calls,
-		}
+		)
 	}
 
 	if len(summary.History) != 3 {
@@ -220,6 +220,18 @@ func newRepairTestFixture(
 	}
 
 	return tasks, task, verifier
+}
+
+// verificationContentCheck returns a meaningful, hermetic verification
+// command that proves the workspace contains the expected project content.
+// Trivial proof commands (echo/true/exit) are rejected by the verifier, so
+// verification tests must assert real workspace state.
+func verificationContentCheck(file, text string) string {
+	if os.PathSeparator == '\\' {
+		return "findstr " + text + " " + file
+	}
+
+	return "grep -q " + text + " " + file
 }
 
 func repairFailCommand() string {

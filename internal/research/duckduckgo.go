@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	defaultDuckDuckGoURL = "https://html.duckduckgo.com"
+	defaultDuckDuckGoURL   = "https://html.duckduckgo.com"
 	maxDuckDuckGoBodyBytes = 4 << 20
 )
 
@@ -63,11 +63,11 @@ func (p *DuckDuckGoProvider) Search(
 	ctx context.Context,
 	req SearchRequest,
 ) (SearchResponse, error) {
-	req = req.Normalize()
-
 	if err := req.Validate(); err != nil {
 		return SearchResponse{}, err
 	}
+
+	req = req.Normalize()
 
 	maxResults := req.MaxResults
 	if maxResults <= 0 {
@@ -313,9 +313,7 @@ func parseDuckDuckGoHTML(
 			}
 		}
 
-		for child := node.FirstChild;
-			child != nil;
-			child = child.NextSibling {
+		for child := node.FirstChild; child != nil; child = child.NextSibling {
 			visit(child)
 		}
 	}
@@ -350,9 +348,7 @@ func parseDuckDuckGoResult(
 			snippet = current
 		}
 
-		for child := current.FirstChild;
-			child != nil;
-			child = child.NextSibling {
+		for child := current.FirstChild; child != nil; child = child.NextSibling {
 			find(child)
 		}
 	}
@@ -506,9 +502,7 @@ func nodeText(
 			return
 		}
 
-		for child := current.FirstChild;
-			child != nil;
-			child = child.NextSibling {
+		for child := current.FirstChild; child != nil; child = child.NextSibling {
 			visit(child)
 		}
 	}

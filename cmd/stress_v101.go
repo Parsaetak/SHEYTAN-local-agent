@@ -17,11 +17,11 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/sheytan/local-agent/internal/agent"
-	"github.com/sheytan/local-agent/internal/aicontext"
-	"github.com/sheytan/local-agent/internal/config"
-	"github.com/sheytan/local-agent/internal/llm"
-	"github.com/sheytan/local-agent/internal/sessions"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/agent"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/aicontext"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/sessions"
 )
 
 // --- AI-CONTEXT.md lifecycle ---

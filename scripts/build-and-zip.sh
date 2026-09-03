@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-# Build + package SHEYTAN-Local-Agent v1.0.11 (Windows-only native desktop GUI)
+# Build + package SHEYTAN-Local-Agent v1.1.0 (Zeta) (Windows-only native desktop GUI)
 #
 # DUAL OUTPUT (v1.0.8):
-#   1. /home/z/my-project/download/sheytan-local-agent-1.0.11.zip
+#   1. /home/z/my-project/download/sheytan-local-agent-1.1.0.zip
 #      The ready-to-run portable app: exe (icon + Parsa Tak-signed version
 #      info + DPI manifest), bundled llama.cpp engine, docs, worklog.
 #
-#   2. /home/z/my-project/download/sheytan-local-agent-1.0.11-github.zip
+#   2. /home/z/my-project/download/sheytan-local-agent-1.1.0-github.zip
 #      The GitHub-ready SOURCE tree: every line of code, no .exe, no engine
 #      binaries, no generated .syso — plus .gitignore and a CI workflow so
 #      `git init && push` produces a building repository whose Actions
 #      rebuild the exe automatically.
 #
-# v1.0.11 (GRANITE) — the release that actually builds on GitHub:
+# v1.1.0 (Zeta) (GRANITE) — the release that actually builds on GitHub:
 #   - ROOT CAUSE of the v1.0.9/v1.0.10 CI failures fixed: unanchored
 #     .gitignore patterns (sessions/, sandbox/, ...) matched
 #     internal/sessions + internal/sandbox at any depth, so git silently
@@ -32,7 +32,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-VERSION="1.0.11"
+VERSION="1.1.0"
 APP_NAME="sheytan-local-agent"
 STAGE_DIR="dist-stage/$APP_NAME"
 GH_STAGE_DIR="dist-stage/$APP_NAME-github"
@@ -40,7 +40,7 @@ DIST_DIR="/home/z/my-project/download"
 ENGINE_SRC="/home/z/my-project/engine-dl/vulkan"
 ENGINE_TAG="b10642"
 
-# Toolchain paths (v1.0.11 session — see /home/z/my-project/env.sh)
+# Toolchain paths (v1.1.0 (Zeta) session — see /home/z/my-project/env.sh)
 export GOROOT=/home/z/.local/go
 export PATH=$GOROOT/bin:/home/z/mingw-root/usr/bin:$PATH
 export GOPATH=/home/z/go
@@ -192,7 +192,7 @@ echo ""
 echo ">> ZIP 1 (full app): $ZIP"
 ls -lh "$ZIP"
 
-# --- v1.0.11 GATE: the GitHub zip must COMPILE on its own ---
+# --- v1.1.0 (Zeta) GATE: the GitHub zip must COMPILE on its own ---
 # (v1.0.9 shipped without internal/sessions + internal/sandbox — the CI
 # error the user hit. v1.0.10's gate compiled the staged tree but the user's
 # `git add` still silently dropped the packages because an UNANCHORED

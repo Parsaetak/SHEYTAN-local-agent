@@ -124,7 +124,7 @@ func (s *Server) handleResearch(w http.ResponseWriter, r *http.Request) {
 					Title:       result.Title,
 					URL:         result.URL,
 					Snippet:     result.Snippet,
-					Source:     result.Source,
+					Source:      result.Source,
 					Provider:    result.Provider,
 					PublishedAt: result.PublishedAt,
 					Authority:   result.Authority.String(),

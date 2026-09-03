@@ -37,9 +37,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sheytan/local-agent/internal/config"
-	"github.com/sheytan/local-agent/internal/logging"
-	"github.com/sheytan/local-agent/internal/netcheck"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/logging"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/netcheck"
 )
 
 // Schedules supported by the updater.

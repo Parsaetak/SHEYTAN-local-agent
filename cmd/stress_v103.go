@@ -13,11 +13,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sheytan/local-agent/internal/aicontext"
-	"github.com/sheytan/local-agent/internal/config"
-	"github.com/sheytan/local-agent/internal/llm"
-	"github.com/sheytan/local-agent/internal/netcheck"
-	"github.com/sheytan/local-agent/internal/updater"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/aicontext"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/netcheck"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/updater"
 )
 
 // stressV103Defaults locks in the v1.0.3 config surface: NO phantom default

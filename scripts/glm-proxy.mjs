@@ -19,7 +19,9 @@ function callZAI(system, user) {
       maxBuffer: 32 * 1024 * 1024,
     });
     if (r.status !== 0) {
-      return reject(new Error("z-ai chat failed: " + (r.stderr || "").slice(0, 400)));
+      return reject(
+        new Error("z-ai chat failed: " + (r.stderr || "").slice(0, 400)),
+      );
     }
     let out = (r.stdout || "").trim();
     // z-ai CLI may print init lines then a JSON blob; find the content field.
@@ -41,12 +43,15 @@ function sse(res, obj) {
 }
 
 function sysPrompt(system) {
-  return system + `
+  return (
+    system +
+    `
 
 You have tools available. To call one, reply with EXACTLY one line:
 <<TOOL_CALL {"tool":"<name>","args":{...}}>>
 After each tool result you may call another tool or give the final answer as
-plain text (no tool call). Keep final answers short for tests.`;
+plain text (no tool call). Keep final answers short for tests.`
+  );
 }
 
 // repairJSON fixes the classic LLM JSON mistakes: raw newlines/tabs inside
@@ -131,7 +136,7 @@ const server = http.createServer(async (req, res) => {
     try {
       reply = await callZAI(
         sys + (toolList ? `\n\nTOOLS:\n${toolList}` : ""),
-        convo + "\n\nRespond now."
+        convo + "\n\nRespond now.",
       );
     } catch (e) {
       res.writeHead(500);

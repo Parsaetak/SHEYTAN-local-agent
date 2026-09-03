@@ -45,7 +45,7 @@ func TestChatRejectsEmptyChoices(t *testing.T) {
 	_, err := client.Chat(
 		context.Background(),
 		&ChatRequest{
-			Model:    "test-model",
+			Model: "test-model",
 			Messages: []Message{
 				{
 					Role:    "user",
@@ -110,7 +110,7 @@ func TestChatAcceptsNonEmptyChoices(t *testing.T) {
 	response, err := client.Chat(
 		context.Background(),
 		&ChatRequest{
-			Model:    "test-model",
+			Model: "test-model",
 			Messages: []Message{
 				{
 					Role:    "user",

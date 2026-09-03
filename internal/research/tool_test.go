@@ -210,7 +210,7 @@ func TestResearchToolRunUsesWebCompatibilityAlias(t *testing.T) {
 				testResult(
 					"Repair result",
 					"https://example.test/repair",
-					AuthorityTechnicalDocumentation,
+					AuthorityOfficial,
 					1.0,
 					time.Now().UTC(),
 				),
@@ -287,7 +287,7 @@ func TestResearchToolRunTimeoutPropagates(t *testing.T) {
 				testResult(
 					"Should not complete",
 					"https://example.test/timeout",
-					AuthorityTechnicalDocumentation,
+					AuthorityOfficial,
 					1.0,
 					time.Now().UTC(),
 				),

@@ -12,8 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/sheytan/local-agent/internal/config"
-	"github.com/sheytan/local-agent/internal/llm"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
 )
 
 // stressV105Defaults locks in the v1.0.5 config surface: version bump and

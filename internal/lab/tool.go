@@ -303,7 +303,7 @@ type codingLabRequest struct {
 	Source      string `json:"source,omitempty"`
 
 	Command     string   `json:"command,omitempty"`
-	WorkingDir string   `json:"workingDir,omitempty"`
+	WorkingDir  string   `json:"workingDir,omitempty"`
 	Environment []string `json:"environment,omitempty"`
 
 	TimeoutSec  int     `json:"timeoutSec,omitempty"`
@@ -355,14 +355,19 @@ func (t *Tool) startTask(
 	task := t.tasks.NewTask(title, description)
 
 	if err := t.tasks.Start(ctx, task, source); err != nil {
-		return encodeLabResponse(
+		payload, encodeErr := encodeLabResponse(
 			codingLabResponse{
 				OK:     false,
 				Action: "start_task",
 				Task:   task,
 				Error:  err.Error(),
 			},
-		), err
+		)
+		if encodeErr != nil {
+			err = errors.Join(err, encodeErr)
+		}
+
+		return payload, err
 	}
 
 	if _, err := t.sessions.Create(task); err != nil {
@@ -375,14 +380,19 @@ func (t *Tool) startTask(
 			err = errors.Join(err, cleanupErr)
 		}
 
-		return encodeLabResponse(
+		payload, encodeErr := encodeLabResponse(
 			codingLabResponse{
 				OK:     false,
 				Action: "start_task",
 				Task:   task,
 				Error:  err.Error(),
 			},
-		), err
+		)
+		if encodeErr != nil {
+			err = errors.Join(err, encodeErr)
+		}
+
+		return payload, err
 	}
 
 	return encodeLabResponse(
@@ -405,8 +415,8 @@ func (t *Tool) runCommand(
 	}
 
 	command := Command{
-		Command:      strings.TrimSpace(request.Command),
-		WorkingDir:   strings.TrimSpace(request.WorkingDir),
+		Command:     strings.TrimSpace(request.Command),
+		WorkingDir:  strings.TrimSpace(request.WorkingDir),
 		Environment: append([]string(nil), request.Environment...),
 	}
 
@@ -650,11 +660,11 @@ func (t *Tool) exportPatchTask(
 
 	return encodeLabResponse(
 		codingLabResponse{
-			OK:          true,
-			Action:      "export_patch",
-			Task:        task,
+			OK:           true,
+			Action:       "export_patch",
+			Task:         task,
 			ArtifactPath: patchPath,
-			Message:     "Patch exported without modifying the source repository.",
+			Message:      "Patch exported without modifying the source repository.",
 		},
 	)
 }
@@ -754,14 +764,19 @@ func (t *Tool) promoteTask(
 		task.Workspace,
 	)
 	if err != nil {
-		return encodeLabResponse(
+		payload, encodeErr := encodeLabResponse(
 			codingLabResponse{
 				OK:     false,
 				Action: "promote",
 				Task:   task,
 				Error:  err.Error(),
 			},
-		), err
+		)
+		if encodeErr != nil {
+			err = errors.Join(err, encodeErr)
+		}
+
+		return payload, err
 	}
 
 	if task.Metadata == nil {
@@ -1000,15 +1015,15 @@ func (t *Tool) lookupTask(id string) (*Task, error) {
 }
 
 type codingLabResponse struct {
-	OK            bool                 `json:"ok"`
-	Action        string               `json:"action"`
-	Task          *Task                `json:"task,omitempty"`
-	Result        *CommandResult       `json:"result,omitempty"`
-	Verification  *VerificationSummary `json:"verification,omitempty"`
-	Message       string               `json:"message,omitempty"`
-	Error         string               `json:"error,omitempty"`
-	ArtifactPath  string               `json:"artifactPath,omitempty"`
-	SnapshotPath  string               `json:"snapshotPath,omitempty"`
+	OK           bool                 `json:"ok"`
+	Action       string               `json:"action"`
+	Task         *Task                `json:"task,omitempty"`
+	Result       *CommandResult       `json:"result,omitempty"`
+	Verification *VerificationSummary `json:"verification,omitempty"`
+	Message      string               `json:"message,omitempty"`
+	Error        string               `json:"error,omitempty"`
+	ArtifactPath string               `json:"artifactPath,omitempty"`
+	SnapshotPath string               `json:"snapshotPath,omitempty"`
 }
 
 func encodeLabResponse(value codingLabResponse) (string, error) {

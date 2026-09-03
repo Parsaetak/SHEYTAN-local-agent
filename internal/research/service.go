@@ -348,9 +348,13 @@ func (s *Service) searchProvider(
 		return response, err
 	}
 
+	// Set the canonical registry name first so result-level provider fields
+	// inherit it during normalization instead of trusting whatever label the
+	// provider payload carried.
+	response.Provider = provider.Name()
+
 	response = NormalizeResponse(response)
 
-	response.Provider = provider.Name()
 	response.Duration = time.Since(started)
 
 	if err := response.Validate(); err != nil {
@@ -380,13 +384,13 @@ func (s *Service) searchAuto(
 
 	if len(providers) == 0 {
 		return SearchResponse{
-			Provider: BackendAuto,
-			Query:    req.Query,
-			Duration: time.Since(started),
-		}, fmt.Errorf(
-			"%w: no research providers are registered",
-			ErrProviderUnavailable,
-		)
+				Provider: BackendAuto,
+				Query:    req.Query,
+				Duration: time.Since(started),
+			}, fmt.Errorf(
+				"%w: no research providers are registered",
+				ErrProviderUnavailable,
+			)
 	}
 
 	ctx, cancel := context.WithTimeout(

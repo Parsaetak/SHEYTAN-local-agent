@@ -18,8 +18,8 @@ type mockResearchProvider struct {
 	active    *atomic.Int32
 	maxActive *atomic.Int32
 
-	mu       sync.Mutex
-	queries  []SearchRequest
+	mu        sync.Mutex
+	queries   []SearchRequest
 	callCount int
 }
 
@@ -574,6 +574,7 @@ func TestServiceAutoSearchCombinesProviders(t *testing.T) {
 
 	github := &mockResearchProvider{
 		name:      BackendGitHub,
+		delay:     50 * time.Millisecond,
 		active:    &active,
 		maxActive: &maxActive,
 		response: SearchResponse{
@@ -593,6 +594,7 @@ func TestServiceAutoSearchCombinesProviders(t *testing.T) {
 
 	reddit := &mockResearchProvider{
 		name:      BackendReddit,
+		delay:     50 * time.Millisecond,
 		active:    &active,
 		maxActive: &maxActive,
 		response: SearchResponse{
@@ -676,7 +678,7 @@ func TestServiceAutoSearchDeduplicatesByContentHash(t *testing.T) {
 		response: SearchResponse{
 			Provider: BackendGitHub,
 			Query:    "duplicate",
-			Results: []Result{first},
+			Results:  []Result{first},
 		},
 	}
 
@@ -685,7 +687,7 @@ func TestServiceAutoSearchDeduplicatesByContentHash(t *testing.T) {
 		response: SearchResponse{
 			Provider: BackendReddit,
 			Query:    "duplicate",
-			Results: []Result{second},
+			Results:  []Result{second},
 		},
 	}
 
@@ -735,7 +737,7 @@ func TestServiceAutoSearchDeduplicatesByURLWhenHashMissing(t *testing.T) {
 		response: SearchResponse{
 			Provider: BackendGitHub,
 			Query:    "duplicate",
-			Results: []Result{first},
+			Results:  []Result{first},
 		},
 	}
 
@@ -744,7 +746,7 @@ func TestServiceAutoSearchDeduplicatesByURLWhenHashMissing(t *testing.T) {
 		response: SearchResponse{
 			Provider: BackendReddit,
 			Query:    "duplicate",
-			Results: []Result{second},
+			Results:  []Result{second},
 		},
 	}
 
@@ -790,7 +792,7 @@ func TestServiceAutoSearchDeduplicatesByContent(t *testing.T) {
 		response: SearchResponse{
 			Provider: BackendGitHub,
 			Query:    "duplicate",
-			Results: []Result{first},
+			Results:  []Result{first},
 		},
 	}
 
@@ -799,7 +801,7 @@ func TestServiceAutoSearchDeduplicatesByContent(t *testing.T) {
 		response: SearchResponse{
 			Provider: BackendReddit,
 			Query:    "duplicate",
-			Results: []Result{second},
+			Results:  []Result{second},
 		},
 	}
 

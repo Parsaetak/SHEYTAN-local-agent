@@ -61,7 +61,7 @@ func (p *GitHubProvider) Name() string {
 }
 
 type githubSearchResponse struct {
-	TotalCount int               `json:"total_count"`
+	TotalCount int                `json:"total_count"`
 	Items      []githubSearchItem `json:"items"`
 }
 
@@ -77,8 +77,8 @@ type githubSearchItem struct {
 		Login string `json:"login"`
 	} `json:"user"`
 
-	RepositoryURL string `json:"repository_url"`
-	Comments      int    `json:"comments"`
+	RepositoryURL string  `json:"repository_url"`
+	Comments      int     `json:"comments"`
 	Score         float64 `json:"score"`
 
 	PullRequest *struct {
@@ -100,11 +100,11 @@ func (p *GitHubProvider) Search(
 	ctx context.Context,
 	req SearchRequest,
 ) (SearchResponse, error) {
-	req = req.Normalize()
-
 	if err := req.Validate(); err != nil {
 		return SearchResponse{}, err
 	}
+
+	req = req.Normalize()
 
 	maxResults := req.MaxResults
 	if maxResults <= 0 {
@@ -336,7 +336,6 @@ func githubSearchEndpoint(
 		base.Path,
 		"search/issues",
 	)
-	base.RawQuery = ""
 	base.Fragment = ""
 
 	return base, nil

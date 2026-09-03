@@ -53,19 +53,19 @@ type Command struct {
 
 // CommandResult contains the complete structured result of one execution.
 type CommandResult struct {
-	Command      string        `json:"command"`
-	WorkingDir   string        `json:"workingDir"`
-	Stdout       string        `json:"stdout"`
-	Stderr       string        `json:"stderr"`
-	Output       string        `json:"output"`
-	ExitCode     int           `json:"exitCode"`
-	Duration     time.Duration `json:"duration"`
-	StartedAt    time.Time     `json:"startedAt"`
-	FinishedAt   time.Time     `json:"finishedAt"`
-	TimedOut     bool          `json:"timedOut"`
-	Canceled     bool          `json:"canceled"`
-	OutputLimit  bool          `json:"outputLimit"`
-	Success      bool          `json:"success"`
+	Command     string        `json:"command"`
+	WorkingDir  string        `json:"workingDir"`
+	Stdout      string        `json:"stdout"`
+	Stderr      string        `json:"stderr"`
+	Output      string        `json:"output"`
+	ExitCode    int           `json:"exitCode"`
+	Duration    time.Duration `json:"duration"`
+	StartedAt   time.Time     `json:"startedAt"`
+	FinishedAt  time.Time     `json:"finishedAt"`
+	TimedOut    bool          `json:"timedOut"`
+	Canceled    bool          `json:"canceled"`
+	OutputLimit bool          `json:"outputLimit"`
+	Success     bool          `json:"success"`
 }
 
 // Runner executes commands inside Coding Lab workspaces.
@@ -472,9 +472,13 @@ func buildCommandResult(
 
 	output := combineOutput(stdout, stderr)
 
+	if outputLimited {
+		output += "\n\n[LAB OUTPUT TRUNCATED]\n"
+	}
+
 	return CommandResult{
 		Command:     command.Command,
-		WorkingDir: workingDir,
+		WorkingDir:  workingDir,
 		Stdout:      stdout,
 		Stderr:      stderr,
 		Output:      output,
@@ -621,20 +625,15 @@ func (b *boundedBuffer) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// String returns only the captured bytes. The truncation marker is added
+// to the combined CommandResult.Output by buildCommandResult so that the
+// marker never inflates Stdout/Stderr beyond the shared output budget.
 func (b *boundedBuffer) String() string {
 	if b == nil {
 		return ""
 	}
 
-	value := b.buffer.String()
-
-	if !b.Truncated {
-		return value
-	}
-
-	const marker = "\n\n[LAB OUTPUT TRUNCATED]\n"
-
-	return value + marker
+	return b.buffer.String()
 }
 
 func (r *Runner) defaultTimeout() time.Duration {

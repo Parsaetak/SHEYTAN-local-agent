@@ -27,7 +27,8 @@ type SearXNGProvider struct {
 // NewSearXNGProvider constructs a SearXNG research provider.
 //
 // BaseURL should point at the root URL of a SearXNG instance, for example:
-//   https://search.example.org
+//
+//	https://search.example.org
 //
 // The provider deliberately does not require authentication because SearXNG
 // instances commonly expose their public search endpoint without an API key.
@@ -57,21 +58,21 @@ func (p *SearXNGProvider) Name() string {
 }
 
 type searxngSearchResponse struct {
-	Query           string             `json:"query"`
-	NumberOfResults int                `json:"number_of_results"`
+	Query           string              `json:"query"`
+	NumberOfResults int                 `json:"number_of_results"`
 	Results         []searxngSearchItem `json:"results"`
 }
 
 type searxngSearchItem struct {
-	Title        string   `json:"title"`
-	URL          string   `json:"url"`
-	Content      string   `json:"content"`
-	Engine       string   `json:"engine"`
-	Engines      []string `json:"engines"`
-	Category     string   `json:"category"`
+	Title         string   `json:"title"`
+	URL           string   `json:"url"`
+	Content       string   `json:"content"`
+	Engine        string   `json:"engine"`
+	Engines       []string `json:"engines"`
+	Category      string   `json:"category"`
 	PublishedDate string   `json:"publishedDate"`
-	Score        float64  `json:"score"`
-	Template     string   `json:"template"`
+	Score         float64  `json:"score"`
+	Template      string   `json:"template"`
 }
 
 // Search executes a bounded SearXNG web search.
@@ -79,11 +80,11 @@ func (p *SearXNGProvider) Search(
 	ctx context.Context,
 	req SearchRequest,
 ) (SearchResponse, error) {
-	req = req.Normalize()
-
 	if err := req.Validate(); err != nil {
 		return SearchResponse{}, err
 	}
+
+	req = req.Normalize()
 
 	if strings.TrimSpace(p.BaseURL) == "" {
 		return SearchResponse{}, fmt.Errorf(
@@ -116,6 +117,7 @@ func (p *SearXNGProvider) Search(
 	query := endpoint.Query()
 	query.Set("q", req.Query)
 	query.Set("format", "json")
+	query.Set("categories", "general")
 	query.Set("pageno", "1")
 	query.Set("safesearch", "0")
 	query.Set("language", "all")
@@ -273,11 +275,11 @@ func (p *SearXNGProvider) Search(
 					MatchScore:  matchScore,
 					ContentHash: hex.EncodeToString(hash[:]),
 					Metadata: map[string]any{
-						"engine":         item.Engine,
-						"engines":        item.Engines,
-						"category":       item.Category,
-						"template":       item.Template,
-						"score_raw":      item.Score,
+						"engine":          item.Engine,
+						"engines":         item.Engines,
+						"category":        item.Category,
+						"template":        item.Template,
+						"score_raw":       item.Score,
 						"search_position": index,
 					},
 				},

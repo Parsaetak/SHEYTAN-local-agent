@@ -34,7 +34,7 @@ import (
 // defaultSandboxMemMB / defaultSandboxCPUPct are the fallback caps when a
 // caller passes zeros.
 const (
-	defaultSandboxMemMB = 512
+	defaultSandboxMemMB  = 512
 	defaultSandboxCPUPct = 100
 	maxSandboxTimeoutSec = 600
 )
@@ -236,7 +236,7 @@ func (s *CodeExecSandbox) Run(
 	// Non-zero exit still returns the captured output — the agent needs
 	// the traceback, not just the error.
 	if err != nil {
-		out = append(out, ("\n"+err.Error())...)
+		out = append(out, ("\n" + err.Error())...)
 	}
 
 	return string(out), nil

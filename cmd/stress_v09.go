@@ -10,10 +10,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/sheytan/local-agent/internal/brand"
-	"github.com/sheytan/local-agent/internal/config"
-	agentrt "github.com/sheytan/local-agent/internal/runtime"
-	"github.com/sheytan/local-agent/internal/tools"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/brand"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
+	agentrt "github.com/Parsaetak/SHEYTAN-local-agent/internal/runtime"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/tools"
 )
 
 // --- portable storage ---

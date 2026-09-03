@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
 	"testing"
 )
@@ -84,8 +83,8 @@ func TestDuckDuckGoProviderRejectsOversizedResponse(t *testing.T) {
 		"exceeds",
 	) {
 		t.Fatalf(
-		"expected oversized-response error, got %v",
-		err,
+			"expected oversized-response error, got %v",
+			err,
 		)
 	}
 }
@@ -246,29 +245,46 @@ func TestDuckDuckGoSearchEndpointRejectsMissingSchemeOrHost(t *testing.T) {
 }
 
 func TestResearchSearchURLsDoNotReuseCallerRawQuery(t *testing.T) {
-	base, err := url.Parse("https://example.test/search?evil=1#fragment")
+	// Provider request URLs are built from operator-configured base URLs.
+	// Any raw query string or fragment configured on the base URL must be
+	// dropped so caller-supplied parameters cannot leak into (or override)
+	// the provider request contract.
+
+	searxEndpoint, err := searxngSearchEndpoint(
+		"https://searx.example.test/search?evil=1#fragment",
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	query := base.Query()
-	query.Set("q", "safe")
-	query.Set("format", "json")
-	base.RawQuery = query.Encode()
-	base.Fragment = ""
-
-	if base.Query().Get("evil") != "" {
-		t.Fatal("unexpected caller-supplied query parameter retained")
+	if got := searxEndpoint.Query().Get("evil"); got != "" {
+		t.Fatalf("SearXNG endpoint retained caller query parameter: %q", got)
 	}
 
-	if base.Fragment != "" {
-		t.Fatal("unexpected fragment retained")
+	if searxEndpoint.Fragment != "" {
+		t.Fatalf("SearXNG endpoint retained fragment: %q", searxEndpoint.Fragment)
 	}
 
-	if got := base.Query().Get("q"); got != "safe" {
-		t.Fatalf(
-			"unexpected query value: %q",
-			got,
-		)
+	if searxEndpoint.Query().Get("q") != "" {
+		t.Fatal("SearXNG endpoint must not carry preset query values")
+	}
+
+	duckEndpoint, err := duckDuckGoSearchEndpoint(
+		"https://duck.example.test/?evil=1#fragment",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := duckEndpoint.Query().Get("evil"); got != "" {
+		t.Fatalf("DuckDuckGo endpoint retained caller query parameter: %q", got)
+	}
+
+	if duckEndpoint.Fragment != "" {
+		t.Fatalf("DuckDuckGo endpoint retained fragment: %q", duckEndpoint.Fragment)
+	}
+
+	if duckEndpoint.Query().Get("q") != "" {
+		t.Fatal("DuckDuckGo endpoint must not carry preset query values")
 	}
 }

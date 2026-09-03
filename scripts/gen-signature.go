@@ -14,8 +14,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/sheytan/local-agent/internal/brand"
-	"github.com/sheytan/local-agent/internal/config"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/brand"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
 )
 
 func main() {

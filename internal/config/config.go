@@ -315,15 +315,15 @@ func Default() *Config {
 		LabAllowNetwork:      false,
 
 		// Version Zeta — research defaults.
-		ResearchEnabled:    true,
-		ResearchBackend:    "auto",
-		ResearchMaxResults: 8,
-		ResearchTimeoutSec: 20,
+		ResearchEnabled:     true,
+		ResearchBackend:     "auto",
+		ResearchMaxResults:  8,
+		ResearchTimeoutSec:  20,
 		ResearchCacheTTLMin: 60,
-		ResearchGitHub:     true,
-		ResearchReddit:     true,
-		ResearchWeb:        true,
-		ResearchUserAgent:  AppName + "/" + AppVersion,
+		ResearchGitHub:      true,
+		ResearchReddit:      true,
+		ResearchWeb:         true,
+		ResearchUserAgent:   AppName + "/" + AppVersion,
 	}
 }
 

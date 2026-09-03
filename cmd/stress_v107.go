@@ -17,11 +17,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sheytan/local-agent/internal/agent"
-	"github.com/sheytan/local-agent/internal/config"
-	"github.com/sheytan/local-agent/internal/continuum"
-	"github.com/sheytan/local-agent/internal/llm"
-	"github.com/sheytan/local-agent/internal/sessions"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/agent"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/continuum"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/sessions"
 )
 
 // stressV107Defaults locks the v1.0.7 config surface.

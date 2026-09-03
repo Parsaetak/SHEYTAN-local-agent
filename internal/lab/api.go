@@ -30,30 +30,30 @@ type CommandSnapshot struct {
 // It is constructed while the owning Lab session is locked so the API cannot
 // observe partially-mutated task state during concurrent agent operations.
 type TaskSnapshot struct {
-	ID                  string              `json:"id"`
-	Title               string              `json:"title"`
-	Description         string              `json:"description"`
-	Status              TaskStatus          `json:"status"`
-	Workspace           *Workspace          `json:"workspace,omitempty"`
-	Commands            []CommandSnapshot   `json:"commands,omitempty"`
-	Results             []CommandResult     `json:"results,omitempty"`
-	Metadata            map[string]string   `json:"metadata,omitempty"`
-	LastVerification    *VerificationSummary `json:"lastVerification,omitempty"`
-	VerificationPassed  bool                `json:"verificationPassed"`
-	VerifiedAt          *time.Time          `json:"verifiedAt,omitempty"`
-	CreatedAt           time.Time           `json:"createdAt"`
-	StartedAt           *time.Time           `json:"startedAt,omitempty"`
-	FinishedAt          *time.Time           `json:"finishedAt,omitempty"`
-	Error               string              `json:"error,omitempty"`
+	ID                 string               `json:"id"`
+	Title              string               `json:"title"`
+	Description        string               `json:"description"`
+	Status             TaskStatus           `json:"status"`
+	Workspace          *Workspace           `json:"workspace,omitempty"`
+	Commands           []CommandSnapshot    `json:"commands,omitempty"`
+	Results            []CommandResult      `json:"results,omitempty"`
+	Metadata           map[string]string    `json:"metadata,omitempty"`
+	LastVerification   *VerificationSummary `json:"lastVerification,omitempty"`
+	VerificationPassed bool                 `json:"verificationPassed"`
+	VerifiedAt         *time.Time           `json:"verifiedAt,omitempty"`
+	CreatedAt          time.Time            `json:"createdAt"`
+	StartedAt          *time.Time           `json:"startedAt,omitempty"`
+	FinishedAt         *time.Time           `json:"finishedAt,omitempty"`
+	Error              string               `json:"error,omitempty"`
 }
 
 // TaskSessionSnapshot combines the task state with its active Lab-session
 // metadata.
 type TaskSessionSnapshot struct {
-	ID        string        `json:"id"`
-	CreatedAt time.Time     `json:"createdAt"`
-	UpdatedAt time.Time     `json:"updatedAt"`
-	Task      TaskSnapshot  `json:"task"`
+	ID        string       `json:"id"`
+	CreatedAt time.Time    `json:"createdAt"`
+	UpdatedAt time.Time    `json:"updatedAt"`
+	Task      TaskSnapshot `json:"task"`
 }
 
 // Snapshot returns one immutable API-safe view of an active Lab task.

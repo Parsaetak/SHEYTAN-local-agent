@@ -84,9 +84,9 @@ func (t *FetchTool) Parameters() any {
 }
 
 const (
-	fetchDefaultCap = 512 << 10 // 512 KB
-	fetchMaxCap     = 4 << 20   // 4 MB
-	fetchTimeout    = 30 * time.Second
+	fetchDefaultCap   = 512 << 10 // 512 KB
+	fetchMaxCap       = 4 << 20   // 4 MB
+	fetchTimeout      = 30 * time.Second
 	fetchMaxRedirects = 5
 )
 

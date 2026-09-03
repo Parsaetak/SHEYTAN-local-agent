@@ -6,11 +6,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/sheytan/local-agent/internal/aicontext"
-	"github.com/sheytan/local-agent/internal/brand"
-	"github.com/sheytan/local-agent/internal/config"
-	"github.com/sheytan/local-agent/internal/memory"
-	"github.com/sheytan/local-agent/internal/resources"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/aicontext"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/brand"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/memory"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/resources"
 )
 
 // --- v1.0.11 (GRANITE) stress scenarios ---

@@ -363,8 +363,8 @@ func (v *Verifier) Verify(
 
 	summary.Passed =
 		summary.RequiredTotal > 0 &&
-		summary.RequiredFailed == 0 &&
-		summary.RequiredPassed == summary.RequiredTotal
+			summary.RequiredFailed == 0 &&
+			summary.RequiredPassed == summary.RequiredTotal
 
 	if !summary.Passed {
 		summary.Error = ErrVerificationFailed.Error()

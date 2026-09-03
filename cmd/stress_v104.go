@@ -18,12 +18,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sheytan/local-agent/internal/artifacts"
-	"github.com/sheytan/local-agent/internal/config"
-	"github.com/sheytan/local-agent/internal/llm"
-	"github.com/sheytan/local-agent/internal/proc"
-	"github.com/sheytan/local-agent/internal/sysinfo"
-	"github.com/sheytan/local-agent/internal/tools"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/artifacts"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/proc"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/sysinfo"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/tools"
 )
 
 // stressV104Defaults locks in the v1.0.4 config surface: version bump,

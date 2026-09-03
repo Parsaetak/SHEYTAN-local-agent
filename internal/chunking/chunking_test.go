@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sheytan/local-agent/internal/llm"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
 )
 
 func TestEstimateTokens(t *testing.T) {

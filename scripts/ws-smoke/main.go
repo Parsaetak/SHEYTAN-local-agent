@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/sheytan/local-agent/internal/tools"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/tools"
 )
 
 func main() {

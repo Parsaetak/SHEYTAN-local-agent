@@ -478,8 +478,8 @@ func (o *Orchestrator) RunDetailed(
 			}
 
 			onActivity(Activity{
-				Type: "error",
-				Caption: "LLM error: " + err.Error(),
+				Type:      "error",
+				Caption:   "LLM error: " + err.Error(),
 				Timestamp: time.Now(),
 			})
 
@@ -882,9 +882,7 @@ func SplitThink(
 			rest[:open],
 		)
 
-		rest = rest[
-			open+len("<think>"):
-		]
+		rest = rest[open+len("<think>"):]
 
 		close := strings.Index(
 			rest,
@@ -907,9 +905,7 @@ func SplitThink(
 
 		think.WriteString("\n")
 
-		rest = rest[
-			close+len("</think>"):
-		]
+		rest = rest[close+len("</think>"):]
 	}
 
 	return strings.TrimSpace(

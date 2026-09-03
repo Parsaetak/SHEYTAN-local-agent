@@ -20,10 +20,12 @@ type labActionResponse struct {
 // interface.
 //
 // GET /api/lab
-//   returns every currently active Lab task.
+//
+//	returns every currently active Lab task.
 //
 // POST /api/lab
-//   delegates one lifecycle action to the existing Coding Lab tool.
+//
+//	delegates one lifecycle action to the existing Coding Lab tool.
 //
 // The handler never implements Lab semantics itself. All execution remains
 // inside internal/lab.

@@ -309,7 +309,7 @@ func existingRealPath(path string) (string, error) {
 //
 // Example:
 //
-//   base/link/new.txt
+//	base/link/new.txt
 //
 // If base/link is a symlink to /outside, the returned prefix is /outside and
 // containment fails before anything can be created there.

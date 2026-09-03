@@ -32,25 +32,25 @@ func TestSearXNGProviderSearch(t *testing.T) {
 		}
 
 		_, _ = w.Write([]byte(`{
-			"query":"golang repair",
-			"results":[
-				{
-					"title":"  Go Repair Guide  ",
-					"url":"https://example.com/go",
-					"content":"  Useful   repair   guidance. ",
-					"engine":"google",
-					"publishedDate":"2026-09-01T12:00:00Z",
-					"score":3.5
-				},
-				{
-					"title":"Second result",
-					"url":"https://example.com/second",
-					"content":"Second snippet",
-					"engine":"bing",
-					"score":0.2
-				}
-			]
-		}`))
+                        "query":"golang repair",
+                        "results":[
+                                {
+                                        "title":"  Go Repair Guide  ",
+                                        "url":"https://example.com/go",
+                                        "content":"  Useful   repair   guidance. ",
+                                        "engine":"google",
+                                        "publishedDate":"2026-09-01T12:00:00Z",
+                                        "score":3.5
+                                },
+                                {
+                                        "title":"Second result",
+                                        "url":"https://example.com/second",
+                                        "content":"Second snippet",
+                                        "engine":"bing",
+                                        "score":0.2
+                                }
+                        ]
+                }`))
 	}))
 	defer server.Close()
 
@@ -173,7 +173,7 @@ func TestDuckDuckGoProviderSearch(t *testing.T) {
 			t.Fatalf("unexpected method: %s", r.Method)
 		}
 
-		if r.URL.Path != "/" {
+		if r.URL.Path != "/html" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
 
@@ -181,27 +181,31 @@ func TestDuckDuckGoProviderSearch(t *testing.T) {
 			t.Fatalf("unexpected query: %q", got)
 		}
 
-		if got := r.URL.Query().Get("b"); got != "0" {
-			t.Fatalf("unexpected start parameter: %q", got)
+		if got := r.URL.Query().Get("kl"); got != "wt-wt" {
+			t.Fatalf("unexpected region parameter: %q", got)
+		}
+
+		if got := r.URL.Query().Get("kp"); got != "-2" {
+			t.Fatalf("unexpected safe-search parameter: %q", got)
 		}
 
 		_, _ = w.Write([]byte(`
-			<html>
-			  <body>
-			    <div class="result results_links results_links_deep web-result">
-			      <a class="result__a" href="https://example.com/go">  Go Repair Guide  </a>
-			      <a class="result__snippet"> Useful   repair guidance. </a>
-			      <a class="result__url">example.com/go</a>
-			    </div>
+                        <html>
+                          <body>
+                            <div class="result results_links results_links_deep web-result">
+                              <a class="result__a" href="https://example.com/go">  Go Repair Guide  </a>
+                              <a class="result__snippet"> Useful   repair guidance. </a>
+                              <a class="result__url">example.com/go</a>
+                            </div>
 
-			    <div class="result results_links results_links_deep web-result">
-			      <a class="result__a" href="https://example.com/second">Second result</a>
-			      <a class="result__snippet">Second snippet</a>
-			      <a class="result__url">example.com/second</a>
-			    </div>
-			  </body>
-			</html>
-		`))
+                            <div class="result results_links results_links_deep web-result">
+                              <a class="result__a" href="https://example.com/second">Second result</a>
+                              <a class="result__snippet">Second snippet</a>
+                              <a class="result__url">example.com/second</a>
+                            </div>
+                          </body>
+                        </html>
+                `))
 	}))
 	defer server.Close()
 
@@ -270,15 +274,15 @@ func TestDuckDuckGoProviderSearchEscapesQuery(t *testing.T) {
 		}
 
 		_, _ = w.Write([]byte(`
-			<html>
-			  <body>
-			    <div class="result results_links results_links_deep web-result">
-			      <a class="result__a" href="https://example.com/test">Test</a>
-			      <a class="result__snippet">Snippet</a>
-			    </div>
-			  </body>
-			</html>
-		`))
+                        <html>
+                          <body>
+                            <div class="result results_links results_links_deep web-result">
+                              <a class="result__a" href="https://example.com/test">Test</a>
+                              <a class="result__snippet">Snippet</a>
+                            </div>
+                          </body>
+                        </html>
+                `))
 	}))
 	defer server.Close()
 
@@ -302,14 +306,14 @@ func TestDuckDuckGoProviderSearchEscapesQuery(t *testing.T) {
 func TestDuckDuckGoProviderEmptyResults(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`
-			<html>
-			  <body>
-			    <div class="no-results">
-			      No results found
-			    </div>
-			  </body>
-			</html>
-		`))
+                        <html>
+                          <body>
+                            <div class="no-results">
+                              No results found
+                            </div>
+                          </body>
+                        </html>
+                `))
 	}))
 	defer server.Close()
 
@@ -363,12 +367,12 @@ func TestDuckDuckGoProviderMalformedHTMLDoesNotPanic(t *testing.T) {
 func TestSearXNGProviderResultLimit(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{
-			"results":[
-				{"title":"One","url":"https://example.com/1","content":"One"},
-				{"title":"Two","url":"https://example.com/2","content":"Two"},
-				{"title":"Three","url":"https://example.com/3","content":"Three"}
-			]
-		}`))
+                        "results":[
+                                {"title":"One","url":"https://example.com/1","content":"One"},
+                                {"title":"Two","url":"https://example.com/2","content":"Two"},
+                                {"title":"Three","url":"https://example.com/3","content":"Three"}
+                        ]
+                }`))
 	}))
 	defer server.Close()
 

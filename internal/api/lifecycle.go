@@ -29,11 +29,9 @@ func (s *Server) Close() {
 		cancel()
 	}
 
-	// Abort the orchestrator as well because the orchestrator may have work
-	// that is not represented solely by the HTTP request context.
-	if s.orch != nil {
-		s.orch.Abort()
-	}
+	// The orchestrator itself needs no explicit abort: every run it
+	// executes is bound to the request context canceled above, so
+	// canceling the registered runs stops all orchestrator work.
 
 	// Release the shared runtime resources.
 	if s.stack != nil {

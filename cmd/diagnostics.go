@@ -5,9 +5,9 @@ import (
 	"os"
 	"runtime"
 
-	"github.com/sheytan/local-agent/internal/config"
-	"github.com/sheytan/local-agent/internal/installer"
-	"github.com/sheytan/local-agent/internal/sysinfo"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/installer"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/sysinfo"
 )
 
 // Install runs the component auto-installer + update check.

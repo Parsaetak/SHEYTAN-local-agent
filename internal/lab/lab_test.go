@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sheytan/local-agent/internal/config"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
 )
 
 func TestWorkspaceIsolation(t *testing.T) {
@@ -165,8 +165,8 @@ func TestRunnerSuccessAndFailure(t *testing.T) {
 		context.Background(),
 		workspace,
 		Command{
-			Command:    sleepCommand(),
-			Timeout:    100 * time.Millisecond,
+			Command:        sleepCommand(),
+			Timeout:        100 * time.Millisecond,
 			MaxOutputBytes: 64 * 1024,
 		},
 	)
@@ -301,7 +301,7 @@ func TestTaskVerificationGateAndInvalidation(t *testing.T) {
 	successSummary, err := verifier.VerifyCommands(
 		context.Background(),
 		task,
-		[]string{"echo verification-ok"},
+		[]string{verificationContentCheck("main.txt", "hello")},
 	)
 	if err != nil {
 		t.Fatalf("VerifyCommands success: %v", err)
@@ -336,6 +336,14 @@ func TestTaskVerificationInvalidatesAfterCommand(t *testing.T) {
 	workspaceRoot := filepath.Join(root, "workspaces")
 
 	if err := os.MkdirAll(source, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(
+		filepath.Join(source, "main.txt"),
+		[]byte("hello"),
+		0o644,
+	); err != nil {
 		t.Fatal(err)
 	}
 
@@ -375,7 +383,7 @@ func TestTaskVerificationInvalidatesAfterCommand(t *testing.T) {
 	if _, err := verifier.VerifyCommands(
 		context.Background(),
 		task,
-		[]string{"echo verified"},
+		[]string{verificationContentCheck("main.txt", "hello")},
 	); err != nil {
 		t.Fatalf("VerifyCommands: %v", err)
 	}
@@ -534,9 +542,8 @@ func TestSessionRegistryLifecycle(t *testing.T) {
 
 	task.Status = TaskSucceeded
 
-	removed := registry.RemoveCompleted(session.ID)
-	if !removed {
-		t.Fatal("RemoveCompleted should remove terminal session")
+	if err := registry.RemoveCompleted(session.ID); err != nil {
+		t.Fatalf("RemoveCompleted: %v", err)
 	}
 
 	if registry.Count() != 0 {
@@ -621,8 +628,8 @@ func TestCodingLabToolEndToEnd(t *testing.T) {
 		"taskId": taskID,
 		"checks": []map[string]any{
 			{
-				"name":     "echo",
-				"command":  "echo verification-ok",
+				"name":     "content",
+				"command":  verificationContentCheck("app.txt", "zeta"),
 				"required": true,
 			},
 		},
@@ -640,6 +647,26 @@ func TestCodingLabToolEndToEnd(t *testing.T) {
 		t.Fatalf(
 			"verification response was not successful: %s",
 			verifyOutput,
+		)
+	}
+
+	promoteArgs := marshalLabTestArgs(t, map[string]any{
+		"action": "promote",
+		"taskId": taskID,
+	})
+
+	promoteOutput, err := tool.Run(
+		context.Background(),
+		promoteArgs,
+	)
+	if err != nil {
+		t.Fatalf("promote: %v", err)
+	}
+
+	if !strings.Contains(promoteOutput, `"ok":true`) {
+		t.Fatalf(
+			"promotion response was not successful: %s",
+			promoteOutput,
 		)
 	}
 

@@ -278,20 +278,58 @@ func BriefingWithTools(
 		}
 	}
 
-	if netcheck.IsOffline() {
-		b.WriteString(
-			"- Connectivity: OFFLINE — webSearch and browser are DISABLED; all local tools work\n",
-		)
-	} else {
-		b.WriteString(
-			"- Connectivity: online (webSearch and browser available)\n",
-		)
-	}
-
+	// Effective tool set: registered tools (or the compatibility fallback),
+	// further restricted by the user's EnabledTools selection.
 	tools := normalizeToolNames(registeredTools)
 
 	if cfg != nil {
 		tools = cfg.EnabledToolList(tools)
+	}
+
+	hasTool := func(name string) bool {
+		for _, tool := range tools {
+			if tool == name {
+				return true
+			}
+		}
+
+		return false
+	}
+
+	networkTools := func() string {
+		names := make([]string, 0, 2)
+
+		if hasTool("webSearch") {
+			names = append(names, "webSearch")
+		}
+
+		if hasTool("browser") {
+			names = append(names, "browser")
+		}
+
+		return strings.Join(names, " and ")
+	}
+
+	switch {
+	case netcheck.IsOffline():
+		if names := networkTools(); names != "" {
+			b.WriteString(
+				"- Connectivity: OFFLINE — " + names +
+					" are DISABLED; all local tools work\n",
+			)
+		} else {
+			b.WriteString(
+				"- Connectivity: OFFLINE — no network tools are registered; all local tools work\n",
+			)
+		}
+	case networkTools() != "":
+		b.WriteString(
+			"- Connectivity: online (" + networkTools() + " available)\n",
+		)
+	default:
+		b.WriteString(
+			"- Connectivity: online (no network tools registered)\n",
+		)
 	}
 
 	b.WriteString(

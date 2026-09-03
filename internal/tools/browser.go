@@ -13,10 +13,10 @@ import (
 
 	"github.com/chromedp/chromedp"
 
-	"github.com/sheytan/local-agent/internal/browser"
-	"github.com/sheytan/local-agent/internal/config"
-	"github.com/sheytan/local-agent/internal/logging"
-	"github.com/sheytan/local-agent/internal/netcheck"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/browser"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/logging"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/netcheck"
 )
 
 // --- Browser automation (human-like, with page understanding) ---

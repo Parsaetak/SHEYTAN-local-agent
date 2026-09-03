@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/sheytan/local-agent/internal/screen"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/screen"
 )
 
 // VisionCheck (v1.0.6) is installed by the runtime: it returns an error when

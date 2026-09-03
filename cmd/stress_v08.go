@@ -19,13 +19,13 @@ import (
 	"testing" //nolint — used for assertions only via helper
 	"time"
 
-	"github.com/sheytan/local-agent/internal/agent"
-	"github.com/sheytan/local-agent/internal/brand"
-	"github.com/sheytan/local-agent/internal/browser"
-	"github.com/sheytan/local-agent/internal/config"
-	"github.com/sheytan/local-agent/internal/llm"
-	"github.com/sheytan/local-agent/internal/logging"
-	"github.com/sheytan/local-agent/internal/tools"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/agent"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/brand"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/browser"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/logging"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/tools"
 )
 
 // --- logging tests ---

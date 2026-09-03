@@ -58,17 +58,17 @@ type Provenance struct {
 }
 
 type Entry struct {
-	ID           string      `json:"id"`
-	Class        string      `json:"class,omitempty"`
-	Tags         []string    `json:"tags"`
-	Content      string      `json:"content"`
-	Source       string      `json:"source,omitempty"` // legacy/session source
-	CreatedAt    time.Time   `json:"createdAt"`
-	Trust        TrustLevel  `json:"trust,omitempty"`
-	Provenance   Provenance  `json:"provenance,omitempty"`
-	Quarantined  bool        `json:"quarantined,omitempty"`
+	ID            string     `json:"id"`
+	Class         string     `json:"class,omitempty"`
+	Tags          []string   `json:"tags"`
+	Content       string     `json:"content"`
+	Source        string     `json:"source,omitempty"` // legacy/session source
+	CreatedAt     time.Time  `json:"createdAt"`
+	Trust         TrustLevel `json:"trust,omitempty"`
+	Provenance    Provenance `json:"provenance,omitempty"`
+	Quarantined   bool       `json:"quarantined,omitempty"`
 	Authoritative bool       `json:"authoritative,omitempty"`
-	Score        float64     `json:"-"` // search-only
+	Score         float64    `json:"-"` // search-only
 }
 
 type Store struct {
@@ -161,11 +161,7 @@ func NormalizeEntry(e Entry) Entry {
 		e.Class = ClassM7
 		e.Quarantined = true
 		e.Authoritative = false
-
-		if e.Trust == TrustTrusted ||
-			e.Trust == TrustVerified {
-			e.Trust = TrustProvisional
-		}
+		e.Trust = TrustProvisional
 	}
 
 	// M1 is reserved for explicit trusted/verified user facts.
@@ -184,11 +180,9 @@ func NormalizeEntry(e Entry) Entry {
 		}
 	}
 
-	// Only explicitly trusted/verified data can be authoritative.
-	if e.Trust != TrustTrusted &&
-		e.Trust != TrustVerified {
-		e.Authoritative = false
-	}
+	// Authority is granted exclusively to explicit trusted/verified user
+	// facts regardless of memory class; everything else is non-authoritative.
+	e.Authoritative = isTrustedUserFact(e)
 
 	// Quarantine always wins over authority.
 	if e.Quarantined {
@@ -409,7 +403,8 @@ func (s *Store) SearchWithOptions(
 	}
 
 	for i := range filtered {
-		var score float64
+		score := 0.0
+		matched := false
 
 		for _, tag := range filtered[i].Tags {
 			if strings.Contains(
@@ -417,6 +412,7 @@ func (s *Store) SearchWithOptions(
 				q,
 			) {
 				score += 2.0
+				matched = true
 			}
 		}
 
@@ -425,6 +421,13 @@ func (s *Store) SearchWithOptions(
 			q,
 		) {
 			score += 1.0
+			matched = true
+		}
+
+		if !matched {
+			// Entries that do not match the query must never enter the
+			// result set, regardless of their trust level.
+			continue
 		}
 
 		// Trusted/verified memory is stronger recall material, but this

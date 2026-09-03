@@ -46,3 +46,6 @@ coverage.*
 *.swp
 .DS_Store
 Thumbs.db
+
+# Vite build output (synced into web/static at build time)
+/dist/

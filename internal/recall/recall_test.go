@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sheytan/local-agent/internal/llm"
-	"github.com/sheytan/local-agent/internal/sessions"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/sessions"
 )
 
 func TestIndexSearchDedup(t *testing.T) {

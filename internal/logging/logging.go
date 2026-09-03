@@ -497,28 +497,28 @@ func clip(s string, n int) string {
 // Close flushes and closes every sink.
 // It is safe to call more than once.
 func (m *Manager) Close() error {
-    if m == nil || m == noop {
-        return nil
-    }
+	if m == nil || m == noop {
+		return nil
+	}
 
-    m.mu.Lock()
-    defer m.mu.Unlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
-    var firstErr error
+	var firstErr error
 
-    closeFile := func(f **os.File) {
-        if *f == nil {
-            return
-        }
-        if err := (*f).Close(); err != nil && firstErr == nil {
-            firstErr = err
-        }
-        *f = nil
-    }
+	closeFile := func(f **os.File) {
+		if *f == nil {
+			return
+		}
+		if err := (*f).Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+		*f = nil
+	}
 
-    closeFile(&m.appF)
-    closeFile(&m.toolF)
-    closeFile(&m.llmF)
+	closeFile(&m.appF)
+	closeFile(&m.toolF)
+	closeFile(&m.llmF)
 
-    return firstErr
+	return firstErr
 }

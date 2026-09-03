@@ -15,11 +15,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sheytan/local-agent/internal/agent"
-	"github.com/sheytan/local-agent/internal/config"
-	"github.com/sheytan/local-agent/internal/llm"
-	"github.com/sheytan/local-agent/internal/netcheck"
-	"github.com/sheytan/local-agent/internal/tools"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/agent"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/netcheck"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/tools"
 )
 
 // withFakeProbe installs a deterministic connectivity probe for the duration

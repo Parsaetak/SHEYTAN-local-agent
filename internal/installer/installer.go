@@ -9,7 +9,7 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/sheytan/local-agent/internal/config"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
 )
 
 // State is the persisted snapshot of installed components.

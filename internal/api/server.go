@@ -13,7 +13,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gorilla/websocket"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/agent"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/chunking"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
@@ -470,37 +469,37 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, s.redactedConfig())
 
 	case http.MethodPut, http.MethodPost:
-	var raw json.RawMessage
+		var raw json.RawMessage
 
-	decoder := json.NewDecoder(r.Body)
-	decoder.UseNumber()
+		decoder := json.NewDecoder(r.Body)
+		decoder.UseNumber()
 
-	if err := decoder.Decode(&raw); err != nil {
-		writeErr(w, http.StatusBadRequest, err)
-		return
-	}
+		if err := decoder.Decode(&raw); err != nil {
+			writeErr(w, http.StatusBadRequest, err)
+			return
+		}
 
-	if len(raw) == 0 || string(raw) == "null" {
-		writeErr(w, http.StatusBadRequest, fmt.Errorf("configuration patch must be a JSON object"))
-		return
-	}
+		if len(raw) == 0 || string(raw) == "null" {
+			writeErr(w, http.StatusBadRequest, fmt.Errorf("configuration patch must be a JSON object"))
+			return
+		}
 
-	if err := s.mergeConfigPatch(raw); err != nil {
-		writeErr(w, http.StatusBadRequest, err)
-		return
-	}
+		if err := s.mergeConfigPatch(raw); err != nil {
+			writeErr(w, http.StatusBadRequest, err)
+			return
+		}
 
-	if err := config.Save(s.cfg.ConfigPath(), s.cfg); err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
-		return
-	}
+		if err := config.Save(s.cfg.ConfigPath(), s.cfg); err != nil {
+			writeErr(w, http.StatusInternalServerError, err)
+			return
+		}
 
-	if err := s.cfg.EnsureDirs(); err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
-		return
-	}
+		if err := s.cfg.EnsureDirs(); err != nil {
+			writeErr(w, http.StatusInternalServerError, err)
+			return
+		}
 
-	writeJSON(w, s.redactedConfig())
+		writeJSON(w, s.redactedConfig())
 	default:
 		writeErr(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
 	}

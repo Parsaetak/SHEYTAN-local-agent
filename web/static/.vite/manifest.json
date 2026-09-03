@@ -1,0 +1,63 @@
+{
+  "index.html": {
+    "file": "assets/index-C-GlhEX1.js",
+    "name": "index",
+    "src": "index.html",
+    "isEntry": true,
+    "dynamicImports": [
+      "src/AgentBody.tsx",
+      "src/AgentHeader.tsx",
+      "src/AgentSidebar.tsx",
+      "src/LabPanel.tsx",
+      "src/ResearchPanel.tsx"
+    ],
+    "css": [
+      "assets/index-4qdorfCQ.css"
+    ]
+  },
+  "src/AgentBody.tsx": {
+    "file": "assets/AgentBody-BgflGdrp.js",
+    "name": "AgentBody",
+    "src": "src/AgentBody.tsx",
+    "isDynamicEntry": true,
+    "imports": [
+      "index.html"
+    ]
+  },
+  "src/AgentHeader.tsx": {
+    "file": "assets/AgentHeader-BjW4TDGa.js",
+    "name": "AgentHeader",
+    "src": "src/AgentHeader.tsx",
+    "isDynamicEntry": true,
+    "imports": [
+      "index.html"
+    ]
+  },
+  "src/AgentSidebar.tsx": {
+    "file": "assets/AgentSidebar-BJgwLVtQ.js",
+    "name": "AgentSidebar",
+    "src": "src/AgentSidebar.tsx",
+    "isDynamicEntry": true,
+    "imports": [
+      "index.html"
+    ]
+  },
+  "src/LabPanel.tsx": {
+    "file": "assets/LabPanel-D-_HdZEZ.js",
+    "name": "LabPanel",
+    "src": "src/LabPanel.tsx",
+    "isDynamicEntry": true,
+    "imports": [
+      "index.html"
+    ]
+  },
+  "src/ResearchPanel.tsx": {
+    "file": "assets/ResearchPanel-BhiHtgQz.js",
+    "name": "ResearchPanel",
+    "src": "src/ResearchPanel.tsx",
+    "isDynamicEntry": true,
+    "imports": [
+      "index.html"
+    ]
+  }
+}
