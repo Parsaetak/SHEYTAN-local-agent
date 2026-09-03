@@ -33,35 +33,28 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-          cache-dependency-path: web/package-lock.json
 
       - name: Install frontend dependencies
-        working-directory: web
         shell: pwsh
         run: npm install
 
       - name: Frontend typecheck
-        working-directory: web
         shell: pwsh
         run: npm run typecheck
 
       - name: Frontend lint
-        working-directory: web
         shell: pwsh
         run: npm run lint
 
       - name: Frontend format check
-        working-directory: web
         shell: pwsh
         run: npm run format:check
 
       - name: Build frontend
-        working-directory: web
         shell: pwsh
         run: npm run build
 
-      - name: Verify embedded frontend
+      - name: Verify generated frontend
         shell: pwsh
         run: |
           if (-not (Test-Path "web/static/index.html")) {
@@ -99,7 +92,7 @@ jobs:
 
           go build `
             -trimpath `
-            -ldflags="-s -w -X main.version=${env:APP_VERSION} -X main.codename=${env:APP_CODENAME}" `
+            -ldflags="-s -w" `
             -o "dist/windows/app/SHEYTAN-Local-Agent/SHEYTAN-Local-Agent.exe" `
             .
 
@@ -113,11 +106,13 @@ jobs:
           }
 
           $size = (Get-Item $exe).Length
+
           if ($size -lt 1000000) {
             throw "Windows executable is suspiciously small: $size bytes."
           }
 
           & $exe version
+
           if ($LASTEXITCODE -ne 0) {
             throw "Windows version smoke test failed."
           }
@@ -127,26 +122,31 @@ jobs:
         run: |
           $root = "dist/windows/app/SHEYTAN-Local-Agent"
 
+          New-Item -ItemType Directory -Force -Path "$root/models" | Out-Null
+          New-Item -ItemType Directory -Force -Path "$root/workspace" | Out-Null
+
           @"
           SHEYTAN-Local-Agent $env:APP_VERSION ($env:APP_CODENAME)
 
-          Portable Windows distribution.
+          Portable Windows x64 distribution.
 
           Keep this entire SHEYTAN-Local-Agent folder together.
-          Runtime data, models, sessions, logs, and workspaces stay beside the executable.
+
+          Runtime configuration, models, sessions, logs, and Coding Lab
+          workspace data are designed to remain associated with this folder.
           "@ | Set-Content "$root/README.txt" -Encoding utf8
 
           @"
-          Place GGUF models in this folder.
+          Place local GGUF models in this folder.
 
-          The application scans the configured models directory and lets you
-          select the active local model directly from the Agent and Settings UI.
+          SHEYTAN-Local-Agent discovers configured local models and allows
+          model selection directly from the application.
           "@ | Set-Content "$root/models/README.txt" -Encoding utf8
 
           @"
-          Coding Lab workspaces are created here.
+          Coding Lab workspace root.
 
-          Keep this folder with the application when moving the portable package.
+          Workspaces created by the application may be stored here.
           "@ | Set-Content "$root/workspace/README.txt" -Encoding utf8
 
           @"
@@ -160,13 +160,23 @@ jobs:
             Copy-Item "LICENSE" "$root/LICENSE"
           }
 
+          if (Test-Path "README.md") {
+            Copy-Item "README.md" "$root/README.md"
+          }
+
           if (Test-Path "agent.md") {
             Copy-Item "agent.md" "$root/AI-CONTEXT.md"
+          }
+
+          if (Test-Path "SIGNATURE") {
+            Copy-Item "SIGNATURE" "$root/SIGNATURE"
           }
 
       - name: Create Windows ZIP
         shell: pwsh
         run: |
+          New-Item -ItemType Directory -Force -Path "dist" | Out-Null
+
           $zip = "dist/SHEYTAN-Local-Agent-Windows-x64-v${env:APP_VERSION}Z.zip"
 
           if (Test-Path $zip) {
@@ -180,6 +190,42 @@ jobs:
 
           if (-not (Test-Path $zip)) {
             throw "Windows ZIP was not created."
+          }
+
+      - name: Verify Windows ZIP
+        shell: pwsh
+        run: |
+          $zip = "dist/SHEYTAN-Local-Agent-Windows-x64-v${env:APP_VERSION}Z.zip"
+
+          if (-not (Test-Path $zip)) {
+            throw "Windows ZIP is missing."
+          }
+
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+
+          $archive = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path $zip))
+
+          try {
+            $entries = @($archive.Entries | ForEach-Object { $_.FullName })
+
+            if (-not ($entries -contains "SHEYTAN-Local-Agent/")) {
+              $hasRootFiles = $entries | Where-Object {
+                $_ -like "SHEYTAN-Local-Agent/*"
+              }
+
+              if (-not $hasRootFiles) {
+                throw "ZIP does not contain the expected SHEYTAN-Local-Agent/ root directory."
+              }
+            }
+
+            if (-not ($entries | Where-Object {
+              $_ -like "SHEYTAN-Local-Agent/SHEYTAN-Local-Agent.exe"
+            })) {
+              throw "ZIP does not contain the Windows executable at the expected path."
+            }
+          }
+          finally {
+            $archive.Dispose()
           }
 
       - name: Upload Windows ZIP
@@ -218,30 +264,23 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-          cache-dependency-path: web/package-lock.json
 
       - name: Install frontend dependencies
-        working-directory: web
         run: npm install
 
       - name: Frontend typecheck
-        working-directory: web
         run: npm run typecheck
 
       - name: Frontend lint
-        working-directory: web
         run: npm run lint
 
       - name: Frontend format check
-        working-directory: web
         run: npm run format:check
 
       - name: Build frontend
-        working-directory: web
         run: npm run build
 
-      - name: Verify embedded frontend
+      - name: Verify generated frontend
         run: |
           test -f web/static/index.html
 
@@ -273,49 +312,56 @@ jobs:
 
           go build \
             -trimpath \
-            -ldflags="-s -w -X main.version=${APP_VERSION} -X main.codename=${APP_CODENAME}" \
+            -ldflags="-s -w" \
             -o "dist/linux/app/SHEYTAN-Local-Agent/SHEYTAN-Local-Agent" \
             .
 
       - name: Verify Linux executable
         run: |
-          file "dist/linux/app/SHEYTAN-Local-Agent/SHEYTAN-Local-Agent"
-          test -x "dist/linux/app/SHEYTAN-Local-Agent/SHEYTAN-Local-Agent"
+          exe="dist/linux/app/SHEYTAN-Local-Agent/SHEYTAN-Local-Agent"
 
-          size="$(stat -c '%s' "dist/linux/app/SHEYTAN-Local-Agent/SHEYTAN-Local-Agent")"
+          file "$exe"
+
+          test -x "$exe"
+
+          size="$(stat -c '%s' "$exe")"
+
           if [ "$size" -lt 1000000 ]; then
             echo "Linux executable is suspiciously small: $size bytes"
             exit 1
           fi
 
-          "./dist/linux/app/SHEYTAN-Local-Agent/SHEYTAN-Local-Agent" version
+          "$exe" version
 
       - name: Prepare Linux portable package
         run: |
           root="dist/linux/app/SHEYTAN-Local-Agent"
 
+          mkdir -p "$root/models"
+          mkdir -p "$root/workspace"
+
           cat > "$root/README.txt" <<EOF
           SHEYTAN-Local-Agent ${APP_VERSION} (${APP_CODENAME})
 
-          Portable Linux distribution.
+          Portable Linux x64 distribution.
 
           Keep this entire SHEYTAN-Local-Agent folder together.
-          Runtime data, models, sessions, logs, and workspaces stay beside the executable.
+
+          Runtime configuration, models, sessions, logs, and Coding Lab
+          workspace data are designed to remain associated with this folder.
           EOF
 
-          mkdir -p "$root/models" "$root/workspace"
-
           cat > "$root/models/README.txt" <<EOF
-          Place GGUF models in this folder.
+          Place local GGUF models in this folder.
 
-          The application scans the configured models directory and lets you
-          select the active local model directly from the Agent and Settings UI.
+          SHEYTAN-Local-Agent discovers configured local models and allows
+          model selection directly from the application.
           EOF
 
           cat > "$root/workspace/README.txt" <<EOF
-          Coding Lab workspaces are created here.
+          Coding Lab workspace root.
 
-          Keep this folder with the application when moving the portable package.
+          Workspaces created by the application may be stored here.
           EOF
 
           cat > "$root/BUILD-INFO.txt" <<EOF
@@ -329,17 +375,40 @@ jobs:
             cp LICENSE "$root/LICENSE"
           fi
 
+          if [ -f README.md ]; then
+            cp README.md "$root/README.md"
+          fi
+
           if [ -f agent.md ]; then
             cp agent.md "$root/AI-CONTEXT.md"
+          fi
+
+          if [ -f SIGNATURE ]; then
+            cp SIGNATURE "$root/SIGNATURE"
           fi
 
       - name: Create Linux ZIP
         run: |
           mkdir -p dist
-          cd dist/linux/app
-          zip -r "../../SHEYTAN-Local-Agent-Linux-x64-v${APP_VERSION}Z.zip" "SHEYTAN-Local-Agent"
 
-          test -f "../../SHEYTAN-Local-Agent-Linux-x64-v${APP_VERSION}Z.zip"
+          cd dist/linux/app
+
+          zip -r \
+            "../../SHEYTAN-Local-Agent-Linux-x64-v${APP_VERSION}Z.zip" \
+            "SHEYTAN-Local-Agent"
+
+      - name: Verify Linux ZIP
+        run: |
+          zip="dist/SHEYTAN-Local-Agent-Linux-x64-v${APP_VERSION}Z.zip"
+
+          test -f "$zip"
+
+          unzip -l "$zip"
+
+          unzip -Z1 "$zip" | grep -q '^SHEYTAN-Local-Agent/'
+
+          unzip -Z1 "$zip" | grep -q \
+            '^SHEYTAN-Local-Agent/SHEYTAN-Local-Agent$'
 
       - name: Upload Linux ZIP
         uses: actions/upload-artifact@v4
