@@ -1,1480 +1,1209 @@
 # SHEYTAN-Local-Agent — Worklog
 
-## 2026-09-03 — v1.1.1Z (Zeta): CI Repair + Legacy Cleanup
-
-### The problem
-
-GitHub Actions runs 13–19 (seven consecutive failures) all broke at the
-**Linux x64 → "Go tests"** step. The Windows job was green. Root cause,
-reproduced locally with Go 1.26.8:
-
-```text
-go test ./internal/... -tags headless
-→ internal/desktop [build failed]
-→ pkg-config: Package gtk4 was not found
-→ Package 'webkitgtk-6.0', required by 'virtual:world', not found
-```
-
-Wails v3 (beta.16) links its Linux webview through cgo + pkg-config and
-asks for **glib-2.0, gtk4, webkitgtk-6.0, gio-unix-2.0, libsoup-3.0**. The
-v1.1.0 workflow installed the Wails **v2** era packages
-(`libgtk-3-dev`, `libwebkit2gtk-4.1-dev`) — nothing satisfied the Wails v3
-link, so `internal/desktop` never compiled on the Linux runner.
-
-### The fix (workflow)
-
-- Linux job now installs `libgtk-4-dev`, `libwebkitgtk-6.0-dev`,
-  `libsoup-3.0-dev` (all available on ubuntu-24.04 / noble).
-- `APP_VERSION: "1.1.1"` — release assets become
-  `SHEYTAN-Local-Agent-{Windows,Linux}-x64-v1.1.1Z.zip`.
-- Node is now **pinned**: `actions/setup-node@v4` with `node-version: "24"`
-  and npm caching in both jobs. The new React/Vite UI must never depend on
-  whatever Node the hosted runner happens to ship.
-- Windows job regenerates the exe resources in CI:
-  `go run ./scripts/gen-syso` (brand icon, Parsa Tak signature, DPI-aware
-  PerMonitorV2 manifest) and links with `-H=windowsgui`.
-- `sheytan-local-agent.bat` ships inside the Windows portable ZIP.
-
-### The cleanup (old code removed)
-
-- **Deleted 16 versioned stress files**: `cmd/stress_v08.go` through
-  `cmd/stress_v110.go` plus `cmd/version_check.go` (dead after the
-  retirement). The suite is now the Zeta chaos suite:
-  `cmd/stress.go` (core hostile scenarios + subsystem contracts) and
-  `cmd/stress_zeta.go` (release-surface contract). Feature coverage that
-  the old versioned files provided lives in the `internal/` unit tests
-  (vision, continuum, chunking, lab, llm, memory, recall, research, tools).
-- **Deleted old e2e tooling**: `scripts/e2e-v102.sh`, `e2e-v106.sh`,
-  `e2e-v107.sh`, `e2e-v108.sh`, `scripts/e2e-v107/`, and
-  `scripts/glm-proxy.mjs` (only used by those scripts).
-- **Fresh embedded UI**: the committed `web/static` was a stale build
-  (missing the `SettingsPanel` chunk, still carrying the pre-Vite
-  `app.js`/`styles.css`/`icons/`). It was regenerated with the Node 24 /
-  Vite pipeline (`npm run build` → `scripts/sync-web.mjs`) and now embeds
-  the complete current React UI.
-
-### Version surface (v1.1.1Z)
-
-```text
-internal/config/config.go  AppVersion  = "1.1.1"
-package.json                "version": "1.1.1-zeta"
-build/config.yml            productVersion: "1.1.1-zeta"
-.github/workflows           APP_VERSION: "1.1.1"
-SIGNATURE                   v1.1.1 (regenerated)
-sheytan-local-agent.bat     v1.1.1 header, history comments condensed
-```
-
-A pre-existing contract bug was also fixed: `v111_release_surface` required
-the literal `go-version: "1.26"` while the workflow (correctly) pins via
-`GO_VERSION: "1.26"` in the env block — the suite could never pass against
-the real workflow. `stressZetaReleaseSurface` now checks the env pin, and
-additionally guards every v1.1.1Z fix (Linux deps, Node pin, gen-syso,
-windowsgui, .bat packaging) so a regression fails the suite before it can
-fail CI.
-
-### Verification (all green)
-
-```text
-npm run typecheck / lint          0 errors
-npm run build                     fresh Vite bundle → web/static
-go test ./internal/... (headless) all ok except internal/desktop
-                                  (local host lacks GTK4 headers; CI now
-                                  installs them — this was the fix)
-stress suite                      32 pass / 0 fail
-  (zeta_release_surface, zeta_memory_unique_ids, zeta_trimlogs_rotate)
-serve smoke test                  /api/state reports 1.1.1, UI index and
-                                  assets serve 200 from the embedded FS
-windows cross-build               17.7 MB PE32+ GUI exe; gen-syso ok;
-                                  "Parsa Tak" + "1.1.1" UTF-16 present
-go vet (all packages)             clean
-go mod tidy                       no changes
-gofmt                             stress.go / stress_zeta.go canonical
-```
-
-### Release procedure for v1.1.1Z
+## 2026-09-03 — v1.1.2Z AAA Application Milestone Started
 
-```bash
-git tag v1.1.1Z
-git push origin v1.1.1Z
-```
+### Release baseline
 
-The workflow builds both platforms, verifies the ZIPs, uploads artifacts,
-and attaches them to the GitHub Release.
+The v1.1.1Z (Zeta) release is now published and verified.
 
----
+Repository:
 
-## 2026-09-02 — Version Zeta Stabilization
+https://github.com/Parsaetak/SHEYTAN-local-agent
 
-### Project direction
+Current main branch at the beginning of the v1.1.2Z phase:
 
-The repository is being consolidated into a local-first AI software-engineering runtime built around:
+main
+3c05af4f25f42b17486d2683bdf210f97b7885d7
 
-```text
-Go runtime
-+ controlled tools
-+ Coding Lab
-+ objective verification
-+ bounded repair
-+ external research
-+ engineering memory
-+ React frontend
-```
+Current release:
 
-The governing principle is:
+v1.1.1Z
 
-> **The language model proposes. The system verifies.**
+Verified release assets:
 
----
+SHEYTAN-Local-Agent-Windows-x64-v1.1.1Z.zip
+SHEYTAN-Local-Agent-Linux-x64-v1.1.1Z.zip
+
+The v1.1.1Z release successfully established the portable desktop distribution baseline.
+
+v1.1.2Z — AAA Completion Milestone
+Product goal
+
+v1.1.2Z is not a minor feature release.
+
+It is the first target release in which SHEYTAN-Local-Agent should behave as a complete, polished, serious desktop AI engineering application rather than a collection of functional panels.
 
-# Runtime Identity
+The target experience is:
+
+complete application
++
+real functionality
++
+coherent UX
++
+advanced controls
++
+smooth interaction
++
+high performance
++
+reliable execution
++
+objective verification
+=
+SHEYTAN-Local-Agent v1.1.2Z
 
-The application identity is now separated into:
+The product should feel like a premium desktop application with a modern engineering workspace.
 
-```go
-const (
-    AppName     = "SHEYTAN-Local-Agent"
-    AppVersion  = "1.1.0"
-    AppCodename = "Zeta"
-)
-```
+The design target is comparable in polish and responsiveness to high-quality AAA desktop software.
 
-The runtime reports the actual Go runtime version instead of a hardcoded Go version.
-
----
-
-# Repository / Module Normalization
-
-The canonical Go module path is:
-
-```text
-github.com/Parsaetak/SHEYTAN-local-agent
-```
-
-The obsolete module path:
-
-```text
-github.com/sheytan/local-agent
-```
-
-was removed from Go imports.
-
-The TOML dependency was aligned to:
-
-```text
-github.com/BurntSushi/toml v1.6.0
-```
-
-The module was tidied after the dependency correction.
-
----
-
-# Agent / AI Context
-
-The AI context system was upgraded so runtime instructions can use the actual registered tool set.
-
-Implemented:
-
-```text
-SystemMessage()
-SystemMessageWithTools()
-Briefing()
-BriefingWithTools()
-```
-
-The runtime now derives exposed tool capabilities from the actual orchestrator registry.
-
-This prevents:
-
-```text
-advertised tools
-```
-
-from drifting away from:
-
-```text
-registered tools
-```
-
-The operational AI constitution is maintained in:
-
-```text
-internal/aicontext/AI-CONTEXT.md
-```
-
-The constitution defines:
-
-```text
-truth/evidence rules
-tool-use rules
-research rules
-memory rules
-verification rules
-safety rules
-failure handling
-final-answer discipline
-```
-
----
-
-# Configuration
-
-Version Zeta configuration includes Coding Lab and research controls.
-
-Important settings:
-
-```text
-LabEnabled
-LabWorkspaceRoot
-LabCommandTimeoutSec
-LabMaxIterations
-LabKeepWorkspaces
-LabAllowNetwork
-
-ResearchEnabled
-ResearchBackend
-ResearchSearXNGURL
-ResearchMaxResults
-ResearchTimeoutSec
-ResearchCacheTTLMin
-ResearchGitHub
-ResearchReddit
-ResearchWeb
-ResearchUserAgent
-```
-
-Lab iteration bounds are:
-
-```text
-default = 25
-maximum = 100
-```
-
-The effective configuration is bounded even when no explicit value is supplied.
-
----
-
-# API Hardening
-
-The HTTP API was hardened around:
-
-```text
-per-session abort
-WebSocket lifecycle
-origin validation
-restricted CORS
-configuration patching
-configuration secret redaction
-```
-
-Configuration GET responses do not expose sensitive remote API credentials.
-
-Configuration PUT/POST updates merge patches into the current configuration so unrelated fields are preserved.
-
-WebSocket origins are checked against the local/same-origin policy.
-
-Activity connections are session-specific.
-
----
-
-# LLM Runtime Hardening
-
-The LLM client now rejects successful HTTP responses that contain no usable choices.
-
-An empty choices array is treated as an error.
-
-This prevents silent acceptance of structurally invalid LLM responses.
-
----
-
-# llama.cpp Hardening
-
-The llama startup deadlock was removed.
-
-Archive extraction now rejects unsafe ZIP entries involving:
-
-```text
-absolute paths
-parent traversal
-Windows volume paths
-backslash traversal
-```
-
-This prevents extracted files from escaping the target directory.
-
----
-
-# Sandbox Timeout
-
-Sandbox execution now propagates timeout context into the actual command execution path.
-
-The timeout therefore applies to the running process instead of only measuring the caller.
-
----
-
-# Filesystem Security
-
-The base-directory layer now provides checked path resolution.
-
-Important primitives include:
-
-```text
-BaseDir
-SetBaseDir
-ResolvePath
-ResolvePathChecked
-ResolvePathWithinBase
-SafeJoin
-SafeExistingPath
-UnsafeAbsolutePath
-```
-
-Protection covers:
-
-```text
-absolute paths
-relative traversal
-unset base directories
-tilde expansion hazards
-symlink-prefix escapes
-workspace restrictions
-```
-
----
-
-# Fetch / SSRF Protection
-
-The controlled fetch path now contains:
-
-```text
-bounded response bodies
-bounded redirects
-redirect re-validation
-localhost blocking
-loopback blocking
-link-local blocking
-private-network blocking
-DNS resolution validation
-request timeout
-```
-
-Default and maximum response limits are bounded.
-
-The objective is to prevent model-controlled HTTP access from reaching internal/private services.
-
----
-
-# Shell and Git Policy
-
-Shell and Git working directories are checked against the canonical base directory.
-
-Git escape mechanisms are blocked, including:
-
-```text
--C
---git-dir
---work-tree
-absolute external paths
-parent traversal
-file:// repository targets
-```
-
-Legitimate workspace-local Git workflows such as committing remain possible.
-
-Git publishing is blocked.
-
-Destructive command patterns are rejected through the Lab policy layer.
-
-The policy is defense in depth and is not considered a substitute for OS-level sandboxing.
-
----
-
-# Process Control
-
-Process execution now supports process-tree cancellation.
-
-Unix-like systems use process groups.
-
-Windows uses:
-
-```text
-CREATE_NEW_PROCESS_GROUP
-taskkill /PID /T /F
-```
-
-This is used to prevent timed-out or canceled commands from leaving child processes running.
-
----
-
-# Coding Lab Runner
-
-The Lab runner now handles:
-
-```text
-working-directory validation
-stdout capture
-stderr capture
-combined output limits
-exit status
-duration
-timeouts
-context cancellation
-stdin isolation
-environment sanitization
-process-tree cleanup
-```
-
-The runner does not inherit the host environment wholesale.
-
-Sensitive environment values are removed before Lab execution.
-
----
-
-# Coding Lab Policy
-
-The Lab policy is token-aware rather than relying exclusively on naive substring matching.
-
-It controls:
-
-```text
-dangerous commands
-interactive commands
-network operations
-absolute paths
-path traversal
-Git publishing
-destructive Git operations
-workspace escapes
-dangerous arguments
-```
-
-The security principle is:
-
-```text
-allow normal engineering work
-block obvious escape/destructive paths
-```
-
-while still relying on the wider runtime for defense in depth.
-
----
-
-# Coding Lab Workspace
-
-The Lab workspace manager now supports:
-
-```text
-Create
-Remove
-PathFor
-Snapshot
-Promote
-```
-
-The workspace layer provides:
-
-```text
-source validation
-workspace isolation
-random workspace IDs
-safe regular-file copying
-.git handling
-symlink exclusion
-path traversal protection
-root-restricted cleanup
-source/workspace overlap checks
-```
-
-The workspace remains disposable and isolated while autonomous modifications are being evaluated.
-
----
-
-# Task Lifecycle
-
-Lab tasks use:
-
-```text
-pending
+"AAA" in this worklog means:
+
+application completeness
+visual quality
+interaction quality
+performance
+reliability
+state consistency
+feature integration
+release readiness
+
+It does NOT mean adding graphics-heavy effects at the expense of performance.
+
+v1.1.2Z Non-Negotiable Goals
+1. Every major section must be functional
+
+The following sections must contain real working behavior:
+
+Agent
+Sessions
+Models
+Engine
+Settings
+Coding Lab
+Research
+Memory
+Recall
+Browser
+Vision
+Tools
+Diagnostics
+Hardware / System
+Logs
+Updates
+
+A visual placeholder, dead control, or decorative button does not count as implementation.
+
+For every major user-facing action:
+
+UI
+ ↓
+API
+ ↓
+runtime
+ ↓
+actual operation
+ ↓
+state update
+ ↓
+visible result
+2. Agent Workspace
+
+The Agent is the central application experience.
+
+The workspace must support:
+
+conversation
+streaming responses
+session continuity
+message history
+tool execution visibility
+tool results
+errors
+cancellation
+retry
+regenerate
+model awareness
+runtime state
+attachments
+context information
+
+The user must be able to understand what SHEYTAN is currently doing without reading raw logs.
+
+The UI should distinguish clearly between:
+
+user message
+assistant response
+thinking / planning state
+tool call
+tool result
+research result
+verification result
+error
+system event
+
+Streaming must not freeze the interface.
+
+Long-running inference and tools must not block the UI thread.
+
+3. Model System
+
+Model management is a first-class feature.
+
+The user must be able to:
+
+discover local models
+see model names
+see model file sizes
+see model paths
+see format information
+see loaded state
+select a model
+change active model
+start engine
+stop engine
+restart engine
+observe engine state
+
+The system should support real model lifecycle management rather than only writing a model name into configuration.
+
+Target flow:
+
+discover
+ ↓
+inspect
+ ↓
+select
+ ↓
+load
+ ↓
+verify
+ ↓
+use
+
+The UI should expose model state clearly:
+
+not found
+found
+available
+loading
+loaded
 running
-succeeded
+stopping
+error
+
+Model switching must be safe and deterministic.
+
+The active model shown in the UI must correspond to the model actually used by the runtime.
+
+4. Local Model Discovery
+
+Local GGUF discovery should become a complete workflow.
+
+Required capabilities:
+
+scan model directory
+refresh
+detect new files
+deduplicate results
+show metadata when available
+identify invalid files
+identify currently loaded model
+
+Potential future model metadata:
+
+filename
+size
+architecture
+quantization
+context capacity
+parameter estimate
+modified time
+path
+status
+
+The interface must remain responsive while scanning large model directories.
+
+Scanning should use bounded work and avoid unnecessary repeated filesystem traversal.
+
+5. Engine Control
+
+Engine control must be reliable.
+
+Required operations:
+
+start
+stop
+restart
+status
+health
+active model
+host
+port
+process ID where applicable
+
+The runtime should never report:
+
+"running"
+
+when the backend process is actually dead.
+
+Engine state should come from actual process/runtime state rather than optimistic frontend assumptions.
+
+Transitions should be visible:
+
+idle
+starting
+ready
+busy
+stopping
+stopped
 failed
-canceled
-blocked
-```
+6. Inference Controls
 
-Typical flow:
+Settings should expose advanced but understandable inference controls.
 
-```text
-NewTask
-   ↓
-Start
-   ↓
-RunCommand
-   ↓
-Verify
-   ↓
-Promote
-   ↓
-Finish
-```
+Target controls include:
 
-Task and workspace runtime IDs are aligned.
+temperature
+top-p
+top-k
+min-p where supported
+repeat penalty
+max tokens
+context size
+seed
+grammar / structured output where supported
+parallelism
+thread count
+GPU layers where supported
+batch size
+micro-batch size where supported
 
----
+Controls must be validated against backend capabilities.
 
-# Verification Gate
+Unsupported settings must not silently pretend to work.
 
-The core Lab rule is:
+The UI should distinguish:
 
-> **A successful task requires current passing verification.**
+supported
+unsupported
+default
+custom
+7. Presets
 
-Verification is invalidated whenever a new command mutates the workspace.
+Presets should become real behavior profiles.
 
-The system explicitly rejects trivial proof commands such as:
+Expected examples:
 
-```text
-echo
-printf
-true
-false
-exit 0
-```
+Balanced
+Fast
+Reasoning
+Coding
+Research
+Creative
+Low Memory
+High Quality
 
-The verifier instead seeks meaningful project checks.
+A preset must actually modify runtime configuration.
 
----
+The active preset should be visible.
 
-# Native Verification
+Custom values must be preserved where appropriate.
 
-Automatic verification discovery currently covers common project families:
+8. Agent Configuration
 
-```text
-Go
-Node.js
-Python
-Rust
-```
+Agent settings must become meaningful runtime controls.
 
-Representative checks include:
+Target configuration:
 
-```text
-go build ./...
-go test ./...
-npm test
-npm run build
-Python compilation checks
-pytest
-cargo check
-cargo test
-```
+system behavior
+planning depth
+tool policy
+research policy
+memory policy
+verification policy
+autonomy level
+maximum iterations
+timeout
+parallel tools
+repair behavior
+failure strategy
 
-The verifier does not accept arbitrary successful commands as proof.
+The UI should communicate clearly which settings are:
 
----
+safe
+advanced
+experimental
+dangerous
 
-# Promotion / Snapshot Safety
+Dangerous operations must remain explicit.
 
-Lab promotion now follows:
+9. Tool System
 
-```text
-workspace
-   ↓
+Tools must be treated as first-class runtime components.
+
+The interface should display:
+
+tool name
+description
+enabled state
+category
+availability
+last use
+errors
+
+Tool categories can include:
+
+filesystem
+shell
+git
+browser
+research
+vision
+memory
+sandbox
+process
+diagnostics
+
+Tool calls should be visible in the Agent activity stream.
+
+Tool outputs should not silently disappear.
+
+Tool errors should be represented as actual errors rather than normal assistant text.
+
+10. Coding Lab
+
+Coding Lab must evolve into a genuine software-engineering workspace.
+
+Required capabilities:
+
+create workspace
+open workspace
+select source project
+inspect files
+browse directories
+open files
+edit files
+show diffs
+run commands
+run tests
+run builds
+inspect stdout
+inspect stderr
+inspect exit status
+verify changes
 snapshot
-   ↓
-current verification
-   ↓
 promote
-   ↓
-source
-```
+discard
 
-A snapshot is created before source mutation.
+The Lab must make the following lifecycle visible:
 
-The Lab workspace is preserved after promotion rather than immediately deleted.
+REQUEST
+ ↓
+INSPECT
+ ↓
+BASELINE
+ ↓
+PLAN
+ ↓
+EDIT
+ ↓
+RUN
+ ↓
+VERIFY
+ ↓
+REVIEW
+ ↓
+PROMOTE
 
-This keeps evidence available for:
+Verification remains objective.
 
-```text
-recovery
-debugging
-comparison
-post-failure investigation
-```
+The LLM may propose a result.
 
----
+Only runtime evidence determines success.
 
-# Patch Export
+11. Coding Lab File Explorer
 
-The Lab can export a binary-safe Git patch representing the difference between:
+The Lab file browser should support:
 
-```text
-source tree
-```
+tree navigation
+expand/collapse
+file selection
+basic file metadata
+search
+open source files
+diff preview
+changed-file indicators
+
+Large trees must not render everything at once.
+
+Use virtualization or incremental rendering where useful.
+
+12. Coding Lab Terminal
+
+The terminal view must support:
+
+running command
+live output
+stdout
+stderr
+exit code
+duration
+cancellation
+timeout
+process state
+
+The UI should clearly distinguish a:
+
+running process
+completed process
+failed process
+canceled process
+timed out process
+blocked process
+
+Terminal rendering must remain efficient with high-volume output.
+
+13. Research
+
+Research must be a usable research workspace.
+
+The user should be able to:
+
+enter query
+select backend
+run research
+see sources
+inspect source metadata
+open source
+compare sources
+save findings
+
+Research results should show:
+
+title
+provider
+URL
+authority
+relevance
+published time when known
+snippet
+
+The system must maintain the distinction between:
+
+evidence
 
 and:
 
-```text
-Lab workspace
-```
+truth
 
-Patch artifacts are stored beneath the Lab root.
+Research should feed engineering tasks without automatically becoming trusted memory.
 
----
+14. Memory
 
-# Autonomous Repair
+Memory should become inspectable.
 
-The Lab contains a bounded repair controller.
+Required capabilities:
 
-The controller performs:
+view memories
+search memories
+inspect memory
+delete memory
+refresh memory list
+see source/session metadata
 
-```text
-baseline verification
-diagnosis
-bounded repair action
-re-verification
-final verification
-```
+Memory IDs must remain collision-safe.
 
-Iteration policy:
+Memory should be bounded and structured.
 
-```text
-default = 25
-maximum = 100
-```
+The system must avoid uncontrolled growth.
 
-The controller rejects empty repair actions.
+15. Recall / Context
 
-Identical normalized actions are not allowed to repeat forever.
+Recall should expose useful context state.
 
-All repair commands still pass through the normal:
+The application should make it possible to understand:
 
-```text
-policy
-runner
-workspace
-verification
-```
+what the agent currently knows
+what memory was recalled
+what documents contributed
+what tools contributed evidence
+what context is active
 
-layers.
+The UI should not overwhelm the user with raw internal prompts.
 
----
+Use summarized, inspectable context views.
 
-# Lab Session Registry
+16. Browser
 
-The Lab session registry provides:
+Browser automation must become visible and controllable.
 
-```text
-Create
-Get
-GetTask
-Touch
-Delete
-List
-Count
-Active
-RemoveCompleted
-SnapshotTasks
-```
+Target interface:
 
-Each Lab session owns synchronization state.
-
-Registry locking and per-session task locking are structured to avoid lock-order deadlocks.
-
----
-
-# Research Engine
-
-The research service was consolidated into a unified provider architecture.
-
-Current providers:
-
-```text
-Auto
-GitHub
-Reddit
-SearXNG
-DuckDuckGo
-Web compatibility alias
-```
-
-The agent-facing tool is:
-
-```text
-research
-```
-
-Research requests and results are normalized.
-
-The service supports:
-
-```text
-result limits
-timeouts
-normalization
-deduplication
-authority classification
-relevance ranking
-content hashes
-provider metadata
-```
-
-The `web` backend is explicitly treated as a compatibility alias for DuckDuckGo rather than as an unrestricted generic web provider.
-
----
-
-# Research Result Model
-
-Research results retain fields such as:
-
-```text
-title
+browser status
+browser availability
+current task
+navigation state
+screenshots
+page title
 URL
-snippet
-source
-provider
-published time
-authority
-match score
-content hash
-metadata
-```
+errors
+cancel
 
-Deduplication can use:
+Browser automation must respect existing SSRF and safety controls.
 
-```text
-content hash
-normalized URL
-normalized content
-```
+The user should see when the browser is being used.
 
-This reduces repeated evidence from multiple providers.
+17. Vision
 
----
+Vision functionality should become a usable tool rather than a hidden backend feature.
 
-# Research Ranking
+The interface should support appropriate visual inputs and display:
 
-The research layer distinguishes:
+image received
+vision analysis status
+result
+errors
 
-```text
-relevance
-```
+Visual processing should not freeze the main interface.
 
-from:
+18. Attachments
 
-```text
-authority
-```
+Attachments should become part of the Agent workflow.
 
-Authority classes include concepts such as:
+Target:
 
-```text
-official documentation
-project / maintainer material
-technical discussion
-community material
-unknown material
-```
+attach file
+inspect file
+stage file
+remove attachment
+show attachment in message
 
-Ranking is advisory.
+The system must enforce safe limits.
 
-A highly ranked result is still only evidence.
+Binary data should not be blindly injected into prompts.
 
-The local project and executable verification remain the final acceptance mechanism.
+Files should be represented through controlled staging and appropriate extraction/inspection.
 
----
+19. Sessions
 
-# GitHub Research
+Sessions must feel like persistent workspaces rather than IDs.
 
-The GitHub provider is bounded and validates endpoint construction.
+Required capabilities:
 
-Its purpose is to locate engineering evidence such as:
+new session
+rename session
+switch session
+delete session
+session history
+active model
+activity state
+session metadata
 
-```text
-exact errors
-issues
-pull requests
-regressions
-symbols
-module names
-maintainer explanations
-workarounds
-```
+Future target:
 
-Response bodies are bounded.
+session search
+session pinning
+session archive
+session export
 
-GitHub content remains research evidence rather than automatically trusted memory.
+The active session must remain synchronized between frontend and runtime.
 
----
+20. Diagnostics
 
-# Reddit Research
+Diagnostics should be useful without requiring shell access.
 
-The Reddit provider is designed for practical/community evidence:
+The UI should expose:
 
-```text
-installation failures
-hardware issues
-configuration problems
-regressions
-community workarounds
-```
+runtime health
+engine health
+API health
+model status
+memory state
+tool status
+recent errors
+performance data
+logs
+diagnostics export
 
-OAuth/token requirements are enforced where needed.
+Diagnostics must redact secrets.
 
-Reddit remains lower-authority experiential evidence.
+21. Logs
 
----
+Logs should be readable inside the application.
 
-# Web Research
+Target interface:
 
-The web layer currently supports:
+recent events
+severity
+category
+timestamp
+search
+filter
+copy
+export
+clear where safe
 
-```text
-DuckDuckGo
-SearXNG
-```
+The existing structured logs remain the source of engineering diagnostics.
 
-with:
+22. Hardware / System
 
-```text
-bounded timeouts
-bounded results
-bounded bodies
-normalization
-ranking
-deduplication
-```
+The application should show useful local hardware state.
 
-No external result should be promoted to authoritative engineering knowledge without appropriate evidence.
+Target information:
 
----
+OS
+CPU
+cores
+RAM
+GPU where detectable
+VRAM where detectable
+architecture
+available memory
+process information
+recommended runtime settings
 
-# Research Cache
+Do not claim hardware support unless actually detected.
 
-Research caching was added with bounded storage.
+23. Updates
 
-The cache uses:
+The update subsystem should show:
 
-```text
-TTL
-bounded entry count
-normalized request keys
-copy-on-read/write behavior
-```
+current version
+latest known version
+engine version
+update state
+schedule
+manual check
 
-Only successful non-empty research results are cached.
+Updates must be explicit and auditable.
 
-This avoids caching provider failures as if they were useful evidence.
+No silent destructive update behavior.
 
----
+24. Advanced Settings
 
-# Engineering Memory
+The Settings workspace should be organized into meaningful sections.
 
-Memory now has explicit classes:
+Suggested structure:
 
-```text
-M1 = trusted user facts
-M2 = preferences
-M3 = project state
-M4 = decisions
-M5 = procedures / learned fixes
-M6 = conversation summaries
-M7 = observations / untrusted or provisional knowledge
-```
+General
+Models
+Inference
+Agent
+Tools
+Browser
+Vision
+Memory
+Coding Lab
+Research
+Engine
+Network
+Security
+Performance
+Diagnostics
+Updates
+About
 
-Entries can retain:
+Avoid one giant undifferentiated form.
 
-```text
-trust level
-provenance
-source
-URI/reference information
-```
+Use progressive disclosure:
 
-External provenance is automatically quarantined.
+common controls
+ ↓
+advanced controls
+ ↓
+expert controls
+25. UI / UX Direction
 
-External research cannot silently become trusted M1–M6 knowledge merely because a caller supplied a trusted-looking label.
+The UI is a critical part of v1.1.2Z.
 
----
+The target is:
 
-# Memory Trust Model
+modern
+dark
+technical
+premium
+focused
+fast
+minimal
+informative
 
-The memory system distinguishes:
+The interface should communicate system state clearly.
 
-```text
-trusted user information
-verified local information
-generated/provisional information
-external research
-```
+Avoid:
 
-External sources such as:
+decorative clutter
+excessive gradients
+unnecessary animation
+large empty areas
+nested modal overload
+ambiguous buttons
+fake loading states
 
-```text
-web
-research
-GitHub
-Reddit
-```
+The visual hierarchy should make the main action obvious.
 
-are quarantined as provisional knowledge by default.
+26. 120Hz / High-Refresh Design Goal
 
-Default recall excludes quarantined entries.
+The application should target smooth interaction on high-refresh displays.
 
-Explicit requests can include them when appropriate.
+Primary target:
 
----
+120 Hz
 
-# Multi-Agent / Critic Behavior
+Design principles:
 
-The critic path now treats malformed or failed structured responses as unsatisfied rather than accidentally passing them.
+no unnecessary layout thrashing
+no large synchronous render work
+minimal forced reflow
+efficient animation
+transform/opacity based motion where appropriate
+small React render surfaces
+memoization where it materially helps
+virtualization for large lists
+debounced expensive searches
+batched state updates
+WebSocket event coalescing where appropriate
 
-Planner fallback behavior remains graceful where possible.
+Do not blindly animate everything.
 
-The runtime therefore follows:
+Animation must be:
 
-```text
-valid evidence
+fast
+purposeful
+interruptible
+low-cost
+consistent
+
+A frame-rate number should never be achieved by disabling useful functionality.
+
+27. Performance Budget
+
+Performance is a first-class release requirement.
+
+Target characteristics:
+
+instant local navigation
+responsive typing
+smooth scrolling
+responsive settings
+non-blocking inference
+non-blocking tool execution
+controlled activity rendering
+bounded log rendering
+bounded list rendering
+
+The frontend must remain interactive during:
+
+LLM inference
+large tool output
+research requests
+workspace operations
+model scanning
+engine startup
+28. Animation System
+
+Use a unified motion language.
+
+Target classes:
+
+micro interaction
+panel transition
+workspace transition
+status transition
+loading state
+success state
+error state
+
+Motion should use a small set of timing principles rather than arbitrary durations.
+
+Recommended behavior:
+
+micro:     very fast
+normal:    short
+transition: moderate
+
+Respect reduced-motion preferences.
+
+Animations must not block interaction.
+
+29. Rendering Architecture
+
+Maintain small React client boundaries.
+
+Prefer:
+
+server/static-safe boundaries
 +
-valid structured response
-=
-accepted state
-```
+small client components
++
+lazy-loaded large workspaces
++
+stable Zustand selectors
 
-rather than treating parser failure as success.
+Large panels should remain lazy-loaded.
 
----
+Do not introduce a framework migration without a demonstrated need.
 
-# Frontend Migration
+Do not replace React/Vite with another frontend architecture merely for stylistic reasons.
 
-The frontend is being migrated toward:
+30. WebSocket / Activity Performance
 
-```text
-Node.js
-TypeScript
-React
-Vite
-Zustand
-REST
-WebSocket
-```
+The activity stream must scale.
 
-The current React shell already integrates with the actual Go API.
+Avoid rerendering the entire application for every event.
 
-Current frontend/runtime integration includes:
-
-```text
-application state
-system information
-models
-presets
-tools
-sessions
-session creation
-session deletion
-active session selection
-agent runs
-abort
-activity WebSocket
-runtime status
-```
+Use:
 
-The React activity connection is session-aware.
+stable selectors
+bounded event buffers
+coalescing where safe
+virtualized long histories
+event categorization
 
-Initialization now loads the session state first and connects to the active session afterward.
-
----
-
-# Frontend Next Stage
-
-The next frontend stage is:
-
-```text
-React UI parity
-      ↓
-Coding Lab panel
-      ↓
-Research panel
-      ↓
-project/task inspection
-      ↓
-artifact workflows
-```
+Tool output and LLM streaming should be handled without producing excessive DOM pressure.
 
-The SVG editor/preview is intentionally later.
+31. Backend Performance
 
-The frontend should not duplicate Go execution logic.
+Go runtime code should remain efficient.
 
----
+Avoid unnecessary:
 
-# Documentation Corrections
+filesystem scans
+JSON serialization
+duplicate model discovery
+duplicate configuration loads
+unbounded buffers
+goroutine leaks
+process leaks
+repeated network calls
 
-The previous documentation contained several stale statements describing already-implemented systems as planned.
+All long-running operations require:
 
-The documentation is being normalized around four states:
+timeout
+cancellation
+bounded output
+cleanup
+32. Security
 
-```text
-Implemented
-In progress
-Planned
-Experimental
-```
+No v1.1.2Z feature should weaken:
 
-This worklog records actual implementation state rather than aspirational architecture.
-
----
+workspace isolation
+path validation
+SSRF protection
+shell policy
+Git policy
+sandbox policy
+process cancellation
+secret redaction
+configuration protection
 
-# Developer Operating Rules
+The model is not trusted.
 
-Developers working on the repository should:
+The runtime remains authoritative.
 
-```text
-inspect current code before editing
-preserve API contracts
-preserve security boundaries
-keep execution logic in Go
-keep UI concerns in React
-test changed behavior
-avoid unnecessary rewrites
-prefer bounded behavior
-document actual capabilities
-```
+33. Release Quality
 
-When changing one subsystem, check neighboring contracts.
+v1.1.2Z must not be released because:
 
-Examples:
+the code compiles
 
-```text
-API change
-→ TypeScript API types
-→ Zustand store
-→ UI consumers
-
-Lab change
-→ policy
-→ runner
-→ task
-→ verifier
-→ promotion
-→ tests
-
-Research change
-→ provider
-→ normalization
-→ ranking
-→ deduplication
-→ memory provenance
-→ tests
-```
-
----
-
-# Coding-Agent Operating Rules
-
-Agents operating on this repository should treat the repository itself as authoritative.
-
-Required behavior:
-
-```text
-1. Inspect before modifying.
-2. Do not assume a capability exists.
-3. Preserve security invariants.
-4. Treat research as evidence.
-5. Never fake verification.
-6. Re-verify after mutation.
-7. Bound retries, loops, output, and network access.
-8. Keep API field names synchronized.
-9. Keep memory provenance intact.
-10. Keep documentation truthful.
-```
-
-Before making architectural changes, read:
-
-```text
-README.md
-worklog.md
-internal/aicontext/AI-CONTEXT.md
-```
-
-When modifying an existing file, inspect its current live contents rather than relying on an old copy.
-
-When a task claims to be complete, verify the actual repository state and the behavior relevant to the change.
-
----
-
-# Verification Discipline
-
-The intended Go acceptance baseline is:
-
-```bash
-go mod tidy
-go test ./internal/... -tags headless -count=1
-go test ./internal/lab/ -count=1
-go test ./internal/research/ -count=1
-go vet ./internal/...
-go build -o /tmp/sheytan .
-```
-
-Frontend acceptance includes:
-
-```bash
-npm run typecheck
-npm run lint
-npm run build:web
-```
-
-The integrated build is:
-
-```bash
-npm run build
-```
-
-The exact relevant checks should depend on what changed.
-
-A passing command is not proof unless the command actually tests the behavior under change.
-
----
-
-# Current State — 2026-09-02
-
-## Stable implemented foundations
-
-```text
-✓ Go runtime architecture
-✓ canonical module path
-✓ version/codename separation
-✓ LLM client
-✓ llama runtime hardening
-✓ orchestrator
-✓ dynamic tool exposure
-✓ AI context
-✓ persistent sessions
-✓ memory and recall
-✓ Coding Lab
-✓ Lab isolation
-✓ Lab policy
-✓ Lab runner
-✓ process control
-✓ path security
-✓ fetch/SSRF protection
-✓ verification gate
-✓ native verification
-✓ snapshots
-✓ promotion
-✓ patch export
-✓ bounded repair
-✓ GitHub research
-✓ Reddit research
-✓ DuckDuckGo research
-✓ SearXNG research
-✓ research ranking
-✓ research deduplication
-✓ research cache
-✓ API hardening
-✓ WebSocket security
-✓ React/Vite frontend foundation
-```
-
-## Active work
-
-```text
-□ complete React feature parity
-□ Coding Lab React panel
-□ Research React panel
-□ richer task/project inspection
-□ frontend integration testing
-□ broader end-to-end autonomous workflows
-□ SVG workspace/editor
-```
-
----
-
-# Working Principle
-
-The system is intentionally built around:
-
-```text
-MODEL
-  +
-REASONING
-  +
-TOOLS
-  +
-MEMORY
-  +
-PLANNING
-  +
-VERIFICATION
-  +
-RUNTIME
-  +
-COMPUTE
-```
-
-A stronger model improves the reasoning component.
-
-It does not remove the need for:
-
-```text
-real project state
-controlled execution
-persistent evidence
-verification
-security boundaries
-bounded autonomy
-```
-
-The architectural target remains:
-
-> **An AI software engineer whose important claims are backed by executable evidence.**
-
----
-
-# 2026-09-03 — Zeta Build Repair Session
-
-The repository stopped building on GitHub Actions (runs #100–#232 failed).
-Root causes, fixes, and verification for this session are recorded here.
-
-## Frontend (Node/TypeScript/Vite)
-
-- `tsc -b` failed because TypeScript 7 removed `baseUrl`.
-  `tsconfig.app.json` now uses `paths: {"@/*": ["./src/*"]}`.
-- `store.ts` imported `activityWebSocketURL` from `./api`; the function lives
-  in `./config`. The import was corrected.
-- `workspace.ts` returned `WORKSPACE_LAYERS[0]` under
-  `noUncheckedIndexedAccess`, which is `WorkspaceLayer | undefined`.
-  The default layer is now the named `AGENT_LAYER` constant.
-- `src/vite-env.d.ts` was missing, so side-effect CSS imports failed under
-  TS7. The standard `vite/client` reference was added.
-- `.prettierignore` and `.oxlintrc.json` now exclude `node_modules`,
-  `dist`, and `web/static` so lint/format operate on sources only.
-
-## Go module integrity
-
-- `go.mod` declared `module github.com/Parsaetak/SHEYTAN-local-agent` while
-  63 files still imported `github.com/sheytan/local-agent/...`. All imports
-  now use the canonical module path and `go mod tidy` regenerated `go.sum`.
-- The obsolete Fyne desktop UI (`internal/ui`) was dead code — nothing
-  imported it — and it dragged unnecessary cgo dependencies into every
-  build. It was deleted together with the superseded vanilla JS UI in
-  `web/static` and the version-specific `scripts/e2e-v10x` harnesses.
-- `sheytan-local-agent.bat` and `scripts/build-and-zip.sh` version strings
-  were normalized to v1.1.0 (Zeta).
-
-## Go compile errors
-
-- `internal/lab/tool.go`: three call sites used the two-value
-  `encodeLabResponse` in a single-value context. They now join encode
-  errors with `errors.Join`.
-- `internal/api/lifecycle.go`: called `orch.Abort()`, which does not exist.
-  Orchestrator cancellation is context-driven; the API already cancels all
-  registered runs, so the stale call was removed.
-- `internal/api/server.go`: removed an unused `gorilla/websocket` import.
-- `cmd/stress.go`: replaced `orch.Abort()` with caller-context cancellation
-  in the abort stress scenarios.
-
-## Go test failures
-
-- `internal/lab/repair_test.go`: missing parenthesis broke package compile.
-- `internal/research`: provider contracts were reconciled with tests —
-  SearXNG sends `categories=general`; DuckDuckGo test moved to the modern
-  `/html` endpoint with `kl`/`kp`; GitHub and Reddit preserve
-  operator-configured query parameters (Reddit built its URL by string
-  concatenation, which mangled base URLs carrying a query); provider names
-  are canonicalized through `NormalizeResult`; `searchProvider` stamps the
-  registry name before normalization; `Validate` rejects negative
-  `MaxResults` before `Normalize` zeroes it; the auto search concurrency
-  test now uses delayed mocks; the raw-query security test was rewritten
-  to exercise the real endpoint builders.
-- `internal/lab`: output truncation marker moved from `Stdout`/`Stderr`
-  into the combined `Output` so captured bytes stay within
-  `MaxOutputBytes`; policy no longer double-rejects absolute working
-  directories (`Workspace.PathFor` remains the authoritative boundary);
-  repair-loop repeated-command protection yields to the iteration cap on
-  the final permitted iteration; verification invalidation keeps the stale
-  summary so `Finish` can report stale instead of unverified; tests use
-  meaningful content checks instead of `echo`.
-- `internal/memory`: search trust weighting no longer matches every entry
-  for every query; external provenance always quarantines to
-  `provisional`; authority is granted exactly to trusted/verified user
-  facts, so trusted provenance survives persistence.
-- `internal/aicontext`: the connectivity line no longer advertises
-  `webSearch`/`browser` when they are not in the registered tool set.
-
-## Verification performed
-
-```bash
-npm run lint          # 0 warnings, 0 errors
-npm run format:check  # clean
-npm run build         # tsc -b + vite build + sync:web
-CGO_ENABLED=0 GOOS=windows go build ./...  # full Windows target build
-CGO_ENABLED=0 GOOS=windows go vet ./...    # full Windows target vet
-go test ./internal/... -tags headless -count=1  # all packages pass
-```
-
----
-
-## 2026-09-03 — Zeta Final: Fyne Removal Completed, CI Green
-
-### What was broken (GitHub Actions, run for f0f8739)
-
-The previous entry recorded the Fyne removal as DONE, but the pushed tree
-still carried the entire legacy UI: `internal/ui/` (25 Go files) imported
-`fyne.io/fyne/v2/...` while `go.mod` no longer declared any fyne module.
-`go test ./internal/...` therefore failed to build `internal/ui` with ten
-annotations — nine missing `fyne.io/fyne/v2/*` packages plus one stale
-`github.com/sheytan/local-agent/internal/agent` import (pre-rename module
-path). The workflow stopped at "Run internal unit tests"; vet, exe build,
-artifact upload, and release attachment never ran.
-
-### Root removal (this session)
-
-- `internal/ui/` deleted outright — the Wails v3 shell (`internal/desktop`)
-  serving the embedded React build is the only UI; no package imported the
-  old one.
-- `scripts/e2e-v107/main.go`: five imports still used the pre-rename module
-  path `github.com/sheytan/local-agent/...`; repointed to
-  `github.com/Parsaetak/SHEYTAN-local-agent/...`.
-- `scripts/gen-syso`: the brand-flame icon is now a committed 512px PNG
-  (`scripts/gen-syso/logo-512.png`, rendered once from `brand.LogoSVG`)
-  embedded via `go:embed`. `github.com/fyne-io/oksvg` and
-  `github.com/srwiley/rasterx` are gone from `go.mod` (plus the
-  transitive `golang.org/x/text` indirect entry).
-- `internal/native/native.go`: package doc rewritten without the Fyne/GLFW
-  references; the raw-comdlg32 attachment-crash fix story is kept.
-- `internal/releasegate/releasegate_test.go`: the skip-dir note now points
-  at `build/shots` (the old `internal/ui/shots` is gone).
-- `.gitignore`: stale `internal/ui/shots/` entry removed (`/build/` already
-  covers test artifacts).
-
-### Release-suite repairs (Zeta hardening)
-
-- `cmd/stress.go`: the base suite never configured the tool jail, so
-  `huge_tool_result` and `concurrent_tool_calls` failed with
-  "tools: base directory is not configured". `runStressSuite` now mirrors
-  the runtime stack and calls `tools.SetBaseDir(cfg.DataDir)` first.
-- `internal/tools`: new test-only hook `SetFetchPrivateDestinationsAllowedForTest`
-  relaxes ONLY the public-IP requirement of the fetch SSRF guard so the
-  stress suite can exercise HTML→text extraction against a loopback
-  httptest server. Scheme/credential/file:// rules stay fully enforced.
-  `stressV110FetchText` flips it and restores the previous value.
-- `cmd/stress_v111.go`: the version pin expected 1.0.11 while the app is
-  1.1.0 (Zeta); replaced with a forward-compatible `>= 1.1.0` floor
-  (`versionLessThan` helper added). The embedded workflow assertions were
-  updated to the real build-windows.yml layout (double-quoted
-  `go-version: "1.26"`, block-list branch triggers, `runs-on:
-windows-latest`, checkout@v5 / setup-go@v6 / setup-node@v5 /
-  upload-artifact@v5).
-
-### Packaging and docs
-
-- `scripts/build-and-zip.sh` rewritten for the Wails/Node-UI pipeline: no
-  Fyne/GLFW X11 header environment, no mingw cross toolchain (Wails v3 on
-  Windows is cgo-free), stress suite runs through the new headless
-  `scripts/stress-main` entry point, gates extended to `internal/desktop`,
-  GATE 3 now compiles the staged tree exactly like CI
-  (`GOOS=windows CGO_ENABLED=0 go build ./...`), and the llama.cpp engine
-  bundle degrades to a warning (the app auto-downloads it on first run via
-  `internal/installer`).
-- `scripts/stress-main/main.go` added: `cmd.RunWithDefaultFn` with a no-op
-  default, so the stress binary builds without GTK/WebKitGTK.
-- `README.md`: Architecture gained a "Desktop Shell" section (Wails v3,
-  embedded assets, single handler), the runtime component tree matches the
-  real `internal/` layout, the React UI section states the Fyne removal,
-  Implemented/In-Progress lists updated, and Verification Commands document
-  the Linux GTK caveat plus the Windows cross-build and stress entry point.
-
-### Verification performed
-
-```bash
-GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build ./...        # full tree, clean
-GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go vet ./...          # full tree, clean
-go run ./scripts/gen-syso                                     # syso + icon preview OK
-go test -tags headless ./internal/... (except desktop; no cgo on this host)  # ok
-go test -tags headless -count=5 ./internal/research/          # ok
-go build ./cmd/... ./scripts/... && go vet ./cmd/... ./scripts/...  # ok
-go build -o stress ./scripts/stress-main && stress            # 174 pass / 0 fail
-```
-
-The remaining CI surface (frontend typecheck/lint/format/build, exe
-artifact, signature probe) was already green on the failing run; with the
-Go test step fixed, the workflow is expected to pass end to end.
-
----
-
-## 2026-09-03 — Zeta Final (actual): the Fyne deletion that finally landed
-
-### The pattern that kept CI red
-
-Two consecutive worklog entries ("Zeta Build Repair Session" and "Zeta
-Final: Fyne Removal Completed, CI Green") recorded the removal of
-`internal/ui/` as DONE, while `git log --diff-filter=D -- internal/ui/`
-returns nothing — no commit ever deleted the directory. The docs, the
-README and agent.md were all updated to describe a tree that did not
-exist: `go.mod` had no fyne module (correct), but the 32-file legacy Fyne
-package was still tracked, so `go test ./internal/...` failed to compile
-`internal/ui` at "Run internal unit tests" and every workflow run since
-stayed red at exactly that step (latest observed: run 33707761443 for
-commit 9d11f4a). The lesson: a removal is not done until `git status`
-shows the deletions staged AND the CI-equivalent commands pass locally.
-
-### What this session actually did
-
-- `internal/ui/` deleted FOR REAL — `git rm -r` of all 32 tracked files
-  (444 KB: widgets, views, icons, theme, boot, anim, continuum, and the
-  whole headless test battery). Nothing imported the package; `go build`,
-  `go vet`, `go test` and the stress suite are all green without it.
-- Stale pre-React static assets removed from `web/static/`
-  (`app.js`, `styles.css`, `icons/logo.svg`) — leftovers of the old
-  hand-written vanilla-JS UI that `scripts/sync-web.mjs` wipes on every
-  build; keeping them tracked made every fresh `npm run build` show
-  phantom deletions.
-- `.gitignore`: added `/node_modules/` and `/vendor/` (root-anchored,
-  releasegate-safe). Without it, a `git add .` on a machine that ran
-  `npm install` would commit the whole dependency tree.
-- `.github/workflows/build-windows.yml`: `npm install` → `npm ci`
-  (lockfile-disciplined, deterministic), `package-manager-cache: false` →
-  `cache: npm`, and the format step no longer MUTATES the tree in CI
-  (`npm run format` removed, only `format:check` remains — the repo files
-  are now prettier-clean so the check passes honestly).
-- `scripts/e2e-v108.sh`: check 3 still ran the deleted
-  `TestSafeTapRecoversPanic` from `./internal/ui/`; replaced with a
-  source-level assertion that the AURORA panic-guard scenarios survive in
-  `cmd/stress_v108.go` (where the coverage actually lives now). Also
-  dropped the machine-specific GOROOT/GOPATH/mingw PATH hacks.
-- `scripts/e2e-v102.sh`, `e2e-v106.sh`, `e2e-v107.sh`: `cd
-/home/z/my-project/sheytan-go` (a directory that no longer exists) →
-  portable `cd "$(dirname "$0")/.."`; e2e-v107 keeps a stock-`go` PATH.
-- README verification commands: noted `npm ci` + `format:check` so local
-  verification mirrors the updated workflow exactly.
-
-### Verification performed (CI-equivalent, Linux host)
-
-```bash
-npm ci                                    # 0 vulnerabilities
-npm run typecheck                         # clean
-npm run lint                              # 0 warnings, 0 errors
-npm run format:check                      # clean (agent.md/worklog.md formatted)
-npm run build                             # tsc -b + vite + sync:web
-test -f web/static/index.html && grep -q 'type="module"' web/static/index.html  # OK
-go run ./scripts/gen-syso                 # syso regenerated, Parsa Tak UTF-16 present
-GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build ./...                     # clean
-GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go vet ./...                       # clean
-go test -tags headless ./internal/...     # all ok EXCEPT internal/desktop
-                                          # (Linux host lacks GTK4/WebKitGTK
-                                          # cgo headers; CI runs windows-latest
-                                          # where Wails v3 needs no cgo — the
-                                          # Windows cross-build covers compile)
-go test -count=2 ./internal/releasegate/  # gitignore gate green after edits
-go build -o /tmp/sheytan-stress ./scripts/stress-main && \
-SHEYTAN_DATA_DIR=/tmp/sheytan-stress-root /tmp/sheytan-stress stress
-                                          # 174 pass / 0 fail
-GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build \
-  -buildvcs=false -ldflags="-s -w -H=windowsgui" \
-  -o dist/sheytan-local-agent .           # 17.9 MB exe
-python3 signature probe on the exe        # "Parsa Tak" UTF-16 found
-go mod tidy                               # go.mod/go.sum unchanged
-```
-
-With the compile blocker gone, the next push to `main` should take the
-workflow past "Run internal unit tests" through vet, the Windows exe
-build, the signature probe, and artifact upload. Tag pushes attach the
-exe to the GitHub release.
+alone.
+
+Release readiness requires:
+
+frontend checks
+Go checks
+stress suite
+desktop builds
+Windows package
+Linux package
+package verification
+UI integration verification
+functional tests
+release asset verification
+34. Test Philosophy
+
+Tests should verify behavior rather than implementation details.
+
+Required layers:
+
+unit tests
+integration tests
+stress tests
+API tests
+frontend typecheck
+frontend lint
+frontend build
+desktop build
+artifact verification
+release verification
+
+User-visible features need functional evidence.
+
+35. Zeta Regression Rules
+
+Never reintroduce:
+
+internal/ui
+Fyne desktop UI
+old versioned stress files
+old e2e scripts
+GTK3-only Linux workflow
+WebKitGTK 4.1-only Linux workflow
+unanchored runtime .gitignore rules
+unbounded process execution
+unbounded output capture
+secret leakage
+36. CI Linux Requirements
+
+Wails v3 beta.16 Linux builds use:
+
+GTK4
+WebKitGTK 6.0
+glib
+gio-unix
+libsoup 3
+pkg-config
+CGO
+
+The current CI must install at least:
+
+libgtk-4-dev
+libwebkitgtk-6.0-dev
+libsoup-3.0-dev
+pkg-config
+zip
+
+Ubuntu baseline:
+
+ubuntu-24.04
+
+Do not revert to:
+
+libgtk-3-dev
+libwebkit2gtk-4.1-dev
+
+unless deliberately building an explicit GTK3 legacy target.
+
+37. Release Packaging
+
+Primary releases remain:
+
+SHEYTAN-Local-Agent-Windows-x64-vX.Y.ZZ.zip
+SHEYTAN-Local-Agent-Linux-x64-vX.Y.ZZ.zip
+
+Each ZIP contains:
+
+SHEYTAN-Local-Agent/
+
+Portable data remains associated with that directory.
+
+38. Version Surface
+
+When the version changes, verify all relevant version sources:
+
+internal/config/config.go
+package.json
+build/config.yml
+.github/workflows/build-desktop.yml
+SIGNATURE
+portable launch scripts
+documentation where versioned
+
+For v1.1.2Z:
+
+APP_VERSION    = 1.1.2
+Codename       = Zeta
+Release tag    = v1.1.2Z
+Package suffix = Z
+39. Standard Engineering Workflow
+
+Before modifying anything:
+
+inspect live main
+ ↓
+verify exact commit
+ ↓
+inspect relevant files
+ ↓
+inspect current Actions state
+ ↓
+inspect current release state when relevant
+
+Then:
+
+identify real problem
+ ↓
+make smallest coherent change
+ ↓
+run relevant local checks where possible
+ ↓
+push
+ ↓
+inspect actual GitHub result
+ ↓
+inspect logs
+ ↓
+verify artifact
+ ↓
+continue
+40. Standard Completion Phrase
+
+When the user says:
+
+done, check verify and continue
+
+the required sequence is:
+
+1. inspect live main
+2. verify exact commit SHA
+3. inspect changed files
+4. inspect relevant GitHub Actions
+5. inspect actual logs
+6. inspect artifacts/releases when relevant
+7. identify any failure or unfinished feature
+8. continue with the next highest-value improvement
+
+Never answer only:
+
+looks good
+
+without evidence.
+
+41. Current v1.1.2Z Execution Order
+
+The work should proceed in this order unless real evidence requires reprioritization:
+
+PHASE 1
+Agent core
+Sessions
+Streaming
+Cancellation
+Tool visibility
+Model/runtime synchronization
+
+PHASE 2
+Model management
+Discovery
+Lifecycle
+Engine
+Inference controls
+
+PHASE 3
+Coding Lab
+File explorer
+Terminal
+Diffs
+Verification
+Promotion
+
+PHASE 4
+Research
+Memory
+Recall
+Browser
+Vision
+
+PHASE 5
+Advanced Settings
+Diagnostics
+Hardware
+Updates
+
+PHASE 6
+AAA UI polish
+Motion system
+120Hz performance
+responsive behavior
+accessibility
+reduced motion
+
+PHASE 7
+integration tests
+stress
+desktop packaging
+release verification
+42. Definition of Complete
+
+v1.1.2Z is complete only when:
+
+every major workspace is functional
++
+every visible primary action has a real implementation
++
+runtime state stays synchronized
++
+errors are visible
++
+long-running work is cancellable
++
+models can be selected and used
++
+Coding Lab can execute and verify engineering work
++
+Research produces usable evidence
++
+Memory/Recall are inspectable
++
+advanced settings work
++
+diagnostics work
++
+Windows and Linux packages build
++
+CI is green
++
+application remains responsive under load
++
+high-refresh displays receive smooth interaction
++
+release assets are verified
+43. Final Product Principle
+
+SHEYTAN should not feel like:
+
+a chat UI with many buttons
+
+It should feel like:
+
+a local AI engineering computer
+
+The user should be able to:
+
+think
+ask
+research
+inspect
+code
+execute
+verify
+repair
+remember
+review
+repeat
+
+inside one coherent environment.
+
+The model proposes.
+
+The tools execute.
+
+The laboratory verifies.
+
+The application presents the evidence clearly.
+
+44. v1.1.2Z Status
+
+Current state:
+
+v1.1.1Z release              COMPLETE
+Windows portable package     VERIFIED
+Linux portable package       VERIFIED
+Wails GTK4/WebKit6 CI        FIXED
+Legacy release problems      FIXED
+AAA application milestone    IN PROGRESS
+
+Next highest-value implementation target:
+
+Agent workspace → real streaming/tool execution/session state/model state
