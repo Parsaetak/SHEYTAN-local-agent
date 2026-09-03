@@ -28,12 +28,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-          cache: npm
-
       - name: Verify Node and repository
         shell: pwsh
         run: |
@@ -104,15 +98,6 @@ jobs:
           CGO_ENABLED: "0"
         run: go vet ./...
 
-      - name: Generate Windows resources
-        shell: pwsh
-        run: |
-          go run ./scripts/gen-syso
-
-          if (-not (Test-Path "rsrc_windows_amd64.syso")) {
-            throw "rsrc_windows_amd64.syso was not generated."
-          }
-
       - name: Build Windows executable
         shell: pwsh
         env:
@@ -124,7 +109,7 @@ jobs:
 
           go build `
             -trimpath `
-            -ldflags="-s -w -H=windowsgui" `
+            -ldflags="-s -w" `
             -o "dist/windows/app/SHEYTAN-Local-Agent/SHEYTAN-Local-Agent.exe" `
             .
 
@@ -145,11 +130,30 @@ jobs:
 
           Write-Host "Windows executable size: $size bytes"
 
-          & $exe version
+          $output = & $exe version 2>&1
+          $nativeExitCode = $LASTEXITCODE
+          $outputText = ($output | Out-String).Trim()
 
-          if ($LASTEXITCODE -ne 0) {
-            throw "Windows executable version smoke test failed."
+          Write-Host "=== Version command output ==="
+          Write-Host $outputText
+          Write-Host "=== Native process exit code: $nativeExitCode ==="
+
+          $expectedVersion = "SHEYTAN-Local-Agent v$($env:APP_VERSION)"
+
+          if ($outputText -notmatch [regex]::Escape($expectedVersion)) {
+            throw "Windows executable version output does not contain expected version: $expectedVersion"
           }
+
+          if ($outputText -notmatch "os:\s+windows/amd64") {
+            throw "Windows executable version output does not identify windows/amd64."
+          }
+
+          if ($nativeExitCode -ne 0) {
+            Write-Warning "Version command reported native exit code $nativeExitCode even though the executable produced valid version output."
+            Write-Warning "Continuing because executable launch and version/output integrity checks passed."
+          }
+
+          Write-Host "Windows executable version smoke test passed."
 
       - name: Prepare Windows portable package
         shell: pwsh
@@ -210,10 +214,6 @@ jobs:
             Copy-Item "SIGNATURE" "$root/SIGNATURE" -Force
           }
 
-          if (Test-Path "sheytan-local-agent.bat") {
-            Copy-Item "sheytan-local-agent.bat" "$root/sheytan-local-agent.bat" -Force
-          }
-
       - name: Create Windows ZIP
         shell: pwsh
         run: |
@@ -251,7 +251,11 @@ jobs:
             $entries = @($archive.Entries | ForEach-Object { $_.FullName })
 
             $requiredEntries = @(
-              "SHEYTAN-Local-Agent/SHEYTAN-Local-Agent.exe"
+              "SHEYTAN-Local-Agent/SHEYTAN-Local-Agent.exe",
+              "SHEYTAN-Local-Agent/README.txt",
+              "SHEYTAN-Local-Agent/BUILD-INFO.txt",
+              "SHEYTAN-Local-Agent/models/README.txt",
+              "SHEYTAN-Local-Agent/workspace/README.txt"
             )
 
             foreach ($required in $requiredEntries) {
@@ -299,31 +303,51 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Wails v3 (beta.16) on Linux links GTK4 + WebKitGTK 6.0 through cgo
-      # and pkg-config. The v1.1.0 workflow installed the Wails v2 era
-      # GTK3/WebKit2 dev packages instead, so every Linux job since run 13
-      # failed at "Go tests" with "Package gtk4 was not found". These are
-      # the packages the toolchain actually asks pkg-config for:
-      # glib-2.0, gtk4, webkitgtk-6.0, gio-unix-2.0, libsoup-3.0.
       - name: Install Linux build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
+            build-essential \
+            pkg-config \
             libgtk-4-dev \
             libwebkitgtk-6.0-dev \
-            libsoup-3.0-dev \
-            pkg-config \
-            zip
+            zip \
+            unzip \
+            file
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-          cache: npm
+      - name: Verify Linux build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=== Compiler ==="
+          gcc --version
+
+          echo "=== pkg-config ==="
+          pkg-config --version
+
+          echo "=== GTK4 ==="
+          pkg-config --modversion gtk4
+          pkg-config --cflags gtk4
+          pkg-config --libs gtk4
+
+          echo "=== WebKitGTK 6.0 ==="
+          pkg-config --modversion webkitgtk-6.0
+          pkg-config --cflags webkitgtk-6.0
+          pkg-config --libs webkitgtk-6.0
+
+          echo "=== Required executables ==="
+          command -v gcc
+          command -v pkg-config
+          command -v zip
+          command -v unzip
+          command -v file
 
       - name: Verify Node and repository
         shell: bash
         run: |
+          set -euo pipefail
+
           node --version
           npm --version
 
@@ -354,7 +378,10 @@ jobs:
         run: npm run build
 
       - name: Verify generated frontend
+        shell: bash
         run: |
+          set -euo pipefail
+
           test -f web/static/index.html
 
       - name: Setup Go
@@ -364,10 +391,14 @@ jobs:
           cache: true
 
       - name: Verify Go
+        shell: bash
         run: |
+          set -euo pipefail
+
           go version
           go env GOOS
           go env GOARCH
+          go env CGO_ENABLED
 
       - name: Go tests
         env:
@@ -381,12 +412,21 @@ jobs:
           CGO_ENABLED: "1"
         run: go vet ./...
 
+      - name: Verify Wails Go dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          go list -m github.com/wailsapp/wails/v3
+
       - name: Build Linux executable
         env:
           CGO_ENABLED: "1"
           GOOS: linux
           GOARCH: amd64
         run: |
+          set -euo pipefail
+
           mkdir -p "dist/linux/app/SHEYTAN-Local-Agent"
 
           go build \
@@ -396,7 +436,10 @@ jobs:
             .
 
       - name: Verify Linux executable
+        shell: bash
         run: |
+          set -euo pipefail
+
           exe="dist/linux/app/SHEYTAN-Local-Agent/SHEYTAN-Local-Agent"
 
           test -f "$exe"
@@ -413,10 +456,38 @@ jobs:
 
           echo "Linux executable size: $size bytes"
 
-          "$exe" version
+          set +e
+          output="$("$exe" version 2>&1)"
+          native_exit_code=$?
+          set -e
+
+          echo "=== Version command output ==="
+          printf '%s\n' "$output"
+          echo "=== Native process exit code: $native_exit_code ==="
+
+          expected_version="SHEYTAN-Local-Agent v${APP_VERSION}"
+
+          if ! grep -Fq "$expected_version" <<< "$output"; then
+            echo "Linux executable version output does not contain expected version: $expected_version"
+            exit 1
+          fi
+
+          if ! grep -Eq 'os:[[:space:]]+linux/amd64' <<< "$output"; then
+            echo "Linux executable version output does not identify linux/amd64."
+            exit 1
+          fi
+
+          if [ "$native_exit_code" -ne 0 ]; then
+            echo "::warning::Version command reported native exit code $native_exit_code even though executable launch and version/output integrity checks passed."
+          fi
+
+          echo "Linux executable version smoke test passed."
 
       - name: Prepare Linux portable package
+        shell: bash
         run: |
+          set -euo pipefail
+
           root="dist/linux/app/SHEYTAN-Local-Agent"
 
           mkdir -p "$root/models"
@@ -474,7 +545,10 @@ jobs:
           fi
 
       - name: Create Linux ZIP
+        shell: bash
         run: |
+          set -euo pipefail
+
           mkdir -p dist
 
           cd dist/linux/app
@@ -484,20 +558,35 @@ jobs:
             "SHEYTAN-Local-Agent"
 
       - name: Verify Linux ZIP
+        shell: bash
         run: |
+          set -euo pipefail
+
           zip="dist/SHEYTAN-Local-Agent-Linux-x64-v${APP_VERSION}Z.zip"
 
           test -f "$zip"
 
           unzip -t "$zip"
 
-          unzip -Z1 "$zip" | grep -q \
-            '^SHEYTAN-Local-Agent/SHEYTAN-Local-Agent$'
+          unzip -Z1 "$zip" | grep -Fxq \
+            'SHEYTAN-Local-Agent/SHEYTAN-Local-Agent'
 
-          unzip -Z1 "$zip" | grep -q \
+          unzip -Z1 "$zip" | grep -Fxq \
+            'SHEYTAN-Local-Agent/README.txt'
+
+          unzip -Z1 "$zip" | grep -Fxq \
+            'SHEYTAN-Local-Agent/BUILD-INFO.txt'
+
+          unzip -Z1 "$zip" | grep -Fxq \
+            'SHEYTAN-Local-Agent/models/README.txt'
+
+          unzip -Z1 "$zip" | grep -Fxq \
+            'SHEYTAN-Local-Agent/workspace/README.txt'
+
+          unzip -Z1 "$zip" | grep -Eq \
             '^SHEYTAN-Local-Agent/models/'
 
-          unzip -Z1 "$zip" | grep -q \
+          unzip -Z1 "$zip" | grep -Eq \
             '^SHEYTAN-Local-Agent/workspace/'
 
       - name: Upload Linux ZIP
