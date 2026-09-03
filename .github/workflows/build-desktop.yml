@@ -1,3 +1,4 @@
+```yaml
 name: build-desktop
 
 on:
@@ -115,20 +116,13 @@ jobs:
           print("Windows signature metadata verified: Parsa Tak")
           PY
 
-      - name: Upload Windows artifact
+      - name: Upload Windows build artifact
         uses: actions/upload-artifact@v5
         with:
           name: sheytan-local-agent-windows-amd64
           path: dist/windows/sheytan-local-agent-windows-amd64.exe
           if-no-files-found: error
           retention-days: 14
-
-      - name: Attach Windows executable to release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: dist/windows/sheytan-local-agent-windows-amd64.exe
-          fail_on_unmatched_files: true
 
   build-linux:
     name: Build SHEYTAN Local Agent — Linux
@@ -217,7 +211,7 @@ jobs:
           file dist/linux/sheytan-local-agent-linux-amd64
           ls -lh dist/linux/sheytan-local-agent-linux-amd64
 
-      - name: Upload Linux artifact
+      - name: Upload Linux build artifact
         uses: actions/upload-artifact@v5
         with:
           name: sheytan-local-agent-linux-amd64
@@ -225,9 +219,57 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Attach Linux executable to release
-        if: startsWith(github.ref, 'refs/tags/')
+  release:
+    name: Publish GitHub Release
+    runs-on: ubuntu-24.04
+    needs:
+      - build-windows
+      - build-linux
+    if: startsWith(github.ref, 'refs/tags/')
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Download final build artifacts
+        uses: actions/download-artifact@v5
+        with:
+          pattern: sheytan-local-agent-*
+          path: dist
+          merge-multiple: true
+
+      - name: Verify final release files only
+        run: |
+          test -f dist/sheytan-local-agent-windows-amd64.exe
+          test -s dist/sheytan-local-agent-windows-amd64.exe
+
+          test -f dist/sheytan-local-agent-linux-amd64
+          test -s dist/sheytan-local-agent-linux-amd64
+
+          count="$(find dist -maxdepth 1 -type f | wc -l)"
+
+          if [ "$count" -ne 2 ]; then
+            echo "Expected exactly 2 release files, found $count:"
+            find dist -maxdepth 1 -type f -print
+            exit 1
+          fi
+
+          echo "Final release files:"
+          ls -lh \
+            dist/sheytan-local-agent-windows-amd64.exe \
+            dist/sheytan-local-agent-linux-amd64
+
+      - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/linux/sheytan-local-agent-linux-amd64
-          fail_on_unmatched_files: true
+          tag_name: ${{ github.ref_name }}
+          name: SHEYTAN Local Agent ${{ github.ref_name }}
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+          make_latest: true
+          files: |
+            dist/sheytan-local-agent-windows-amd64.exe
+            dist/sheytan-local-agent-linux-amd64
+```
