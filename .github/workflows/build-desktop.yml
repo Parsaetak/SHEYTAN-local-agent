@@ -284,14 +284,47 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            libgtk-3-dev \
-            libwebkit2gtk-4.1-dev \
+            build-essential \
             pkg-config \
-            zip
+            libgtk-4-dev \
+            libwebkitgtk-6.0-dev \
+            zip \
+            unzip \
+            file
+
+      - name: Verify Linux build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=== Compiler ==="
+          gcc --version
+
+          echo "=== pkg-config ==="
+          pkg-config --version
+
+          echo "=== GTK4 ==="
+          pkg-config --modversion gtk4
+          pkg-config --cflags gtk4
+          pkg-config --libs gtk4
+
+          echo "=== WebKitGTK 6.0 ==="
+          pkg-config --modversion webkitgtk-6.0
+          pkg-config --cflags webkitgtk-6.0
+          pkg-config --libs webkitgtk-6.0
+
+          echo "=== Required executables ==="
+          command -v gcc
+          command -v pkg-config
+          command -v zip
+          command -v unzip
+          command -v file
 
       - name: Verify Node and repository
         shell: bash
         run: |
+          set -euo pipefail
+
           node --version
           npm --version
 
@@ -322,7 +355,10 @@ jobs:
         run: npm run build
 
       - name: Verify generated frontend
+        shell: bash
         run: |
+          set -euo pipefail
+
           test -f web/static/index.html
 
       - name: Setup Go
@@ -332,10 +368,14 @@ jobs:
           cache: true
 
       - name: Verify Go
+        shell: bash
         run: |
+          set -euo pipefail
+
           go version
           go env GOOS
           go env GOARCH
+          go env CGO_ENABLED
 
       - name: Go tests
         env:
@@ -349,12 +389,21 @@ jobs:
           CGO_ENABLED: "1"
         run: go vet ./...
 
+      - name: Verify Wails Go dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          go list -m github.com/wailsapp/wails/v3
+
       - name: Build Linux executable
         env:
           CGO_ENABLED: "1"
           GOOS: linux
           GOARCH: amd64
         run: |
+          set -euo pipefail
+
           mkdir -p "dist/linux/app/SHEYTAN-Local-Agent"
 
           go build \
@@ -364,7 +413,10 @@ jobs:
             .
 
       - name: Verify Linux executable
+        shell: bash
         run: |
+          set -euo pipefail
+
           exe="dist/linux/app/SHEYTAN-Local-Agent/SHEYTAN-Local-Agent"
 
           test -f "$exe"
@@ -384,7 +436,10 @@ jobs:
           "$exe" version
 
       - name: Prepare Linux portable package
+        shell: bash
         run: |
+          set -euo pipefail
+
           root="dist/linux/app/SHEYTAN-Local-Agent"
 
           mkdir -p "$root/models"
@@ -442,7 +497,10 @@ jobs:
           fi
 
       - name: Create Linux ZIP
+        shell: bash
         run: |
+          set -euo pipefail
+
           mkdir -p dist
 
           cd dist/linux/app
@@ -452,20 +510,23 @@ jobs:
             "SHEYTAN-Local-Agent"
 
       - name: Verify Linux ZIP
+        shell: bash
         run: |
+          set -euo pipefail
+
           zip="dist/SHEYTAN-Local-Agent-Linux-x64-v${APP_VERSION}Z.zip"
 
           test -f "$zip"
 
           unzip -t "$zip"
 
-          unzip -Z1 "$zip" | grep -q \
-            '^SHEYTAN-Local-Agent/SHEYTAN-Local-Agent$'
+          unzip -Z1 "$zip" | grep -Fxq \
+            'SHEYTAN-Local-Agent/SHEYTAN-Local-Agent'
 
-          unzip -Z1 "$zip" | grep -q \
+          unzip -Z1 "$zip" | grep -Eq \
             '^SHEYTAN-Local-Agent/models/'
 
-          unzip -Z1 "$zip" | grep -q \
+          unzip -Z1 "$zip" | grep -Eq \
             '^SHEYTAN-Local-Agent/workspace/'
 
       - name: Upload Linux ZIP
