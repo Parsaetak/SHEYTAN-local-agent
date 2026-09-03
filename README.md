@@ -1144,10 +1144,16 @@ SHEYTAN_DATA_DIR=/tmp/sheytan-stress-root /tmp/sheytan-stress stress
 After frontend changes:
 
 ```bash
+npm ci
 npm run typecheck
 npm run lint
+npm run format:check
 npm run build:web
 ```
+
+`npm ci` installs exactly the committed `package-lock.json` (CI uses it too);
+`format:check` is the honest CI gate — never commit a tree that needs
+`npm run format` to pass it.
 
 Full frontend/runtime synchronization:
 

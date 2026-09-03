@@ -3,7 +3,7 @@
 # LLM (GLM via the z-ai CLI proxy). Runs in ONE bash session because the
 # sandbox reaps background processes between invocations.
 set -u
-cd /home/z/my-project/sheytan-go
+cd "$(dirname "$0")/.."
 
 export SHEYTAN_DATA_DIR=/tmp/e2e-data
 export SHEYTAN_PROVIDER=remote

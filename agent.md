@@ -1,9 +1,10 @@
 # AGENT.md — Handover Notes for the Next Agent
 
-> Read this file FIRST, then `worklog.md` (session history), then
-> `internal/aicontext/AI-CONTEXT.md` (the app's own operating context).
+> Read this file FIRST, then `worklog.md` (session history, newest at the
+> bottom), then `internal/aicontext/AI-CONTEXT.md` (the app's own operating
+> context).
 
-## Repository Identity
+## Repository identity
 
 ```text
 Application:  SHEYTAN-Local-Agent
@@ -14,9 +15,10 @@ Author/signer: Parsa Tak (brand.SignedBy) — licensor: Parsaetak
 ```
 
 Zeta is the consolidated release: one Go runtime, one React frontend, one
-desktop shell. The legacy Fyne desktop UI (`internal/ui`, `fyne.io/*`) was
-**fully removed** on 2026-09-03. Do not reintroduce it; there is nothing to
-migrate back.
+desktop shell. The legacy Fyne desktop UI (`internal/ui`, `fyne.io/*`) is
+**gone for real this time** — deleted with `git rm` and verified locally on
+2026-09-03 (see the last worklog section, "the Fyne deletion that finally
+landed"). Do not reintroduce it; there is nothing to migrate back to.
 
 ## Architecture (current truth)
 
@@ -49,26 +51,40 @@ diagnostics, update, license, context).
 2. **No Fyne.** No `fyne.io/*`, no `internal/ui`. The icon pipeline embeds
    `scripts/gen-syso/logo-512.png` — regenerate that PNG from
    `brand.LogoSVG` only if the brand mark changes.
-3. **`web/static` is committed build output.** After frontend changes run
+3. **A removal is not done until it is COMMITTED.** Two consecutive sessions
+   wrote "Fyne removal completed" in this worklog while `internal/ui/` sat
+   untouched in the tree — every CI run stayed red at "Run internal unit
+   tests" because of it. Before declaring any deletion done: `git status`
+   must show the deletions, and the CI-equivalent commands (below) must pass
+   locally. Docs that describe a tree that does not exist are worse than no
+   docs.
+4. **`web/static` is committed build output.** After frontend changes run
    `npm run build` (tsc -b + vite build + sync:web) and commit the synced
-   assets. CI fails if `web/static/index.html` does not carry a
-   `type="module"` script.
-4. **`.gitignore` patterns that match directories MUST be root-anchored**
+   assets. Never commit stray files inside `web/static` that `sync-web.mjs`
+   would wipe (the pre-React `app.js`/`styles.css`/`icons/logo.svg`
+   leftovers caused phantom deletions until removed). CI fails if
+   `web/static/index.html` does not carry a `type="module"` script.
+5. **`.gitignore` patterns that match directories MUST be root-anchored**
    (`/sessions/`, not `sessions/`). `internal/releasegate` fails CI on
-   violations — this bug broke v1.0.9/v1.0.10.
-5. **Version bumps**: update `config.AppVersion`; the stress check
+   violations — this bug broke v1.0.9/v1.0.10. `/node_modules/` and
+   `/vendor/` are anchored too; keep them that way.
+6. **Version bumps**: update `config.AppVersion`; the stress check
    `stressV111ReleaseSurface` enforces a `>= 1.1.0` floor and CI workflow
-   hygiene (pinned `go-version: "1.26"`, actions pins). SIGNATURE and the
-   exe resource metadata derive from `internal/brand` at build time.
-6. **Tool jail**: any code that runs tools outside the API server must call
-   `tools.SetBaseDir(dir)` first (see `internal/runtime/runtime.go:79` and
+   hygiene (pinned `go-version: "1.26"`, actions pins, `runs-on:
+windows-latest`, branch triggers). SIGNATURE and the exe resource
+   metadata derive from `internal/brand` at build time.
+7. **Tool jail**: any code that runs tools outside the API server must call
+   `tools.SetBaseDir(dir)` first (see `internal/runtime/runtime.go` and
    `scripts/stress-main`).
+8. **CI installs with `npm ci`** and gates formatting with
+   `npm run format:check` only (no in-CI rewriting). Keep
+   `package-lock.json` in sync and keep every tracked file prettier-clean.
 
 ## Build & verify (exact commands)
 
 ```bash
 # Frontend (Node >= 22.12, npm >= 10)
-npm install
+npm ci
 npm run typecheck && npm run lint && npm run format:check
 npm run build                    # also syncs web/static
 
@@ -89,19 +105,18 @@ SHEYTAN_DATA_DIR=/tmp/sheytan-stress-root /tmp/sheytan-stress stress
 go run ./scripts/gen-syso
 ```
 
-CI (`.github/workflows/build-windows.yml`) runs: npm install → typecheck →
-lint → format → build → embedded-asset verification → gen-syso →
+CI (`.github/workflows/build-windows.yml`) runs: `npm ci` → typecheck →
+lint → format check → build → embedded-asset verification → gen-syso →
 `go test ./internal/... -tags headless` → `go test ./... -run Test` →
-`go vet ./...` → exe build (`-H=windowsgui`) → signature probe
-(UTF-16 "Parsa Tak" must appear in the exe) → artifact upload; tag pushes
-attach the exe to a GitHub release.
+`go vet ./...` → exe build (`-H=windowsgui`) → signature probe (UTF-16
+"Parsa Tak" must appear in the exe) → artifact upload; tag pushes attach
+the exe to a GitHub release.
 
 ## Known state & next steps
 
-- GitHub Actions was red because `internal/ui` survived while its go.mod
-  entries did not. Fixed 2026-09-03 (see the last worklog section). The
-  next push to `main` should be green end to end; watch run
-  "Build SHEYTAN Local Agent — Windows".
+- The CI-blocking `internal/ui` compile failure is fixed for real (deleted,
+  staged, locally verified). The next push to `main` should be green end to
+  end; watch run "Build SHEYTAN Local Agent — Windows".
 - `internal/research` has one inherently network-flaky httptest scenario
   (reddit_test loopback write); it passed 5 consecutive `-count=5` runs.
   If CI ever flakes there, re-run before investigating.
@@ -112,15 +127,21 @@ attach the exe to a GitHub release.
   with integrity gates; it expects `/home/z/my-project/download` and an
   optional llama.cpp engine folder, and degrades gracefully when the engine
   is absent (the app auto-downloads it on first run).
+- The historical e2e scripts (`scripts/e2e-v10*.sh`) are now portable
+  (repo-relative `cd`, stock `go` on PATH) but still need the GLM proxy
+  (`scripts/glm-proxy.mjs`) and a real model — they are manual, not CI.
 
 ## Where to look when something fails
 
-| Symptom | First place to look |
-|---|---|
-| CI fails at "Run internal unit tests" | compile errors → stale imports/module path; run the cross-build above |
-| exe missing icon/wrong version | `scripts/gen-syso`, `internal/brand`, `config.AppVersion` |
-| signature probe fails | `brand.SignedBy`, `gen-syso` CompanyName, winres metadata |
-| tool calls error "base directory is not configured" | missing `tools.SetBaseDir` in the embedding host |
-| fetch blocked with "not a public IP address" | SSRF guard working as designed; test code may use the tools testhook |
-| frontend asset verification fails | re-run `npm run build`, commit `web/static` |
-| releasegate fails | unanchored `.gitignore` pattern or missing source package |
+| Symptom                                             | First place to look                                                     |
+| --------------------------------------------------- | ----------------------------------------------------------------------- |
+| CI fails at "Run internal unit tests"               | compile errors → stale imports/module path; run the cross-build above   |
+| CI fails at "Frontend format check"                 | run `npx prettier --write <file>` on the flagged file, commit           |
+| CI fails at "Install frontend dependencies"         | `package-lock.json` out of sync — run `npm install`, commit the lock    |
+| exe missing icon/wrong version                      | `scripts/gen-syso`, `internal/brand`, `config.AppVersion`               |
+| signature probe fails                               | `brand.SignedBy`, `gen-syso` CompanyName, winres metadata               |
+| tool calls error "base directory is not configured" | missing `tools.SetBaseDir` in the embedding host                        |
+| fetch blocked with "not a public IP address"        | SSRF guard working as designed; test code may use the tools testhook    |
+| frontend asset verification fails                   | re-run `npm run build`, commit `web/static`                             |
+| releasegate fails                                   | unanchored `.gitignore` pattern or missing source package               |
+| phantom `web/static` deletions after build          | stray committed file inside `web/static` — remove it, sync is canonical |

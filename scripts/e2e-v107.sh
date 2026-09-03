@@ -11,11 +11,10 @@
 #     log; the carried tail does not contain the fact).
 #  4. Enhance() best-effort refinement against the live endpoint.
 set -u
-cd /home/z/my-project/sheytan-go
+cd "$(dirname "$0")/.."
 
-export GOROOT=/home/z/go-root/go
-export PATH=$GOROOT/bin:/home/z/mingw32/extracted/usr/bin:$PATH
-export GOPATH=/home/z/go
+# Portable toolchain: use the go binary from PATH (no machine-specific
+# GOROOT/GOPATH/mingw hacks — the Zeta tree cross-builds with stock Go).
 export GOFLAGS=-mod=mod
 
 export SHEYTAN_DATA_DIR=/tmp/e2e-v107-data

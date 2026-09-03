@@ -10,7 +10,7 @@
 #     may or may not be vision-capable — the wire format must never break).
 #  3. Persistent recall regression across sessions.
 set -u
-cd /home/z/my-project/sheytan-go
+cd "$(dirname "$0")/.."
 
 export SHEYTAN_DATA_DIR=/tmp/e2e-v106-data
 export SHEYTAN_PROVIDER=remote

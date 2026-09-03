@@ -1258,7 +1258,7 @@ artifact upload, and release attachment never ran.
   (`versionLessThan` helper added). The embedded workflow assertions were
   updated to the real build-windows.yml layout (double-quoted
   `go-version: "1.26"`, block-list branch triggers, `runs-on:
-  windows-latest`, checkout@v5 / setup-go@v6 / setup-node@v5 /
+windows-latest`, checkout@v5 / setup-go@v6 / setup-node@v5 /
   upload-artifact@v5).
 
 ### Packaging and docs
@@ -1294,3 +1294,84 @@ go build -o stress ./scripts/stress-main && stress            # 174 pass / 0 fai
 The remaining CI surface (frontend typecheck/lint/format/build, exe
 artifact, signature probe) was already green on the failing run; with the
 Go test step fixed, the workflow is expected to pass end to end.
+
+---
+
+## 2026-09-03 — Zeta Final (actual): the Fyne deletion that finally landed
+
+### The pattern that kept CI red
+
+Two consecutive worklog entries ("Zeta Build Repair Session" and "Zeta
+Final: Fyne Removal Completed, CI Green") recorded the removal of
+`internal/ui/` as DONE, while `git log --diff-filter=D -- internal/ui/`
+returns nothing — no commit ever deleted the directory. The docs, the
+README and agent.md were all updated to describe a tree that did not
+exist: `go.mod` had no fyne module (correct), but the 32-file legacy Fyne
+package was still tracked, so `go test ./internal/...` failed to compile
+`internal/ui` at "Run internal unit tests" and every workflow run since
+stayed red at exactly that step (latest observed: run 33707761443 for
+commit 9d11f4a). The lesson: a removal is not done until `git status`
+shows the deletions staged AND the CI-equivalent commands pass locally.
+
+### What this session actually did
+
+- `internal/ui/` deleted FOR REAL — `git rm -r` of all 32 tracked files
+  (444 KB: widgets, views, icons, theme, boot, anim, continuum, and the
+  whole headless test battery). Nothing imported the package; `go build`,
+  `go vet`, `go test` and the stress suite are all green without it.
+- Stale pre-React static assets removed from `web/static/`
+  (`app.js`, `styles.css`, `icons/logo.svg`) — leftovers of the old
+  hand-written vanilla-JS UI that `scripts/sync-web.mjs` wipes on every
+  build; keeping them tracked made every fresh `npm run build` show
+  phantom deletions.
+- `.gitignore`: added `/node_modules/` and `/vendor/` (root-anchored,
+  releasegate-safe). Without it, a `git add .` on a machine that ran
+  `npm install` would commit the whole dependency tree.
+- `.github/workflows/build-windows.yml`: `npm install` → `npm ci`
+  (lockfile-disciplined, deterministic), `package-manager-cache: false` →
+  `cache: npm`, and the format step no longer MUTATES the tree in CI
+  (`npm run format` removed, only `format:check` remains — the repo files
+  are now prettier-clean so the check passes honestly).
+- `scripts/e2e-v108.sh`: check 3 still ran the deleted
+  `TestSafeTapRecoversPanic` from `./internal/ui/`; replaced with a
+  source-level assertion that the AURORA panic-guard scenarios survive in
+  `cmd/stress_v108.go` (where the coverage actually lives now). Also
+  dropped the machine-specific GOROOT/GOPATH/mingw PATH hacks.
+- `scripts/e2e-v102.sh`, `e2e-v106.sh`, `e2e-v107.sh`: `cd
+/home/z/my-project/sheytan-go` (a directory that no longer exists) →
+  portable `cd "$(dirname "$0")/.."`; e2e-v107 keeps a stock-`go` PATH.
+- README verification commands: noted `npm ci` + `format:check` so local
+  verification mirrors the updated workflow exactly.
+
+### Verification performed (CI-equivalent, Linux host)
+
+```bash
+npm ci                                    # 0 vulnerabilities
+npm run typecheck                         # clean
+npm run lint                              # 0 warnings, 0 errors
+npm run format:check                      # clean (agent.md/worklog.md formatted)
+npm run build                             # tsc -b + vite + sync:web
+test -f web/static/index.html && grep -q 'type="module"' web/static/index.html  # OK
+go run ./scripts/gen-syso                 # syso regenerated, Parsa Tak UTF-16 present
+GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build ./...                     # clean
+GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go vet ./...                       # clean
+go test -tags headless ./internal/...     # all ok EXCEPT internal/desktop
+                                          # (Linux host lacks GTK4/WebKitGTK
+                                          # cgo headers; CI runs windows-latest
+                                          # where Wails v3 needs no cgo — the
+                                          # Windows cross-build covers compile)
+go test -count=2 ./internal/releasegate/  # gitignore gate green after edits
+go build -o /tmp/sheytan-stress ./scripts/stress-main && \
+SHEYTAN_DATA_DIR=/tmp/sheytan-stress-root /tmp/sheytan-stress stress
+                                          # 174 pass / 0 fail
+GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build \
+  -buildvcs=false -ldflags="-s -w -H=windowsgui" \
+  -o dist/sheytan-local-agent .           # 17.9 MB exe
+python3 signature probe on the exe        # "Parsa Tak" UTF-16 found
+go mod tidy                               # go.mod/go.sum unchanged
+```
+
+With the compile blocker gone, the next push to `main` should take the
+workflow past "Run internal unit tests" through vet, the Windows exe
+build, the signature probe, and artifact upload. Tag pushes attach the
+exe to the GitHub release.

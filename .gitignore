@@ -48,3 +48,9 @@ Thumbs.db
 
 # Vite build output (synced into web/static at build time)
 /dist/
+
+# Node frontend dependencies (npm install — root only, never commit)
+/node_modules/
+
+# Go module cache/proxies pulled by local tooling
+/vendor/
