@@ -1,6 +1,12 @@
-import { type FormEvent, useEffect, useMemo, useState } from "react";
+import {
+  type FormEvent,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 
 import ActivityStream from "./ActivityStream";
+import { api, type RuntimeConfig } from "./api";
 import { initializeAgent } from "./agent-init";
 import { useRuntimeStore } from "./store";
 
@@ -10,7 +16,6 @@ function ActivityCount() {
   return (
     <div className="metric-card">
       <span>Events</span>
-
       <strong>{activityCount}</strong>
     </div>
   );
@@ -18,24 +23,17 @@ function ActivityCount() {
 
 function AgentBody() {
   const models = useRuntimeStore((state) => state.models);
-
   const sessions = useRuntimeStore((state) => state.sessions);
-
   const activeSessionId = useRuntimeStore((state) => state.activeSessionId);
-
   const loading = useRuntimeStore((state) => state.loading);
-
   const error = useRuntimeStore((state) => state.error);
-
   const running = useRuntimeStore((state) => state.running);
 
   const createSession = useRuntimeStore((state) => state.createSession);
-
   const deleteSession = useRuntimeStore((state) => state.deleteSession);
-
   const run = useRuntimeStore((state) => state.run);
-
   const abort = useRuntimeStore((state) => state.abort);
+  const refreshModels = useRuntimeStore((state) => state.refreshModels);
 
   const connectActivity = useRuntimeStore((state) => state.connectActivity);
 
@@ -44,20 +42,27 @@ function AgentBody() {
   );
 
   const [message, setMessage] = useState("");
+  const [config, setConfig] = useState<RuntimeConfig | null>(null);
+  const [modelBusy, setModelBusy] = useState(false);
+  const [engineBusy, setEngineBusy] = useState(false);
+  const [modelError, setModelError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
 
     void initializeAgent()
-      .then(() => {
-        if (!cancelled) {
-          connectActivity();
+      .then(async () => {
+        const runtimeConfig = await api.config();
+
+        if (cancelled) {
+          return;
         }
+
+        setConfig(runtimeConfig);
+        connectActivity();
       })
       .catch(() => {
-        // The initialization routine
-        // already records the error
-        // in the runtime store.
+        // Initialization records the main error in the runtime store.
       });
 
     return () => {
@@ -72,7 +77,6 @@ function AgentBody() {
   );
 
   const loadedModels = models?.loaded ?? [];
-
   const localModels = models?.local ?? [];
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -89,7 +93,7 @@ function AgentBody() {
     try {
       await run(value);
     } catch {
-      // The store exposes the error state.
+      // Store exposes the runtime error.
     }
   }
 
@@ -97,7 +101,7 @@ function AgentBody() {
     try {
       await createSession();
     } catch {
-      // The store exposes the error state.
+      // Store exposes the runtime error.
     }
   }
 
@@ -109,7 +113,61 @@ function AgentBody() {
     try {
       await deleteSession(activeSessionId);
     } catch {
-      // The store exposes the error state.
+      // Store exposes the runtime error.
+    }
+  }
+
+  async function switchModel(nextModel: string) {
+    if (!nextModel || nextModel === config?.model || modelBusy) {
+      return;
+    }
+
+    setModelBusy(true);
+    setModelError(null);
+
+    try {
+      const nextConfig = await api.updateConfig({
+        model: nextModel,
+      });
+
+      setConfig(nextConfig);
+
+      if (models?.llamaRunning) {
+        await api.llama("stop");
+      }
+
+      await api.llama("start");
+      await refreshModels();
+    } catch (switchError) {
+      setModelError(
+        switchError instanceof Error
+          ? switchError.message
+          : "Unable to switch model.",
+      );
+    } finally {
+      setModelBusy(false);
+    }
+  }
+
+  async function toggleEngine() {
+    if (engineBusy) {
+      return;
+    }
+
+    setEngineBusy(true);
+    setModelError(null);
+
+    try {
+      await api.llama(models?.llamaRunning ? "stop" : "start");
+      await refreshModels();
+    } catch (engineError) {
+      setModelError(
+        engineError instanceof Error
+          ? engineError.message
+          : "Unable to control the local engine.",
+      );
+    } finally {
+      setEngineBusy(false);
     }
   }
 
@@ -137,7 +195,6 @@ function AgentBody() {
           <div className="panel-heading">
             <div>
               <span className="eyebrow">RUNTIME</span>
-
               <strong>System</strong>
             </div>
           </div>
@@ -145,19 +202,16 @@ function AgentBody() {
           <div className="runtime-grid">
             <div className="metric-card">
               <span>Sessions</span>
-
               <strong>{sessions.length}</strong>
             </div>
 
             <div className="metric-card">
               <span>Local models</span>
-
               <strong>{localModels.length}</strong>
             </div>
 
             <div className="metric-card">
               <span>Loaded</span>
-
               <strong>{loadedModels.length}</strong>
             </div>
 
@@ -165,11 +219,53 @@ function AgentBody() {
           </div>
 
           <div className="runtime-section">
+            <span className="eyebrow">MODEL</span>
+
+            <select
+              className="runtime-select"
+              value={config?.model ?? ""}
+              onChange={(event) => void switchModel(event.target.value)}
+              disabled={
+                modelBusy ||
+                config?.provider !== "local" ||
+                localModels.length === 0
+              }
+            >
+              <option value="">
+                {localModels.length === 0
+                  ? "No local GGUF models found"
+                  : "Select local model"}
+              </option>
+
+              {localModels.map((model) => (
+                <option key={model.id} value={model.id}>
+                  {model.name}
+                </option>
+              ))}
+            </select>
+
+            <div className="session-detail">
+              <span>ACTIVE</span>
+              <strong>
+                {config?.model ||
+                  activeSession?.model ||
+                  "No model selected"}
+              </strong>
+            </div>
+
+            {modelBusy ? (
+              <span className="runtime-hint">Switching model…</span>
+            ) : null}
+          </div>
+
+          <div className="runtime-section">
             <span className="eyebrow">ENGINE</span>
 
             <div className="engine-status">
               <span
-                className={`status-dot ${models?.llamaRunning ? "ready" : ""}`}
+                className={`status-dot ${
+                  models?.llamaRunning ? "ready" : ""
+                }`}
               />
 
               <div>
@@ -182,10 +278,23 @@ function AgentBody() {
                 <span>
                   {models?.llamaRunning
                     ? "Inference backend available"
-                    : "Start a local model when needed"}
+                    : "Local inference is stopped"}
                 </span>
               </div>
             </div>
+
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={() => void toggleEngine()}
+              disabled={engineBusy}
+            >
+              {engineBusy
+                ? "Working…"
+                : models?.llamaRunning
+                  ? "Stop engine"
+                  : "Start engine"}
+            </button>
           </div>
 
           <div className="runtime-section">
@@ -193,7 +302,6 @@ function AgentBody() {
 
             <div className="session-detail">
               <span>ID</span>
-
               <strong>
                 {activeSessionId ? activeSessionId.slice(0, 16) : "None"}
               </strong>
@@ -201,8 +309,7 @@ function AgentBody() {
 
             <div className="session-detail">
               <span>MODEL</span>
-
-              <strong>{activeSession?.model || "Automatic"}</strong>
+              <strong>{activeSession?.model || config?.model || "Global"}</strong>
             </div>
           </div>
 
@@ -246,7 +353,6 @@ function AgentBody() {
             onKeyDown={(event) => {
               if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
                 event.preventDefault();
-
                 event.currentTarget.form?.requestSubmit();
               }
             }}
@@ -279,6 +385,12 @@ function AgentBody() {
           </div>
         </div>
       </form>
+
+      {modelError ? (
+        <div className="error-banner" role="alert">
+          <span>{modelError}</span>
+        </div>
+      ) : null}
 
       {error ? (
         <div className="error-banner" role="alert">
