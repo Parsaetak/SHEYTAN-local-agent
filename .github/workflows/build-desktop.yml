@@ -34,6 +34,20 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
+      - name: Verify Node and repository layout
+        shell: pwsh
+        run: |
+          node --version
+          npm --version
+
+          if (-not (Test-Path "package.json")) {
+            throw "Root package.json was not found."
+          }
+
+          if (Test-Path "web/package.json") {
+            throw "Unexpected web/package.json found. Frontend is expected at repository root."
+          }
+
       - name: Install frontend dependencies
         shell: pwsh
         run: npm install
@@ -208,20 +222,22 @@ jobs:
           try {
             $entries = @($archive.Entries | ForEach-Object { $_.FullName })
 
-            if (-not ($entries -contains "SHEYTAN-Local-Agent/")) {
-              $hasRootFiles = $entries | Where-Object {
-                $_ -like "SHEYTAN-Local-Agent/*"
-              }
-
-              if (-not $hasRootFiles) {
-                throw "ZIP does not contain the expected SHEYTAN-Local-Agent/ root directory."
-              }
-            }
-
             if (-not ($entries | Where-Object {
               $_ -like "SHEYTAN-Local-Agent/SHEYTAN-Local-Agent.exe"
             })) {
-              throw "ZIP does not contain the Windows executable at the expected path."
+              throw "ZIP does not contain SHEYTAN-Local-Agent/SHEYTAN-Local-Agent.exe."
+            }
+
+            if (-not ($entries | Where-Object {
+              $_ -like "SHEYTAN-Local-Agent/models/*"
+            })) {
+              throw "ZIP does not contain the models directory."
+            }
+
+            if (-not ($entries | Where-Object {
+              $_ -like "SHEYTAN-Local-Agent/workspace/*"
+            })) {
+              throw "ZIP does not contain the workspace directory."
             }
           }
           finally {
@@ -264,6 +280,18 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
+
+      - name: Verify Node and repository layout
+        run: |
+          node --version
+          npm --version
+
+          test -f package.json
+
+          if [ -f web/package.json ]; then
+            echo "Unexpected web/package.json found."
+            exit 1
+          fi
 
       - name: Install frontend dependencies
         run: npm install
@@ -320,9 +348,10 @@ jobs:
         run: |
           exe="dist/linux/app/SHEYTAN-Local-Agent/SHEYTAN-Local-Agent"
 
-          file "$exe"
-
+          test -f "$exe"
           test -x "$exe"
+
+          file "$exe"
 
           size="$(stat -c '%s' "$exe")"
 
@@ -403,12 +432,16 @@ jobs:
 
           test -f "$zip"
 
-          unzip -l "$zip"
-
-          unzip -Z1 "$zip" | grep -q '^SHEYTAN-Local-Agent/'
+          unzip -t "$zip"
 
           unzip -Z1 "$zip" | grep -q \
             '^SHEYTAN-Local-Agent/SHEYTAN-Local-Agent$'
+
+          unzip -Z1 "$zip" | grep -q \
+            '^SHEYTAN-Local-Agent/models/'
+
+          unzip -Z1 "$zip" | grep -q \
+            '^SHEYTAN-Local-Agent/workspace/'
 
       - name: Upload Linux ZIP
         uses: actions/upload-artifact@v4
