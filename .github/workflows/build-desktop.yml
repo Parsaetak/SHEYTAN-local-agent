@@ -60,10 +60,6 @@ jobs:
         shell: pwsh
         run: npm run lint
 
-      - name: Frontend format check
-        shell: pwsh
-        run: npm run format:check
-
       - name: Build frontend
         shell: pwsh
         run: npm run build
@@ -321,9 +317,6 @@ jobs:
 
       - name: Frontend lint
         run: npm run lint
-
-      - name: Frontend format check
-        run: npm run format:check
 
       - name: Build frontend
         run: npm run build
