@@ -1,433 +1,1243 @@
 # SHEYTAN-Local-Agent — Agent Context
 
-> Handoff document for the next agent working on this repository.
-> Current release: **v1.1.1Z (Zeta)** — 2026-09-03.
-
-## Project
+> Persistent engineering handoff for the next agent working on this repository.
+>
+> Current stable release: **v1.1.1Z (Zeta)**
+>
+> Current development target: **v1.1.2Z — AAA Application Completion**
 
 Repository:
 
 https://github.com/Parsaetak/SHEYTAN-local-agent
 
-Product:
-
-**SHEYTAN-Local-Agent**
-
-Current release:
-
-**1.1.1 — Zeta**
-
-Core principle:
-
-> The model proposes. The tools execute. The laboratory verifies.
-
-This repository is a local-first autonomous AI software-engineering laboratory
-and agent.
-
-The system is expected to become a practical desktop application, not a
-demonstration UI.
-
 ---
 
-# 1. Non-negotiable development rules
+# 1. Mission
+
+SHEYTAN-Local-Agent is a local-first autonomous AI software-engineering environment.
+
+The product principle is:
+
+> **The model proposes. The tools execute. The laboratory verifies.**
+
+SHEYTAN is not intended to remain a chatbot with engineering tools attached.
+
+The v1.1.2Z target is a complete premium desktop engineering application.
+
+The target experience is:
+
+
+AI agent
++
+local models
++
+tools
++
+research
++
+memory
++
+coding laboratory
++
+verification
++
+desktop UX
++
+advanced runtime control
+
+All major sections must be functional.
+
+2. Current Release State
+
+Current stable release:
+
+Version:  1.1.1
+Codename: Zeta
+Tag:      v1.1.1Z
+
+Verified release assets:
+
+SHEYTAN-Local-Agent-Windows-x64-v1.1.1Z.zip
+SHEYTAN-Local-Agent-Linux-x64-v1.1.1Z.zip
+
+The v1.1.1Z release established the working portable Windows/Linux release baseline.
+
+Next release target:
+
+Version:  1.1.2
+Codename: Zeta
+Tag:      v1.1.2Z
+
+v1.1.2Z is a major product-completion milestone.
+
+3. Non-Negotiable Development Rules
+Inspect the live GitHub repository before making assumptions.
+Verify the exact current main commit SHA.
+Inspect the relevant files before editing.
+Inspect current GitHub Actions when CI/build behavior is involved.
+Inspect actual workflow logs when diagnosing failures.
+Verify release assets when release packaging is involved.
+Never claim success without evidence.
+Never assume a pushed change worked because a commit exists.
+Preserve the current architecture unless there is a demonstrated engineering reason to change it.
+Prefer coherent incremental improvements over unnecessary rewrites.
+Provide complete replacement files when the user needs to manually replace code.
+Do not reintroduce deleted legacy architecture.
+Do not recreate the Fyne UI.
+Do not recreate internal/ui.
+Do not accumulate old cmd/stress_vNNN.go files.
+Do not restore retired e2e scripts.
+Keep frontend package configuration at repository root.
+Do not create web/package.json.
+Keep secrets out of frontend responses.
+Keep secrets out of committed configuration.
+Do not silently weaken security policy to make a feature easier.
+Long-running operations require cancellation, timeout, cleanup, and bounded output.
+User-visible functionality is not complete just because a button or endpoint exists.
+Never use fake success states.
+Prefer actual runtime state over optimistic UI state.
+Do not add animation that materially damages responsiveness.
+Do not trade 120Hz responsiveness for decorative visual effects.
+Respect reduced-motion preferences.
+Keep critical execution logic in Go.
+Keep presentation logic in React.
+Maintain static-export/embed compatibility.
+Do not introduce a major framework migration without clear evidence.
+When the user says done, check verify and continue, inspect, verify, diagnose, then continue.
+4. Current Architecture
+Backend
+Go 1.26
+Wails v3
+Go HTTP API
+WebSocket activity
+
+Primary packages:
+
+internal/runtime
+internal/api
+internal/config
+internal/llm
+internal/agent
+internal/tools
+internal/memory
+internal/recall
+internal/lab
+internal/research
+internal/browser
+internal/vision
+internal/sandbox
+internal/sessions
+internal/logging
+internal/desktop
+internal/diagnostics
+internal/sysinfo
+internal/updater
+5. Desktop Shell
 
-When working on this repository:
+The shipping desktop application uses Wails v3.
 
-1. Inspect the live GitHub repository before making assumptions.
-2. Inspect the relevant GitHub Actions workflow and its latest run.
-3. Inspect actual workflow logs when diagnosing failures.
-4. Never assume a pushed change worked just because a commit exists.
-5. After changes, run the relevant checks and verify the resulting state.
-6. Preserve the current architecture unless there is a demonstrated reason to change it.
-7. Prefer small, stable, testable changes over unnecessary rewrites.
-8. Do not reintroduce deleted legacy architecture (no Fyne UI, no
-   `internal/ui`, no versioned `cmd/stress_v*.go` files, no old e2e scripts).
-9. Keep frontend rendering efficient and avoid unnecessary dependencies.
-10. Provide complete replacement files when asking a human to replace code.
-11. Never put Markdown code fences inside YAML workflow files.
-12. Never perform repository formatting writes inside CI merely to make checks pass.
-13. Secrets must never be exposed in frontend responses or committed configuration.
-14. Do not claim success without evidence.
-15. The frontend npm package lives at the **repository root** (`package.json`
-    at root, source in `src/`). There is NO `web/package.json` — the workflow
-    explicitly fails if one appears. Do not move the frontend package.
+Windows
+ └── WebView2
 
----
+Linux
+ └── WebKitGTK 6.0
 
-# 2. Current architecture
+The frontend is embedded into the desktop executable.
 
-## Backend
+Production architecture:
 
-Language:
+React/Vite assets
+      ↓
+web/static
+      ↓
+Go embed
+      ↓
+Wails desktop shell
+      ↓
+Go API + WebSocket
 
-Go 1.26 (pinned in CI via `GO_VERSION`)
+There is no separate production frontend server.
 
-Desktop runtime:
+6. Frontend
 
-Wails v3 (`wails/v3 v3.0.0-beta.16`)
+The frontend uses:
 
-Main runtime:
+React
+TypeScript
+Vite
+Zustand
+lightweight icon library
 
-`internal/runtime`
+Frontend package lives at:
 
-API:
+package.json
+package-lock.json
+src/
 
-`internal/api`
+There is intentionally no:
 
-Configuration:
+web/package.json
 
-`internal/config`
+Build path:
 
-LLM integration:
-
-`internal/llm`
-
-Agent:
-
-`internal/agent`
-
-Tools:
-
-`internal/tools`
-
-Memory / recall:
-
-`internal/memory`
-
-Coding Lab:
-
-`internal/lab`
-
-Research:
-
-`internal/research`
-
-Desktop shell:
-
-`internal/desktop` (imports `wails/v3/pkg/application`)
-
----
-
-# 3. Frontend
-
-The current production desktop UI is:
-
-- React
-- TypeScript
-- Vite
-- Zustand
-- Lucide / lightweight icon usage
-- built with **Node 24** (pinned in CI via `actions/setup-node@v4`)
-- embedded under `web/static` (committed; regenerated by CI on every build)
-- served by the Go/Wails runtime through `web/embed.go`
-
-The active desktop path is:
-
-`internal/desktop`
-
-The old Fyne UI (`internal/ui`) was deliberately removed. Do not recreate,
-import, or restore it.
-
-Frontend build pipeline:
-
-```text
-npm install
-npm run typecheck      (tsc --noEmit)
-npm run lint           (oxlint)
-npm run build          (tsc -b && vite build && node scripts/sync-web.mjs)
-```
-
-`scripts/sync-web.mjs` wipes `web/static` and copies the fresh Vite `dist/`
-into it, so the Go binary embeds the current UI.
-
-The UI panels are: `AgentBody`, `AgentSidebar`, `AgentHeader`, `LabPanel`,
-`ResearchPanel`, `SettingsPanel` (lazy-loaded workspace layers routed by
-`src/App.tsx` + `src/workspace.ts`).
-
----
-
-# 4. CI contract (v1.1.1Z)
-
-The workflow is `.github/workflows/build-desktop.yml`. It builds:
-
-- Windows x64 (`windows-latest`, CGO_ENABLED=0 — Wails v3 needs no cgo on
-  Windows)
-- Linux x64 (`ubuntu-24.04`, CGO_ENABLED=1)
-
-**The single most important lesson of v1.1.1Z:** Wails v3 on Linux links
-GTK4 + WebKitGTK 6.0 through cgo + pkg-config. The Linux job MUST install:
-
-```text
-libgtk-4-dev
-libwebkitgtk-6.0-dev
-libsoup-3.0-dev
-pkg-config
-zip
-```
-
-The v1.1.0 workflow installed the Wails v2 era packages
-(GTK3/WebKit2-4.1) and every Linux job failed at "Go tests" with
-"Package gtk4 was not found" (runs 13–19). The `zeta_release_surface`
-stress test guards this — do not regress it.
-
-Frontend validation (both jobs):
-
-- `npm install`
-- `npm run typecheck`
-- `npm run lint`
-- `npm run build`
-- verify `web/static/index.html` exists
-
-Backend validation:
-
-- `go test ./internal/... -tags headless -count=1`
-- `go test ./... -run Test -count=1`
-- `go vet ./...`
-- platform executable smoke test (`exe version`)
-
-Windows extras:
-
-- `go run ./scripts/gen-syso` regenerates the exe resources (brand icon,
-  Parsa Tak signature, DPI-aware manifest) before `go build`
-- link flag: `-H=windowsgui` (GUI subsystem, no console flash)
-- `sheytan-local-agent.bat` is copied into the portable ZIP
-
-CI intentionally does NOT run `npm run format:check` (the repository-wide
-Prettier gate was removed — it blocked CI before the real build). Do not
-reintroduce it.
-
-Node toolchain: pinned to 24 via `actions/setup-node@v4` with npm caching.
-Do not go back to relying on the hosted runner's implicit Node.
-
----
-
-# 5. Release packaging
-
-The primary user distribution must be **portable ZIP packages**.
-
-There must be exactly two primary desktop packages:
-
-1. Windows x64
-2. Linux x64
-
-Expected names (v1.1.1Z):
-
-`SHEYTAN-Local-Agent-Windows-x64-v1.1.1Z.zip`
-
-`SHEYTAN-Local-Agent-Linux-x64-v1.1.1Z.zip`
-
-Each archive must contain a single top-level directory:
-
-`SHEYTAN-Local-Agent/`
-
-The executable, runtime data, models directory, sessions, workspace, logs,
-configuration, and supporting files must remain together.
-
-The user should be able to:
-
-1. extract the ZIP;
-2. open the `SHEYTAN-Local-Agent` folder;
-3. run the application;
-4. continue using the same folder later.
-
-Do not make raw standalone executables the primary release assets.
-
-Publishing a release:
-
-```bash
-git tag v1.1.1Z
-git push origin v1.1.1Z
-```
-
-Tag pushes (`v*`) trigger `softprops/action-gh-release@v2`, which attaches
-both ZIPs to the GitHub Release. Verify the release assets actually appear
-— never assume.
-
-Portable data must be relative to the application root unless an explicit
-user configuration overrides it (`config.DefaultPath()` implements portable
-mode; `SHEYTAN_DATA_DIR` can override).
-
----
-
-# 6. Testing workflow
-
-## Before
-
-Inspect:
-
-- live repository
-- relevant files
-- current branch
-- Actions
-- latest successful/failed run
-- release state when packaging is involved
-
-## During
-
-Make the smallest coherent change.
-
-Prefer complete file replacements for manually applied frontend changes.
-
-## After
-
-Run:
-
-```bash
-# Frontend
 npm install
 npm run typecheck
 npm run lint
 npm run build
 
-# Go (Linux host without GTK4 headers: exclude internal/desktop,
-# use the Windows cross-build to cover it — CI installs the headers)
+Build synchronization:
+
+Vite dist
+ ↓
+scripts/sync-web.mjs
+ ↓
+web/static
+
+web/static is committed because the Go application embeds it.
+
+Whenever src/ changes:
+
+rebuild frontend
++
+update web/static
+7. Current UI Workspaces
+
+Current frontend workspaces include:
+
+AgentBody
+AgentSidebar
+AgentHeader
+LabPanel
+ResearchPanel
+SettingsPanel
+
+Workspace routing is controlled through:
+
+src/App.tsx
+src/workspace.ts
+
+Large workspace components should remain lazy-loaded.
+
+8. v1.1.2Z Product Definition
+
+v1.1.2Z is the AAA application milestone.
+
+It must complete all major user-facing areas:
+
+Agent
+Sessions
+Models
+Engine
+Settings
+Coding Lab
+Research
+Memory
+Recall
+Browser
+Vision
+Tools
+Diagnostics
+Logs
+Hardware
+Updates
+
+Every major section must be usable.
+
+A visible control must map to:
+
+real frontend action
+ ↓
+real API call
+ ↓
+real backend operation
+ ↓
+real state refresh
+
+No fake controls.
+
+No dead-end flows.
+
+No buttons that exist only visually.
+
+9. Agent Workspace Requirements
+
+The Agent is the primary interface.
+
+Required:
+
+new session
+message input
+streaming assistant output
+conversation history
+tool calls
+tool results
+research events
+verification events
+errors
+cancellation
+retry
+regenerate
+model visibility
+runtime state
+attachments
+
+The user must always be able to understand:
+
+what SHEYTAN is doing
+what tool is running
+whether the engine is ready
+whether the task succeeded
+why it failed
+10. Model Requirements
+
+Model management must be real.
+
+Required:
+
+discover local GGUF models
+refresh models
+show metadata where available
+show size
+show path
+show loaded state
+select model
+load
+unload/stop engine
+restart
+health state
+
+Model state must distinguish:
+
+missing
+available
+loading
+loaded
+running
+stopping
+stopped
+error
+
+The frontend must not claim a model is active until the runtime confirms it.
+
+11. Engine Requirements
+
+Required engine operations:
+
+start
+stop
+restart
+status
+health
+active model
+endpoint
+process state
+
+State should represent actual runtime/process state.
+
+Target state machine:
+
+idle
+starting
+ready
+busy
+stopping
+stopped
+failed
+12. LLM / Inference Requirements
+
+Advanced inference controls should be available where supported:
+
+temperature
+top-p
+top-k
+min-p
+repeat penalty
+max tokens
+context size
+seed
+grammar/structured output where supported
+threads
+parallelism
+GPU layers where supported
+batch parameters where supported
+
+Unsupported parameters must not silently appear functional.
+
+13. Presets
+
+Presets must modify actual runtime behavior.
+
+Suggested built-ins:
+
+Balanced
+Fast
+Reasoning
+Coding
+Research
+Creative
+Low Memory
+High Quality
+
+The active preset must be visible.
+
+Custom configuration should remain possible.
+
+14. Agent Behavior
+
+Advanced agent configuration should include:
+
+planning
+autonomy
+tool use
+research
+memory
+verification
+repair
+iteration limits
+timeouts
+parallelism
+
+Dangerous controls require explicit UI treatment.
+
+15. Tool Registry
+
+Tools are first-class components.
+
+UI should expose:
+
+name
+category
+description
+enabled state
+availability
+recent activity
+errors
+
+Categories include:
+
+filesystem
+shell
+git
+browser
+research
+vision
+memory
+sandbox
+process
+diagnostics
+
+Tool execution should appear in the activity stream.
+
+16. Coding Lab
+
+Coding Lab is the engineering execution core.
+
+Required workflow:
+
+select project
+ ↓
+create isolated workspace
+ ↓
+inspect
+ ↓
+edit
+ ↓
+run
+ ↓
+verify
+ ↓
+review
+ ↓
+promote/discard
+
+Required UI:
+
+project selector
+workspace selector
+file tree
+file view/editor
+diff viewer
+terminal
+test/build actions
+verification panel
+workspace state
+promotion controls
+
+Verification is authoritative.
+
+The model does not decide whether a task passed.
+
+17. Coding Lab Security
+
+Preserve:
+
+path validation
+base directory restrictions
+workspace isolation
+symlink protection
+Git policy
+shell policy
+network policy
+destructive command policy
+process-tree cancellation
+timeouts
+bounded output
+environment sanitization
+
+Never weaken these controls to make UI behavior easier.
+
+18. Research
+
+Research must provide:
+
+query
+provider
+results
+authority
+relevance
+URL
+snippet
+source metadata
+
+Research is evidence.
+
+Research does not become unquestioned truth.
+
+Existing providers may include:
+
+Auto
+GitHub
+Reddit
+SearXNG
+DuckDuckGo
+Web compatibility alias
+
+Maintain bounded requests and response bodies.
+
+Maintain SSRF protections.
+
+19. Memory / Recall
+
+Memory must be inspectable.
+
+Required:
+
+list
+search
+inspect
+delete
+refresh
+metadata
+
+Recall should show useful context provenance without exposing unnecessary internal prompt details.
+
+Memory IDs must remain collision-safe.
+
+20. Browser / Vision
+
+Browser activity must be visible.
+
+Show:
+
+browser state
+task
+URL
+page title
+screenshots
+errors
+cancellation
+
+Vision must expose actual processing state and results.
+
+Both must preserve existing safety boundaries.
+
+21. Attachments
+
+Agent attachments should support:
+
+select
+stage
+inspect
+remove
+show in conversation
+
+Use controlled file staging.
+
+Do not blindly insert arbitrary binary content into prompts.
+
+Enforce file-size and processing bounds.
+
+22. Sessions
+
+Sessions are persistent units of interaction.
+
+Required:
+
+create
+rename
+switch
+delete
+history
+active model
+activity
+metadata
+
+Future candidates:
+
+search
+pin
+archive
+export
+
+Frontend and backend session state must remain synchronized.
+
+23. Settings
+
+Organize Settings into:
+
+General
+Models
+Inference
+Agent
+Tools
+Browser
+Vision
+Memory
+Coding Lab
+Research
+Engine
+Network
+Security
+Performance
+Diagnostics
+Updates
+About
+
+Prefer progressive disclosure.
+
+Do not force users to manually edit configuration files for common operations.
+
+24. Diagnostics / Logs
+
+Diagnostics should include:
+
+runtime health
+engine health
+API health
+model state
+tool state
+memory state
+recent errors
+performance
+logs
+export
+
+Logs UI should support:
+
+filter
+search
+severity
+category
+timestamp
+copy
+export
+
+Keep secret redaction active.
+
+25. Hardware / System
+
+Expose detected information such as:
+
+OS
+CPU
+architecture
+cores
+RAM
+GPU
+VRAM
+available memory
+runtime state
+
+Never fabricate unsupported hardware data.
+
+26. Update System
+
+Expose:
+
+application version
+latest known version
+engine version
+manual check
+schedule
+update status
+
+Updates must be explicit and safe.
+
+27. AAA UI Requirements
+
+The application should feel like a polished desktop product.
+
+Target qualities:
+
+premium
+modern
+technical
+dense where useful
+clear
+responsive
+fast
+consistent
+
+Avoid:
+
+visual noise
+gratuitous animation
+fake loading
+over-large controls
+excessive empty space
+ambiguous actions
+unnecessary modal dialogs
+
+Use strong state communication:
+
+ready
+busy
+warning
+error
+success
+offline
+28. 120Hz / High-Refresh Target
+
+The application should target smooth interaction at:
+
+120 Hz
+
+The target is not merely a benchmark.
+
+It means:
+
+smooth scrolling
+responsive typing
+fast workspace switching
+stable activity stream
+responsive controls
+no visible stalls during inference
+
+Use:
+
+CSS transforms/opacity for motion
+small render surfaces
+memoization where useful
+stable Zustand selectors
+virtualized large lists
+debounced expensive operations
+bounded event buffers
+lazy loading
+
+Avoid:
+
+forced layout loops
+large synchronous work in render
+whole-app rerenders
+unnecessary DOM growth
+unbounded activity histories
+29. Motion System
+
+Use a consistent animation language.
+
+Animation categories:
+
+micro
+panel
+workspace
+status
+loading
+success
+error
+
+Motion should be:
+
+short
+purposeful
+interruptible
+cheap
+consistent
+
+Respect:
+
+prefers-reduced-motion
+
+Never block user input with animation.
+
+30. Performance Principles
+
+Performance is a feature.
+
+Protect:
+
+input latency
+scrolling
+workspace navigation
+WebSocket processing
+inference rendering
+tool output rendering
+filesystem interaction
+
+Large datasets should be:
+
+bounded
+virtualized
+paged
+incrementally rendered
+
+Long-running operations must never monopolize the UI.
+
+31. API / WebSocket Requirements
+
+API behavior must remain:
+
+session-aware
+bounded
+cancelable
+safe
+serializable
+
+WebSocket handling must support:
+
+connect
+disconnect
+reconnect where appropriate
+per-session activity
+bounded history
+
+Do not rerender the entire application for every event.
+
+32. Security Requirements
+
+Never regress:
+
+sandbox path validation
+workspace isolation
+SSRF controls
+DNS validation
+redirect validation
+shell policy
+Git policy
+process-tree cleanup
+secret redaction
+safe archive extraction
+
+The LLM is an untrusted proposal source.
+
+Runtime policy remains authoritative.
+
+33. CI Requirements
+
+Workflow:
+
+.github/workflows/build-desktop.yml
+
+Windows:
+
+windows-latest
+CGO_ENABLED=0
+
+Linux:
+
+ubuntu-24.04
+CGO_ENABLED=1
+
+Linux Wails v3 dependencies:
+
+libgtk-4-dev
+libwebkitgtk-6.0-dev
+libsoup-3.0-dev
+pkg-config
+zip
+
+Do not regress to:
+
+libgtk-3-dev
+libwebkit2gtk-4.1-dev
+
+Node must be pinned in CI.
+
+Current intended Node:
+
+Node 24
+
+Go:
+
+Go 1.26
+34. Frontend CI
+
+Required:
+
+npm install
+npm run typecheck
+npm run lint
+npm run build
+
+Verify:
+
+web/static/index.html
+
+exists after build.
+
+Do not reintroduce the old formatting gate merely to create another CI check.
+
+35. Backend CI
+
+Required:
+
 go test ./internal/... -tags headless -count=1
+go test ./... -run Test -count=1
 go vet ./...
 
-# Stress suite (headless entry point — no GTK needed)
-go build -o /tmp/sheytan-stress ./scripts/stress-main
-SHEYTAN_DATA_DIR=/tmp/sheytan-stress-root /tmp/sheytan-stress stress
-# expected: 32 pass / 0 fail
+Desktop build must be tested.
 
-# Windows cross-compile (mirrors CI's Windows job)
-GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go run ./scripts/gen-syso
-GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build \
-  -trimpath -ldflags="-s -w -H=windowsgui" -o /tmp/sheytan.exe .
-```
+Executable smoke test must validate actual output.
 
-Then verify:
+36. Release Packaging
 
-- generated frontend exists (`web/static/index.html`);
-- desktop executable exists;
-- application smoke test works (`serve` on a port, then curl `/api/state`);
-- ZIP contains the expected top-level folder;
-- release assets are correct.
+Primary release assets remain exactly:
 
----
+SHEYTAN-Local-Agent-Windows-x64-vX.Y.ZZ.zip
+SHEYTAN-Local-Agent-Linux-x64-vX.Y.ZZ.zip
 
-# 7. The stress suite (Zeta chaos suite)
+Each contains:
 
-The versioned stress files (`cmd/stress_v08.go` ... `cmd/stress_v110.go`)
-were retired in v1.1.1Z. The suite is now:
+SHEYTAN-Local-Agent/
 
-- `cmd/stress.go` — core hostile-input scenarios (empty/huge prompts,
-  garbage tool args, shell injection, circuit breaker, memory flood,
-  concurrent tools, unicode, null args...) plus current subsystem
-  contracts (memory store, sessions, JSON extraction, sandbox smoke).
-- `cmd/stress_zeta.go` — the release-surface contract
-  (`stressZetaReleaseSurface`): version floor, signer, Go/Node pins,
-  Linux CI dependencies, gen-syso, windowsgui, .bat packaging, ZIP
-  contract; plus `stressZetaMemoryUniqueIDs` (collision-proof IDs) and
-  `stressZetaTrimLogsRotate` (Windows-safe rotation).
+The application, models directory, workspace, runtime/supporting files remain together.
 
-Run via `sheytan stress` or the headless `scripts/stress-main`.
+Raw executables are not the primary release distribution.
 
-Feature coverage for vision / continuum / chunking / lab / llm / memory /
-recall / research / tools lives in the unit tests under `internal/*/`
-(`go test ./internal/... -tags headless`).
+37. Version Discipline
 
----
+For every release, synchronize:
 
-# 8. Standard completion phrase
+internal/config/config.go
+package.json
+build/config.yml
+.github/workflows/build-desktop.yml
+SIGNATURE
+portable scripts
+documentation where versioned
 
-When the user says "done, check verify and continue":
+For v1.1.2Z:
 
-Do not merely acknowledge it.
+APP_VERSION = 1.1.2
+Codename = Zeta
+Tag = v1.1.2Z
+38. Testing Philosophy
 
-Inspect the actual current GitHub state.
+A feature is complete only when:
 
-Verify the code.
+UI exists
++
+real API call exists
++
+backend behavior exists
++
+state refresh exists
++
+error path exists
++
+relevant tests pass
++
+CI passes
++
+built artifact contains it
 
-Verify Actions.
+A button is not a feature.
 
-Verify artifacts/releases.
+A setting is not a feature.
 
-Identify remaining problems.
+A TypeScript compile is not a feature.
 
-Then continue with the next highest-value improvement.
+A commit is not proof.
 
-Never assume the previous change worked.
+39. Stress Testing
 
----
+The current stress architecture uses the consolidated Zeta suite.
 
-# 9. Current product priorities
+Do not recreate:
 
-Priority order:
+cmd/stress_v08.go
+cmd/stress_v09.go
+...
 
-1. reliable portable Windows/Linux ZIP distribution (DONE for v1.1.1Z —
-   keep it green);
-2. usable Settings workspace (shipped: `SettingsPanel.tsx`);
-3. real model selection and engine control;
-4. richer Agent interaction;
-5. session management improvements;
-6. attachments/file staging;
-7. Coding Lab maturity (panel shipped: `LabPanel.tsx`);
-8. Research maturity (panel shipped: `ResearchPanel.tsx`);
-9. diagnostics/performance telemetry;
-10. broader integration and end-to-end testing.
+Extend:
 
-The application should progressively become a practical autonomous
-engineering workstation rather than a minimal chat shell.
+cmd/stress.go
+cmd/stress_zeta.go
 
----
+or add focused unit/integration tests under:
 
-# 10. Definition of done for user-facing features
+internal/*
 
-A user-facing feature is not complete merely because:
+Stress areas should include:
 
-- a button exists;
-- a setting appears;
-- TypeScript compiles;
-- a commit exists.
+memory uniqueness
+log rotation
+large inputs
+tool failures
+concurrency
+Unicode
+null/invalid arguments
+sandbox boundaries
+workspace security
+session behavior
+runtime lifecycle
+40. Standard User Workflow
 
-It is complete only when:
+When user says:
 
-- the UI exposes the feature clearly;
-- the frontend calls the real API;
-- the backend performs the intended action;
-- state is refreshed;
-- errors are visible;
-- the relevant tests/checks pass;
-- CI passes;
-- the resulting artifact contains the feature.
+done, check verify and continue
 
----
+perform:
 
-# 11. Design principle
+live repository inspection
+ ↓
+exact commit verification
+ ↓
+relevant file inspection
+ ↓
+Actions inspection
+ ↓
+logs inspection
+ ↓
+artifacts/release inspection
+ ↓
+identify defects
+ ↓
+implement next improvement
 
-SHEYTAN-Local-Agent should feel like a serious local AI engineering
-environment.
+Never merely acknowledge.
 
-The user should not need to edit `config.json` manually for normal
-operation.
+41. Development Priorities
 
-Common tasks should be possible directly inside the application: choose a
-model; start/stop the engine; adjust inference; configure tools; configure
-agent behavior; configure browser/vision; configure Coding Lab; configure
-Research; inspect hardware; manage sessions; run tasks; inspect execution;
-verify results.
+Unless evidence requires another order:
 
-The application should make the correct action easy and the dangerous
-action explicit.
+P0
+Agent core
+streaming
+tool visibility
+session state
+model/engine synchronization
 
----
+P0
+Model lifecycle
+discovery
+selection
+loading
+engine control
 
-# 12. Known-fixed issues (do not regress)
+P0
+Coding Lab execution
+terminal
+files
+diffs
+verification
 
-1. **Linux CI GTK mismatch** (fixed v1.1.1Z): Wails v3 needs
-   `libgtk-4-dev` + `libwebkitgtk-6.0-dev`; NOT the GTK3/WebKit2-4.1
-   packages.
-2. **Unanchored .gitignore** (fixed v1.0.11): runtime dirs in
-   `.gitignore` MUST keep their leading `/`. `internal/releasegate`
-   fails CI if a pattern swallows source. Gate: `go test
-   ./internal/...`.
-3. **Legacy Fyne UI** (removed in Zeta): never restore.
-4. **Versioned stress/e2e files** (removed in v1.1.1Z): never accumulate
-   `*_vNNN.go` scenario files again — extend the Zeta suite or the
-   `internal/` unit tests instead.
-5. **Stale embedded UI** (fixed v1.1.1Z): `web/static` must be a fresh
-   Vite build containing the `SettingsPanel` chunk. If you change
-   `src/`, rebuild and commit the new `web/static`.
-6. **Workflow version surface**: `APP_VERSION`, `config.AppVersion`,
-   `package.json` version, `build/config.yml` productVersion, SIGNATURE,
-   and the `.bat` header must all move together when the version changes.
+P1
+Research
+Memory
+Recall
+Browser
+Vision
+
+P1
+Advanced settings
+Diagnostics
+Hardware
+Updates
+
+P1
+AAA UI polish
+120Hz motion
+accessibility
+responsive design
+
+P0
+Integration tests
+stress
+Windows/Linux packaging
+release verification
+42. Current Known-Fixed Problems
+
+Do not regress:
+
+Linux GTK mismatch
+unanchored .gitignore rules
+legacy Fyne UI
+old versioned stress files
+old e2e tooling
+stale embedded frontend
+unsafe archive extraction
+sandbox timeout propagation
+process-tree leaks
+SSRF protections
+Git escape paths
+memory ID collisions
+log rotation issues
+43. Current Repository Baseline
+
+At the start of v1.1.2Z, the architecture includes:
+
+cmd/
+internal/
+src/
+scripts/
+web/
+.github/
+build/
+
+Important production files include:
+
+main.go
+main_windows.go
+main_other.go
+
+.github/workflows/build-desktop.yml
+
+src/App.tsx
+src/AgentBody.tsx
+src/SettingsPanel.tsx
+src/workspace.ts
+src/api.ts
+src/main.tsx
+
+internal/desktop
+internal/runtime
+internal/api
+internal/agent
+internal/llm
+internal/tools
+internal/lab
+internal/research
+internal/memory
+internal/recall
+internal/browser
+internal/vision
+44. Product Standard
+
+SHEYTAN should become:
+
+a local AI engineering workstation
+
+not:
+
+a chatbot with settings
+
+The core workflow is:
+
+ask
+ ↓
+understand
+ ↓
+inspect
+ ↓
+plan
+ ↓
+execute
+ ↓
+observe
+ ↓
+verify
+ ↓
+repair
+ ↓
+review
+ ↓
+finish
+
+Every step should be observable and trustworthy.
+
+45. Final v1.1.2Z Acceptance Criteria
+
+The release is considered complete only when all of the following are true:
+
+[ ] Agent is fully usable
+[ ] streaming works
+[ ] cancellation works
+[ ] retry works
+[ ] tool execution is visible
+[ ] sessions are usable
+[ ] models are discoverable
+[ ] models are selectable
+[ ] engine lifecycle works
+[ ] inference settings actually apply
+[ ] presets actually apply
+[ ] Coding Lab can execute work
+[ ] Coding Lab shows diffs
+[ ] Coding Lab runs verification
+[ ] Research works
+[ ] Memory is inspectable
+[ ] Recall is useful
+[ ] Browser is visible and functional
+[ ] Vision is functional
+[ ] attachments work
+[ ] diagnostics work
+[ ] logs are inspectable
+[ ] hardware information works
+[ ] updates are visible
+[ ] advanced settings work
+[ ] security remains enforced
+[ ] application stays responsive during long operations
+[ ] UI is optimized for high-refresh displays
+[ ] animations are smooth and purposeful
+[ ] reduced motion is respected
+[ ] Windows build passes
+[ ] Linux build passes
+[ ] Windows ZIP verified
+[ ] Linux ZIP verified
+[ ] stress suite passes
+[ ] integration tests pass
+[ ] release assets verified
+46. Guiding Rule
+
+The most important development rule for v1.1.2Z is:
+
+Do not build more surface area until the existing surface actually works.
+
+Prioritize:
+
+functional depth
+>
+state correctness
+>
+reliability
+>
+performance
+>
+polish
+>
+additional features
+
+The product must earn its visual sophistication through real functionality.
+
+47. Next Target
+
+The next implementation target after this handoff is:
+
+AGENT WORKSPACE COMPLETION
+
+Specifically:
+
+real streaming
++
+real session state
++
+real model/runtime state
++
+tool execution visibility
++
+cancellation
++
+retry/regenerate
++
+responsive rendering
+
+This is the foundation for the rest of v1.1.2Z.
