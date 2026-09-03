@@ -1,4 +1,4 @@
-export type WorkspaceView = "agent" | "lab" | "research";
+export type WorkspaceView = "agent" | "lab" | "research" | "settings";
 
 export type WorkspaceLayer = {
   id: WorkspaceView;
@@ -35,6 +35,14 @@ export const WORKSPACE_LAYERS: readonly WorkspaceLayer[] = [
     title: "External intelligence",
     description: "External evidence and sources",
     icon: "⌕",
+  },
+  {
+    id: "settings",
+    label: "Settings",
+    eyebrow: "SETTINGS",
+    title: "Runtime control",
+    description: "Models, engine, agent, and integrations",
+    icon: "⚙",
   },
 ] as const;
 
