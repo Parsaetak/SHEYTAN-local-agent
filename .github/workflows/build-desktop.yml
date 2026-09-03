@@ -16,7 +16,6 @@ permissions:
 
 env:
   GO_VERSION: "1.26"
-  NODE_VERSION: "22"
   APP_VERSION: "1.1.0"
   APP_CODENAME: "Zeta"
 
@@ -29,23 +28,24 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: Verify Node and repository layout
+      - name: Verify Node and repository
         shell: pwsh
         run: |
           node --version
           npm --version
+
+          $nodeMajor = [int](node --version).TrimStart("v").Split(".")[0]
+
+          if ($nodeMajor -lt 22) {
+            throw "Node.js 22 or newer is required."
+          }
 
           if (-not (Test-Path "package.json")) {
             throw "Root package.json was not found."
           }
 
           if (Test-Path "web/package.json") {
-            throw "Unexpected web/package.json found. Frontend is expected at repository root."
+            throw "Unexpected web/package.json found. Frontend package is expected at repository root."
           }
 
       - name: Install frontend dependencies
@@ -80,6 +80,13 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
+
+      - name: Verify Go
+        shell: pwsh
+        run: |
+          go version
+          go env GOOS
+          go env GOARCH
 
       - name: Go tests
         shell: pwsh
@@ -125,10 +132,12 @@ jobs:
             throw "Windows executable is suspiciously small: $size bytes."
           }
 
+          Write-Host "Windows executable size: $size bytes"
+
           & $exe version
 
           if ($LASTEXITCODE -ne 0) {
-            throw "Windows version smoke test failed."
+            throw "Windows executable version smoke test failed."
           }
 
       - name: Prepare Windows portable package
@@ -144,23 +153,27 @@ jobs:
 
           Portable Windows x64 distribution.
 
-          Keep this entire SHEYTAN-Local-Agent folder together.
+          Keep the complete SHEYTAN-Local-Agent folder together.
 
-          Runtime configuration, models, sessions, logs, and Coding Lab
-          workspace data are designed to remain associated with this folder.
+          Models, sessions, runtime data, logs, and Coding Lab workspaces
+          are intended to remain associated with this portable folder.
           "@ | Set-Content "$root/README.txt" -Encoding utf8
 
           @"
-          Place local GGUF models in this folder.
+          LOCAL MODELS
 
-          SHEYTAN-Local-Agent discovers configured local models and allows
-          model selection directly from the application.
+          Place GGUF models in this folder.
+
+          The application can discover local models and lets the user
+          select the active model directly from the Agent or Settings UI.
           "@ | Set-Content "$root/models/README.txt" -Encoding utf8
 
           @"
-          Coding Lab workspace root.
+          CODING LAB
 
-          Workspaces created by the application may be stored here.
+          Coding Lab workspaces can be stored in this folder.
+
+          Keep the application folder together when moving the portable package.
           "@ | Set-Content "$root/workspace/README.txt" -Encoding utf8
 
           @"
@@ -171,19 +184,19 @@ jobs:
           "@ | Set-Content "$root/BUILD-INFO.txt" -Encoding utf8
 
           if (Test-Path "LICENSE") {
-            Copy-Item "LICENSE" "$root/LICENSE"
+            Copy-Item "LICENSE" "$root/LICENSE" -Force
           }
 
           if (Test-Path "README.md") {
-            Copy-Item "README.md" "$root/README.md"
+            Copy-Item "README.md" "$root/README.md" -Force
           }
 
           if (Test-Path "agent.md") {
-            Copy-Item "agent.md" "$root/AI-CONTEXT.md"
+            Copy-Item "agent.md" "$root/AI-CONTEXT.md" -Force
           }
 
           if (Test-Path "SIGNATURE") {
-            Copy-Item "SIGNATURE" "$root/SIGNATURE"
+            Copy-Item "SIGNATURE" "$root/SIGNATURE" -Force
           }
 
       - name: Create Windows ZIP
@@ -222,22 +235,26 @@ jobs:
           try {
             $entries = @($archive.Entries | ForEach-Object { $_.FullName })
 
-            if (-not ($entries | Where-Object {
-              $_ -like "SHEYTAN-Local-Agent/SHEYTAN-Local-Agent.exe"
-            })) {
-              throw "ZIP does not contain SHEYTAN-Local-Agent/SHEYTAN-Local-Agent.exe."
+            $requiredEntries = @(
+              "SHEYTAN-Local-Agent/SHEYTAN-Local-Agent.exe"
+            )
+
+            foreach ($required in $requiredEntries) {
+              if (-not ($entries -contains $required)) {
+                throw "Missing required ZIP entry: $required"
+              }
             }
 
             if (-not ($entries | Where-Object {
               $_ -like "SHEYTAN-Local-Agent/models/*"
             })) {
-              throw "ZIP does not contain the models directory."
+              throw "ZIP is missing models directory."
             }
 
             if (-not ($entries | Where-Object {
               $_ -like "SHEYTAN-Local-Agent/workspace/*"
             })) {
-              throw "ZIP does not contain the workspace directory."
+              throw "ZIP is missing workspace directory."
             }
           }
           finally {
@@ -252,7 +269,7 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Upload Windows ZIP to release
+      - name: Publish Windows ZIP
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
@@ -276,15 +293,18 @@ jobs:
             pkg-config \
             zip
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: Verify Node and repository layout
+      - name: Verify Node and repository
+        shell: bash
         run: |
           node --version
           npm --version
+
+          node_major="$(node -p 'process.versions.node.split(".")[0]')"
+
+          if [ "$node_major" -lt 22 ]; then
+            echo "Node.js 22 or newer is required."
+            exit 1
+          fi
 
           test -f package.json
 
@@ -317,6 +337,12 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
+
+      - name: Verify Go
+        run: |
+          go version
+          go env GOOS
+          go env GOARCH
 
       - name: Go tests
         env:
@@ -360,6 +386,8 @@ jobs:
             exit 1
           fi
 
+          echo "Linux executable size: $size bytes"
+
           "$exe" version
 
       - name: Prepare Linux portable package
@@ -374,23 +402,27 @@ jobs:
 
           Portable Linux x64 distribution.
 
-          Keep this entire SHEYTAN-Local-Agent folder together.
+          Keep the complete SHEYTAN-Local-Agent folder together.
 
-          Runtime configuration, models, sessions, logs, and Coding Lab
-          workspace data are designed to remain associated with this folder.
+          Models, sessions, runtime data, logs, and Coding Lab workspaces
+          are intended to remain associated with this portable folder.
           EOF
 
           cat > "$root/models/README.txt" <<EOF
-          Place local GGUF models in this folder.
+          LOCAL MODELS
 
-          SHEYTAN-Local-Agent discovers configured local models and allows
-          model selection directly from the application.
+          Place GGUF models in this folder.
+
+          The application can discover local models and lets the user
+          select the active model directly from the Agent or Settings UI.
           EOF
 
           cat > "$root/workspace/README.txt" <<EOF
-          Coding Lab workspace root.
+          CODING LAB
 
-          Workspaces created by the application may be stored here.
+          Coding Lab workspaces can be stored in this folder.
+
+          Keep the application folder together when moving the portable package.
           EOF
 
           cat > "$root/BUILD-INFO.txt" <<EOF
@@ -451,7 +483,7 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Upload Linux ZIP to release
+      - name: Publish Linux ZIP
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
