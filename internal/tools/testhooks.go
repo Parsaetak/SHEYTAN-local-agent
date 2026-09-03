@@ -32,11 +32,26 @@ func (t *DataTool) LoadTest(rel string) (*dataset, error) { return t.load(rel) }
 
 // RowsTest returns the row count of a dataset (nil-safe).
 func (d *dataset) RowsTest() int {
-	if d == nil {
-		return 0
-	}
-	return len(d.Rows)
+        if d == nil {
+                return 0
+        }
+        return len(d.Rows)
 }
 
 // NumericColumnTest exposes the parse-once numeric column cache.
 func (d *dataset) NumericColumnTest(col int) []float64 { return d.numericColumn(col) }
+
+// fetchAllowPrivateTest relaxes the fetch tool's SSRF guard so the release
+// stress suite (package cmd) can exercise HTML→text extraction against a
+// loopback httptest server. It is false in production; only the stress
+// suite flips it, and it restores the previous value when done.
+var fetchAllowPrivateTest = false
+
+// SetFetchPrivateDestinationsAllowedForTest toggles the fetch SSRF guard's
+// public-destination requirement. Test-only — never call from production
+// code paths.
+func SetFetchPrivateDestinationsAllowedForTest(v bool) bool {
+        prev := fetchAllowPrivateTest
+        fetchAllowPrivateTest = v
+        return prev
+}

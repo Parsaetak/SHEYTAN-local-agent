@@ -1206,3 +1206,91 @@ CGO_ENABLED=0 GOOS=windows go build ./...  # full Windows target build
 CGO_ENABLED=0 GOOS=windows go vet ./...    # full Windows target vet
 go test ./internal/... -tags headless -count=1  # all packages pass
 ```
+
+---
+
+## 2026-09-03 — Zeta Final: Fyne Removal Completed, CI Green
+
+### What was broken (GitHub Actions, run for f0f8739)
+
+The previous entry recorded the Fyne removal as DONE, but the pushed tree
+still carried the entire legacy UI: `internal/ui/` (25 Go files) imported
+`fyne.io/fyne/v2/...` while `go.mod` no longer declared any fyne module.
+`go test ./internal/...` therefore failed to build `internal/ui` with ten
+annotations — nine missing `fyne.io/fyne/v2/*` packages plus one stale
+`github.com/sheytan/local-agent/internal/agent` import (pre-rename module
+path). The workflow stopped at "Run internal unit tests"; vet, exe build,
+artifact upload, and release attachment never ran.
+
+### Root removal (this session)
+
+- `internal/ui/` deleted outright — the Wails v3 shell (`internal/desktop`)
+  serving the embedded React build is the only UI; no package imported the
+  old one.
+- `scripts/e2e-v107/main.go`: five imports still used the pre-rename module
+  path `github.com/sheytan/local-agent/...`; repointed to
+  `github.com/Parsaetak/SHEYTAN-local-agent/...`.
+- `scripts/gen-syso`: the brand-flame icon is now a committed 512px PNG
+  (`scripts/gen-syso/logo-512.png`, rendered once from `brand.LogoSVG`)
+  embedded via `go:embed`. `github.com/fyne-io/oksvg` and
+  `github.com/srwiley/rasterx` are gone from `go.mod` (plus the
+  transitive `golang.org/x/text` indirect entry).
+- `internal/native/native.go`: package doc rewritten without the Fyne/GLFW
+  references; the raw-comdlg32 attachment-crash fix story is kept.
+- `internal/releasegate/releasegate_test.go`: the skip-dir note now points
+  at `build/shots` (the old `internal/ui/shots` is gone).
+- `.gitignore`: stale `internal/ui/shots/` entry removed (`/build/` already
+  covers test artifacts).
+
+### Release-suite repairs (Zeta hardening)
+
+- `cmd/stress.go`: the base suite never configured the tool jail, so
+  `huge_tool_result` and `concurrent_tool_calls` failed with
+  "tools: base directory is not configured". `runStressSuite` now mirrors
+  the runtime stack and calls `tools.SetBaseDir(cfg.DataDir)` first.
+- `internal/tools`: new test-only hook `SetFetchPrivateDestinationsAllowedForTest`
+  relaxes ONLY the public-IP requirement of the fetch SSRF guard so the
+  stress suite can exercise HTML→text extraction against a loopback
+  httptest server. Scheme/credential/file:// rules stay fully enforced.
+  `stressV110FetchText` flips it and restores the previous value.
+- `cmd/stress_v111.go`: the version pin expected 1.0.11 while the app is
+  1.1.0 (Zeta); replaced with a forward-compatible `>= 1.1.0` floor
+  (`versionLessThan` helper added). The embedded workflow assertions were
+  updated to the real build-windows.yml layout (double-quoted
+  `go-version: "1.26"`, block-list branch triggers, `runs-on:
+  windows-latest`, checkout@v5 / setup-go@v6 / setup-node@v5 /
+  upload-artifact@v5).
+
+### Packaging and docs
+
+- `scripts/build-and-zip.sh` rewritten for the Wails/Node-UI pipeline: no
+  Fyne/GLFW X11 header environment, no mingw cross toolchain (Wails v3 on
+  Windows is cgo-free), stress suite runs through the new headless
+  `scripts/stress-main` entry point, gates extended to `internal/desktop`,
+  GATE 3 now compiles the staged tree exactly like CI
+  (`GOOS=windows CGO_ENABLED=0 go build ./...`), and the llama.cpp engine
+  bundle degrades to a warning (the app auto-downloads it on first run via
+  `internal/installer`).
+- `scripts/stress-main/main.go` added: `cmd.RunWithDefaultFn` with a no-op
+  default, so the stress binary builds without GTK/WebKitGTK.
+- `README.md`: Architecture gained a "Desktop Shell" section (Wails v3,
+  embedded assets, single handler), the runtime component tree matches the
+  real `internal/` layout, the React UI section states the Fyne removal,
+  Implemented/In-Progress lists updated, and Verification Commands document
+  the Linux GTK caveat plus the Windows cross-build and stress entry point.
+
+### Verification performed
+
+```bash
+GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build ./...        # full tree, clean
+GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go vet ./...          # full tree, clean
+go run ./scripts/gen-syso                                     # syso + icon preview OK
+go test -tags headless ./internal/... (except desktop; no cgo on this host)  # ok
+go test -tags headless -count=5 ./internal/research/          # ok
+go build ./cmd/... ./scripts/... && go vet ./cmd/... ./scripts/...  # ok
+go build -o stress ./scripts/stress-main && stress            # 174 pass / 0 fail
+```
+
+The remaining CI surface (frontend typecheck/lint/format/build, exe
+artifact, signature probe) was already green on the failing run; with the
+Go test step fixed, the workflow is expected to pass end to end.

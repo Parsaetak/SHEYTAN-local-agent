@@ -6,9 +6,7 @@ require (
 	github.com/anthonynsimon/bild v0.17.0
 	github.com/chromedp/cdproto v0.0.0-20260804232424-e85f50dbfd32
 	github.com/chromedp/chromedp v0.16.0
-	github.com/fyne-io/oksvg v0.2.0
 	github.com/gorilla/websocket v1.5.3
-	github.com/srwiley/rasterx v0.0.0-20220730225603-2ab79fcdd4ef
 	github.com/tc-hib/winres v0.3.1
 	github.com/wailsapp/wails/v3 v3.0.0-beta.16
 	golang.org/x/image v0.45.0
@@ -31,5 +29,4 @@ require (
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/nfnt/resize v0.0.0-20180221191011-83c6a9932646 // indirect
 	github.com/stretchr/testify v1.12.1 // indirect
-	golang.org/x/text v0.41.0 // indirect
 )

@@ -32,8 +32,7 @@
 /config.json
 /installed.json
 
-# Test-generated UI screenshots (headless suite writes them on every run)
-internal/ui/shots/
+# Test-generated artifacts land under /build/ (covered above).
 
 # Go tooling
 *.test

@@ -117,6 +117,21 @@ The frontend owns presentation, interaction, session navigation, activity displa
 
 Critical execution logic remains in Go.
 
+## Desktop Shell
+
+The shipping desktop application is a single self-contained executable built on the Wails v3 shell (`internal/desktop`):
+
+```text
+sheytan-local-agent.exe
+├── React production assets (embedded from web/static)
+├── Go HTTP API + WebSocket (same process, same handler)
+└── WebView2 window (Windows) / WebKitGTK (Linux)
+```
+
+One in-process HTTP handler routes `/api/` and `/ws/` to the Go backend and everything else to the embedded asset server. No external browser, localhost listener, or frontend server is required in production.
+
+The legacy Fyne desktop UI (`internal/ui`, `fyne.io/fyne/v2`) was fully removed in the Zeta release — the React/TypeScript UI is the only application UI.
+
 ---
 
 # Runtime Components
@@ -128,27 +143,37 @@ internal/
 ├── aicontext/
 ├── api/
 ├── artifacts/
+├── brand/
 ├── browser/
 ├── chunking/
 ├── config/
 ├── continuum/
+├── desktop/      (Wails v3 shell)
+├── installer/
 ├── lab/
 ├── llm/
 ├── logging/
 ├── memory/
 ├── multiagent/
 ├── native/
+├── netcheck/
 ├── proc/
 ├── recall/
+├── releasegate/
 ├── research/
+├── resources/
 ├── runtime/
 ├── sandbox/
+├── screen/
 ├── sessions/
 ├── sysinfo/
-└── tools/
-src/
+├── termshell/
+├── tools/
+├── updater/
+└── vision/
+src/              (React/TypeScript frontend)
 scripts/
-web/
+web/              (embedded production assets)
 ```
 
 Primary subsystems:
@@ -822,7 +847,7 @@ abort support
 
 The frontend communicates with the Go runtime through the HTTP API and WebSocket activity channel.
 
-The migration is active development work; the React UI should not be described as feature-complete.
+The legacy Fyne desktop UI was removed in the Zeta release; the React UI is the application UI, embedded into the Wails desktop shell and served from `web/static`. It remains active development work and should not be described as feature-complete.
 
 ---
 
@@ -1102,6 +1127,20 @@ go vet ./internal/...
 go build -o /tmp/sheytan .
 ```
 
+The desktop shell (`internal/desktop`) compiles against Wails v3. On Windows — the CI runner — no cgo is required. On Linux, building or testing any package that imports it needs GTK4/WebKitGTK development headers (`pkg-config --exists gtk4 webkitgtk-6.0`); without them, verify with the Windows cross-build instead:
+
+```bash
+GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build ./...
+GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go vet ./...
+```
+
+The stress suite builds headless on any host via the dedicated entry point:
+
+```bash
+go build -o /tmp/sheytan-stress ./scripts/stress-main
+SHEYTAN_DATA_DIR=/tmp/sheytan-stress-root /tmp/sheytan-stress stress
+```
+
 After frontend changes:
 
 ```bash
@@ -1190,19 +1229,20 @@ Run relevant Go tests and vet checks.
 ✓ React/Vite frontend foundation
 ✓ session-aware React activity WebSocket
 ✓ REST API integration
+✓ Wails v3 desktop shell (single self-contained exe)
+✓ legacy Fyne UI fully removed (Zeta)
 ```
 
 ## In Progress
 
 ```text
-□ complete React feature parity with the legacy UI
+□ complete React feature parity with the pre-migration desktop UI
 □ Coding Lab frontend panel
 □ Research frontend panel
 □ richer project/task inspection
 □ end-to-end autonomous coding workflows
 □ broader verification coverage
 □ frontend integration tests
-□ final UI architecture cleanup
 ```
 
 ## Later
