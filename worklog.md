@@ -1005,7 +1005,6 @@ When the version changes, verify all relevant version sources:
 
 internal/config/config.go
 package.json
-build/config.yml
 .github/workflows/build-desktop.yml
 SIGNATURE
 portable launch scripts
@@ -1207,3 +1206,123 @@ AAA application milestone    IN PROGRESS
 Next highest-value implementation target:
 
 Agent workspace → real streaming/tool execution/session state/model state
+
+---
+
+## 2026-09-04 — v1.1.2Z AAA Application Milestone DELIVERED
+
+### Release
+
+Version:  1.1.2
+Codename: Zeta
+Tag:      v1.1.2Z
+
+Release assets (produced by CI on tag push):
+
+SHEYTAN-Local-Agent-Windows-x64-v1.1.2Z.zip
+SHEYTAN-Local-Agent-Linux-x64-v1.1.2Z.zip
+
+### Problems found in the repository (all fixed in this release)
+
+1. CI workflow contract violations (5). The workflow refactor had removed
+   `actions/setup-node@v4` (Node was floating on the runner's version), the
+   `go run ./scripts/gen-syso` Windows resource step (no icon, no version
+   info, no DPI-aware manifest), the `-H=windowsgui` subsystem flag (console
+   window flash on double-click), and the `sheytan-local-agent.bat` launcher
+   from the portable ZIP. The `zeta_release_surface` stress scenario pins
+   every one of these — and it never ran in CI, so nothing caught the
+   regressions. All five items restored and the stress gate now runs in the
+   Linux CI job.
+
+2. Settings panel crashed to a blank page. `/api/models` returned JSON null
+   for `local`/`loaded` when no GGUF models existed (nil Go slices marshal
+   as null). `SettingsPanel.tsx` called `.map()` on the decoded value and
+   the whole React tree unmounted. Fixed at both layers: the API now always
+   returns arrays, and the panel null-guards its lists.
+
+3. The model selector was silently broken. The API shipped bare filename
+   strings while the frontend expected `{id, name, path, sizeBytes}`
+   objects — every `<option>` rendered with an undefined value. The API now
+   returns rich model descriptors (id, name, provider, path, sizeBytes).
+
+4. The activity WebSocket closed immediately when idle. The server sent one
+   "idle" sentinel and closed the socket (close code 1006), so the topbar
+   permanently showed "Offline" between runs and the app looked broken.
+   Idle connections now park in a standby registry, get woken and attached
+   to the run hub the instant a run starts, and are kept alive with
+   protocol-level pings (25s). The topbar now shows "Connected".
+
+5. Fresh installs rendered a dead workspace. With zero sessions the runtime
+   status stayed offline and the composer was inert. The first launch now
+   auto-creates the initial session so the Agent workspace is immediately
+   live (WebSocket connected, activity streaming, composer usable).
+
+6. Legacy code left in the tree. Removed: stale `web/static` build
+   artifacts (two generations of hashed chunks plus the pre-React hand
+   written `app.js`/`styles.css`), the broken `Taskfile.yml` (referenced a
+   `build/` directory that is not part of the repository), the retired
+   versioned e2e scripts (`e2e-v102.sh` … `e2e-v108.sh`, `e2e-v107/`), and
+   the orphaned `scripts/glm-proxy.mjs` test proxy.
+
+### v1.1.2Z feature work
+
+- 120Hz-first motion system (`src/motion.css`): compositor-only animations
+  (transform/opacity/filter), frame-quantized duration ladder, spring
+  easing curves, staggered entrances for every panel grid, animated
+  workspace view transitions (keyed remount + glide), micro-interactions
+  (press scale, hover lift, nav slide), and a full
+  `prefers-reduced-motion` collapse.
+- `App.tsx` view transitions: `<main key={view}>` remount animation,
+  staggered navigation buttons, animated header blur-in.
+- Model dropdown text overflow fixed (ellipsis).
+- Auto-session on first launch (`src/agent-init.ts`).
+- Idle WebSocket standby architecture (`internal/api/server.go`):
+  standby registry, wake-on-run, read pump with abort routing, ping
+  keepalive.
+- Rich models API (`internal/api/server.go`: `modelInfo`).
+- `npm ci` replaces `npm install` in CI (deterministic builds) with
+  setup-node npm caching.
+
+### Verification evidence
+
+- Frontend: `npm run typecheck` PASS, `npm run lint` 0 warnings/0 errors,
+  `npm run build` PASS (17 source files, fresh `web/static`).
+- Go: `go vet ./...` PASS (windows/amd64 target), `go test ./internal/...`
+  12 packages ok, stress suite 32/32 pass (incl. `zeta_release_surface`).
+- Windows executable: PE32+ GUI subsystem, 9 sections (rsrc embedded),
+  icon + version 1.1.2 + DPI-aware manifest via gen-syso, 17.7 MB.
+- Live end-to-end (headless `serve` binary + agent-browser): 28/28 checks
+  pass — all API endpoints, WebSocket upgrade + standby "Connected" state,
+  all four panels (Agent/Lab/Research/Settings) rendering and interactive,
+  composer input, zero console errors, v1.1.2 version consistency across
+  server banner, topbar chip, and API state.
+
+### Files changed
+
+- `.github/workflows/build-desktop.yml` — version bump + contract restore + stress gate
+- `internal/config/config.go` — AppVersion 1.1.2
+- `internal/api/server.go` — standby WS, rich models API, imports
+- `src/motion.css` — NEW, the full motion system
+- `src/main.tsx` — import motion.css
+- `src/App.tsx` — view transitions + staggered nav
+- `src/agent-init.ts` — first-launch auto-session
+- `src/SettingsPanel.tsx` — null-guard hardening
+- `src/settings.css` — select ellipsis fix
+- `cmd/stress_zeta.go` — 1.1.2 floor + v1.1.2Z notes
+- `package.json` — 1.1.2-zeta
+- `SIGNATURE` — regenerated (v1.1.2, Parsa Tak)
+- `sheytan-local-agent.bat` — v1.1.2Z notes
+- `scripts/build-and-zip.sh` — v1.1.2
+- `README.md`, `worklog.md`, `agent.md` — v1.1.2Z documentation
+- Removed: `Taskfile.yml`, `scripts/e2e-v102.sh`, `scripts/e2e-v106.sh`,
+  `scripts/e2e-v107.sh`, `scripts/e2e-v108.sh`, `scripts/e2e-v107/main.go`,
+  `scripts/glm-proxy.mjs`, stale `web/static` artifacts
+
+### Next release target
+
+v1.1.3Z candidates (in priority order):
+
+- run a real model end-to-end through the UI (engine start → chat → tools)
+- richer Coding Lab task inspection and artifact browsing
+- model metadata surface (architecture, quantization, context capacity)
+- frontend integration tests in CI (Playwright-style panel smoke suite)

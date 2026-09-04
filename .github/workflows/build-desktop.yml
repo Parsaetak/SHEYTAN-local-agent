@@ -16,7 +16,7 @@ permissions:
 
 env:
   GO_VERSION: "1.26"
-  APP_VERSION: "1.1.1"
+  APP_VERSION: "1.1.2"
   APP_CODENAME: "Zeta"
 
 jobs:
@@ -27,6 +27,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
 
       - name: Verify Node and repository
         shell: pwsh
@@ -50,7 +56,7 @@ jobs:
 
       - name: Install frontend dependencies
         shell: pwsh
-        run: npm install
+        run: npm ci
 
       - name: Frontend typecheck
         shell: pwsh
@@ -98,6 +104,17 @@ jobs:
           CGO_ENABLED: "0"
         run: go vet ./...
 
+      - name: Generate Windows resources (icon, version info, DPI manifest)
+        shell: pwsh
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          go run ./scripts/gen-syso
+
+          if (-not (Test-Path "rsrc_windows_amd64.syso")) {
+            throw "Windows resource object was not generated."
+          }
+
       - name: Build Windows executable
         shell: pwsh
         env:
@@ -109,7 +126,7 @@ jobs:
 
           go build `
             -trimpath `
-            -ldflags="-s -w" `
+            -ldflags="-s -w -H=windowsgui" `
             -o "dist/windows/app/SHEYTAN-Local-Agent/SHEYTAN-Local-Agent.exe" `
             .
 
@@ -172,6 +189,9 @@ jobs:
 
           Models, sessions, runtime data, logs, and Coding Lab workspaces
           are intended to remain associated with this portable folder.
+
+          Double-click sheytan-local-agent.bat to launch the desktop GUI,
+          or run SHEYTAN-Local-Agent.exe directly.
           "@ | Set-Content "$root/README.txt" -Encoding utf8
 
           @"
@@ -214,6 +234,10 @@ jobs:
             Copy-Item "SIGNATURE" "$root/SIGNATURE" -Force
           }
 
+          if (Test-Path "sheytan-local-agent.bat") {
+            Copy-Item "sheytan-local-agent.bat" "$root/sheytan-local-agent.bat" -Force
+          }
+
       - name: Create Windows ZIP
         shell: pwsh
         run: |
@@ -254,6 +278,7 @@ jobs:
               "SHEYTAN-Local-Agent/SHEYTAN-Local-Agent.exe",
               "SHEYTAN-Local-Agent/README.txt",
               "SHEYTAN-Local-Agent/BUILD-INFO.txt",
+              "SHEYTAN-Local-Agent/sheytan-local-agent.bat",
               "SHEYTAN-Local-Agent/models/README.txt",
               "SHEYTAN-Local-Agent/workspace/README.txt"
             )
@@ -302,6 +327,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
 
       - name: Install Linux build dependencies
         run: |
@@ -366,7 +397,7 @@ jobs:
           fi
 
       - name: Install frontend dependencies
-        run: npm install
+        run: npm ci
 
       - name: Frontend typecheck
         run: npm run typecheck
@@ -411,6 +442,16 @@ jobs:
         env:
           CGO_ENABLED: "1"
         run: go vet ./...
+
+      - name: Stress suite (chaos + release-surface contract)
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          set -euo pipefail
+
+          go build -o /tmp/sheytan-stress ./scripts/stress-main
+
+          /tmp/sheytan-stress stress
 
       - name: Verify Wails Go dependency
         shell: bash

@@ -16,7 +16,7 @@ Licensed under the **Parsaetak Proprietary License v1.1**.
 
 ```text
 Application:  SHEYTAN-Local-Agent
-Version:     1.1.1
+Version:     1.1.2
 Codename:    Zeta
 ```
 
@@ -893,6 +893,11 @@ Artifacts
 Lab and Research UI panels shipped in v1.1.1Z (`LabPanel.tsx`, `ResearchPanel.tsx`,
 `SettingsPanel.tsx` — all embedded in the release binary).
 
+The v1.1.2Z release adds a 120Hz-first motion system (`src/motion.css`):
+compositor-only animations (transform/opacity/filter), frame-quantized
+durations, spring easing curves, staggered panel entrances, animated
+workspace view transitions, and full `prefers-reduced-motion` support.
+
 The SVG editor/preview remains later work.
 
 ---
@@ -1174,15 +1179,15 @@ CI is `.github/workflows/build-desktop.yml`. Every push to `main` builds
 both platforms; pushing a tag publishes a GitHub Release:
 
 ```bash
-git tag v1.1.1Z
-git push origin v1.1.1Z
+git tag v1.1.2Z
+git push origin v1.1.2Z
 ```
 
 The release assets are produced by the workflow itself:
 
 ```text
-SHEYTAN-Local-Agent-Windows-x64-v1.1.1Z.zip
-SHEYTAN-Local-Agent-Linux-x64-v1.1.1Z.zip
+SHEYTAN-Local-Agent-Windows-x64-v1.1.2Z.zip
+SHEYTAN-Local-Agent-Linux-x64-v1.1.2Z.zip
 ```
 
 Both zips are portable: extract, double-click `SHEYTAN-Local-Agent.exe`
@@ -1269,6 +1274,15 @@ Run relevant Go tests and vet checks.
 ✓ repaired Linux CI (GTK4 + WebKitGTK-6.0 for Wails v3)
 ✓ pinned Node 24 / Go 1.26 toolchains in CI
 ✓ versioned legacy sources retired (v1.1.1Z)
+✓ 120Hz-first motion system with spring easing + staggered entrances (v1.1.2Z)
+✓ animated workspace view transitions (v1.1.2Z)
+✓ idle WebSocket standby: activity stream stays connected between runs (v1.1.2Z)
+✓ models API returns rich {id, name, path, sizeBytes} descriptors (v1.1.2Z)
+✓ Settings panel null-crash fixed: fresh installs no longer render a blank page (v1.1.2Z)
+✓ first-launch auto-session: Agent workspace is immediately live (v1.1.2Z)
+✓ Windows CI restored: gen-syso icon/resources + -H=windowsgui + .bat launcher (v1.1.2Z)
+✓ stress release-surface gate now runs in CI (v1.1.2Z)
+✓ stale web/static build artifacts + broken Taskfile + old e2e scripts removed (v1.1.2Z)
 ```
 
 ## In Progress

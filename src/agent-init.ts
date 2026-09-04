@@ -25,7 +25,17 @@ async function initializeAgentOnce(): Promise<void> {
   });
 
   try {
-    const [app, sessions] = await Promise.all([api.state(), api.sessions()]);
+    let [app, sessions] = await Promise.all([api.state(), api.sessions()]);
+
+    // AAA polish (v1.1.2Z): a fresh install starts with zero sessions, which
+    // left the runtime status on "Offline" and the composer inert — the app
+    // LOOKED broken on first launch. Create the initial session eagerly so
+    // the Agent workspace is immediately live: WebSocket connects, activity
+    // streams, and the composer is usable from the first paint.
+    if (sessions.length === 0) {
+      const session = await api.createSession();
+      sessions = [session];
+    }
 
     const current = useRuntimeStore.getState().activeSessionId;
 

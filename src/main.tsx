@@ -5,6 +5,7 @@ import App from "./App";
 import "./styles.css";
 import "./layers.css";
 import "./settings.css";
+import "./motion.css";
 
 const rootElement = document.getElementById("root");
 

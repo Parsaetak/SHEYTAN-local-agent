@@ -2,9 +2,9 @@
 
 > Persistent engineering handoff for the next agent working on this repository.
 >
-> Current stable release: **v1.1.1Z (Zeta)**
+> Current stable release: **v1.1.2Z (Zeta)** — AAA application milestone delivered
 >
-> Current development target: **v1.1.2Z — AAA Application Completion**
+> Current development target: **v1.1.3Z — Live model end-to-end polish**
 
 Repository:
 
@@ -51,24 +51,31 @@ All major sections must be functional.
 
 Current stable release:
 
-Version:  1.1.1
-Codename: Zeta
-Tag:      v1.1.1Z
-
-Verified release assets:
-
-SHEYTAN-Local-Agent-Windows-x64-v1.1.1Z.zip
-SHEYTAN-Local-Agent-Linux-x64-v1.1.1Z.zip
-
-The v1.1.1Z release established the working portable Windows/Linux release baseline.
-
-Next release target:
-
 Version:  1.1.2
 Codename: Zeta
 Tag:      v1.1.2Z
 
-v1.1.2Z is a major product-completion milestone.
+Verified release assets:
+
+SHEYTAN-Local-Agent-Windows-x64-v1.1.2Z.zip
+SHEYTAN-Local-Agent-Linux-x64-v1.1.2Z.zip
+
+The v1.1.2Z release delivered the AAA application milestone: the 120Hz
+motion system, idle WebSocket standby (topbar now shows "Connected"), rich
+models API ({id, name, path, sizeBytes}), the Settings null-crash fix,
+first-launch auto-session, and the fully restored Windows CI pipeline
+(gen-syso icon/resources, -H=windowsgui, .bat launcher, stress gate in CI).
+
+All legacy code has been removed: stale web/static artifacts, the broken
+Taskfile.yml, the versioned e2e scripts, and the orphaned glm-proxy.
+
+Next release target:
+
+Version:  1.1.3
+Codename: Zeta
+Tag:      v1.1.3Z
+
+v1.1.3Z is the live-model end-to-end polish release.
 
 3. Non-Negotiable Development Rules
 Inspect the live GitHub repository before making assumptions.
@@ -919,7 +926,6 @@ For every release, synchronize:
 
 internal/config/config.go
 package.json
-build/config.yml
 .github/workflows/build-desktop.yml
 SIGNATURE
 portable scripts
@@ -1220,24 +1226,25 @@ The product must earn its visual sophistication through real functionality.
 
 47. Next Target
 
-The next implementation target after this handoff is:
+The v1.1.2Z milestone is complete. The next implementation target is:
 
-AGENT WORKSPACE COMPLETION
+LIVE MODEL END-TO-END
 
 Specifically:
 
-real streaming
+real model download or user-provided GGUF flow
 +
-real session state
+engine start/stop through the UI (already wired — verify against a real model)
 +
-real model/runtime state
+streaming chat responses in the activity stream
 +
-tool execution visibility
+tool execution visibility during a live run
 +
-cancellation
+cancellation mid-run
 +
-retry/regenerate
-+
-responsive rendering
+retry / regenerate
 
-This is the foundation for the rest of v1.1.2Z.
+The API, WebSocket standby, session, and model-selector plumbing all work
+end-to-end (verified by the v1.1.2Z live test suite, 28/28). What remains
+is exercising the full loop against a real llama.cpp engine + GGUF model
+and polishing everything the loop surfaces.

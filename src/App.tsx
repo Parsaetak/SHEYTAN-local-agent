@@ -1,4 +1,5 @@
 import { Suspense, lazy, useEffect, useState } from "react";
+import type { CSSProperties } from "react";
 
 import {
   getWorkspaceHref,
@@ -120,14 +121,15 @@ function App() {
             </div>
           </div>
 
-          <nav className="app-navigation" aria-label="Workspace">
-            {WORKSPACE_LAYERS.map((layer) => (
+          <nav className="app-navigation m-stagger" aria-label="Workspace">
+            {WORKSPACE_LAYERS.map((layer, index) => (
               <button
                 type="button"
                 key={layer.id}
-                className={`app-navigation-item ${
+                className={`app-navigation-item m-press ${
                   view === layer.id ? "active" : ""
                 }`}
+                style={{ "--stagger-index": index } as CSSProperties}
                 onClick={() => changeView(layer.id)}
                 aria-pressed={view === layer.id}
               >
@@ -161,8 +163,8 @@ function App() {
           </div>
         </aside>
 
-        <main className="workspace">
-          <section className="workspace-header">
+        <main className="workspace" key={view}>
+          <section className="workspace-header view-transition-header">
             <div>
               <span className="eyebrow">{activeLayer.eyebrow}</span>
 
@@ -176,23 +178,25 @@ function App() {
             </div>
           </section>
 
-          {view === "agent" ? (
-            <Suspense fallback={<PanelLoading label="Agent" />}>
-              <AgentBody />
-            </Suspense>
-          ) : view === "lab" ? (
-            <Suspense fallback={<PanelLoading label="Coding Lab" />}>
-              <LabPanel />
-            </Suspense>
-          ) : view === "research" ? (
-            <Suspense fallback={<PanelLoading label="Research" />}>
-              <ResearchPanel />
-            </Suspense>
-          ) : (
-            <Suspense fallback={<PanelLoading label="Settings" />}>
-              <SettingsPanel />
-            </Suspense>
-          )}
+          <div className="view-transition">
+            {view === "agent" ? (
+              <Suspense fallback={<PanelLoading label="Agent" />}>
+                <AgentBody />
+              </Suspense>
+            ) : view === "lab" ? (
+              <Suspense fallback={<PanelLoading label="Coding Lab" />}>
+                <LabPanel />
+              </Suspense>
+            ) : view === "research" ? (
+              <Suspense fallback={<PanelLoading label="Research" />}>
+                <ResearchPanel />
+              </Suspense>
+            ) : (
+              <Suspense fallback={<PanelLoading label="Settings" />}>
+                <SettingsPanel />
+              </Suspense>
+            )}
+          </div>
         </main>
       </div>
     </div>

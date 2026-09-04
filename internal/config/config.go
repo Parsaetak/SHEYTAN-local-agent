@@ -5,1055 +5,1055 @@
 package config
 
 import (
-	"encoding/json"
-	"fmt"
-	"os"
-	"path/filepath"
-	"runtime"
-	"strconv"
-	"strings"
-	"time"
+        "encoding/json"
+        "fmt"
+        "os"
+        "path/filepath"
+        "runtime"
+        "strconv"
+        "strings"
+        "time"
 )
 
 const (
-	AppName     = "SHEYTAN-Local-Agent"
-	AppVersion  = "1.1.1"
-	AppCodename = "Zeta"
+        AppName     = "SHEYTAN-Local-Agent"
+        AppVersion  = "1.1.2"
+        AppCodename = "Zeta"
 )
 
 // Provider kinds.
 const (
-	ProviderLocal  = "local"
-	ProviderRemote = "remote"
+        ProviderLocal  = "local"
+        ProviderRemote = "remote"
 )
 
 // LLMOptions mirrors the available local/remote sampling and runtime knobs.
 type LLMOptions struct {
-	Temperature      float64 `json:"temperature" yaml:"temperature"`
-	TopP             float64 `json:"topP" yaml:"top_p"`
-	TopK             int     `json:"topK" yaml:"top_k"`
-	MinP             float64 `json:"minP" yaml:"min_p"`
-	MaxTokens        int     `json:"maxTokens" yaml:"max_tokens"`
-	Stop             string  `json:"stop" yaml:"stop"`
-	Seed             int     `json:"seed" yaml:"seed"`
-	RepeatPenalty    float64 `json:"repeatPenalty" yaml:"repeat_penalty"`
-	RepeatLastN      int     `json:"repeatLastN" yaml:"repeat_last_n"`
-	PresencePenalty  float64 `json:"presencePenalty" yaml:"presence_penalty"`
-	FrequencyPenalty float64 `json:"frequencyPenalty" yaml:"frequency_penalty"`
-	Mirostat         int     `json:"mirostat" yaml:"mirostat"`
-	MirostatTau      float64 `json:"mirostatTau" yaml:"mirostat_tau"`
-	MirostatEta      float64 `json:"mirostatEta" yaml:"mirostat_eta"`
-	NumCtx           int     `json:"numCtx" yaml:"num_ctx"`
-	NumBatch         int     `json:"numBatch" yaml:"num_batch"`
-	NumGPU           int     `json:"numGpu" yaml:"num_gpu"`
-	NumThread        int     `json:"numThread" yaml:"num_thread"`
-	Stream           bool    `json:"stream" yaml:"stream"`
-	Preset           string  `json:"preset" yaml:"preset"`
+        Temperature      float64 `json:"temperature" yaml:"temperature"`
+        TopP             float64 `json:"topP" yaml:"top_p"`
+        TopK             int     `json:"topK" yaml:"top_k"`
+        MinP             float64 `json:"minP" yaml:"min_p"`
+        MaxTokens        int     `json:"maxTokens" yaml:"max_tokens"`
+        Stop             string  `json:"stop" yaml:"stop"`
+        Seed             int     `json:"seed" yaml:"seed"`
+        RepeatPenalty    float64 `json:"repeatPenalty" yaml:"repeat_penalty"`
+        RepeatLastN      int     `json:"repeatLastN" yaml:"repeat_last_n"`
+        PresencePenalty  float64 `json:"presencePenalty" yaml:"presence_penalty"`
+        FrequencyPenalty float64 `json:"frequencyPenalty" yaml:"frequency_penalty"`
+        Mirostat         int     `json:"mirostat" yaml:"mirostat"`
+        MirostatTau      float64 `json:"mirostatTau" yaml:"mirostat_tau"`
+        MirostatEta      float64 `json:"mirostatEta" yaml:"mirostat_eta"`
+        NumCtx           int     `json:"numCtx" yaml:"num_ctx"`
+        NumBatch         int     `json:"numBatch" yaml:"num_batch"`
+        NumGPU           int     `json:"numGpu" yaml:"num_gpu"`
+        NumThread        int     `json:"numThread" yaml:"num_thread"`
+        Stream           bool    `json:"stream" yaml:"stream"`
+        Preset           string  `json:"preset" yaml:"preset"`
 }
 
 // Config is the top-level runtime configuration.
 type Config struct {
-	// Portable application data.
-	DataDir     string `json:"dataDir" yaml:"dataDir"`
-	ModelsDir   string `json:"modelsDir" yaml:"modelsDir"`
-	SessionsDir string `json:"sessionsDir" yaml:"sessionsDir"`
+        // Portable application data.
+        DataDir     string `json:"dataDir" yaml:"dataDir"`
+        ModelsDir   string `json:"modelsDir" yaml:"modelsDir"`
+        SessionsDir string `json:"sessionsDir" yaml:"sessionsDir"`
 
-	// HTTP/API server.
-	Host string `json:"host" yaml:"host"`
-	Port int    `json:"port" yaml:"port"`
+        // HTTP/API server.
+        Host string `json:"host" yaml:"host"`
+        Port int    `json:"port" yaml:"port"`
 
-	// Local LLM endpoint.
-	LLMBaseURL string `json:"llmBaseUrl" yaml:"llmBaseUrl"`
-	Model      string `json:"model" yaml:"model"`
+        // Local LLM endpoint.
+        LLMBaseURL string `json:"llmBaseUrl" yaml:"llmBaseUrl"`
+        Model      string `json:"model" yaml:"model"`
 
-	// Remote OpenAI-compatible provider.
-	Provider      string `json:"provider" yaml:"provider"`
-	RemoteBaseURL string `json:"remoteBaseUrl" yaml:"remoteBaseUrl"`
-	RemoteAPIKey  string `json:"remoteApiKey" yaml:"remoteApiKey"`
-	RemoteModel   string `json:"remoteModel" yaml:"remoteModel"`
+        // Remote OpenAI-compatible provider.
+        Provider      string `json:"provider" yaml:"provider"`
+        RemoteBaseURL string `json:"remoteBaseUrl" yaml:"remoteBaseUrl"`
+        RemoteAPIKey  string `json:"remoteApiKey" yaml:"remoteApiKey"`
+        RemoteModel   string `json:"remoteModel" yaml:"remoteModel"`
 
-	// llama.cpp subprocess.
-	LlamaBinPath   string `json:"llamaBinPath" yaml:"llamaBinPath"`
-	LlamaHost      string `json:"llamaHost" yaml:"llamaHost"`
-	LlamaPort      int    `json:"llamaPort" yaml:"llamaPort"`
-	LlamaAutoStart bool   `json:"llamaAutoStart" yaml:"llamaAutoStart"`
-	LlamaExtraArgs string `json:"llamaExtraArgs" yaml:"llamaExtraArgs"`
+        // llama.cpp subprocess.
+        LlamaBinPath   string `json:"llamaBinPath" yaml:"llamaBinPath"`
+        LlamaHost      string `json:"llamaHost" yaml:"llamaHost"`
+        LlamaPort      int    `json:"llamaPort" yaml:"llamaPort"`
+        LlamaAutoStart bool   `json:"llamaAutoStart" yaml:"llamaAutoStart"`
+        LlamaExtraArgs string `json:"llamaExtraArgs" yaml:"llamaExtraArgs"`
 
-	// Agent loop.
-	MaxIterations int  `json:"maxIterations" yaml:"maxIterations"`
-	ParallelTools bool `json:"parallelTools" yaml:"parallelTools"`
-	VerboseAgent  bool `json:"verboseAgent" yaml:"verboseAgent"`
+        // Agent loop.
+        MaxIterations int  `json:"maxIterations" yaml:"maxIterations"`
+        ParallelTools bool `json:"parallelTools" yaml:"parallelTools"`
+        VerboseAgent  bool `json:"verboseAgent" yaml:"verboseAgent"`
 
-	// Legacy/general sandbox controls.
-	SandboxEnabled bool   `json:"sandboxEnabled" yaml:"sandboxEnabled"`
-	SandboxMemory  string `json:"sandboxMemory" yaml:"sandboxMemory"`
-	SandboxCPU     int    `json:"sandboxCPU" yaml:"sandboxCPU"`
+        // Legacy/general sandbox controls.
+        SandboxEnabled bool   `json:"sandboxEnabled" yaml:"sandboxEnabled"`
+        SandboxMemory  string `json:"sandboxMemory" yaml:"sandboxMemory"`
+        SandboxCPU     int    `json:"sandboxCPU" yaml:"sandboxCPU"`
 
-	// Sampling.
-	LLM LLMOptions `json:"llm" yaml:"llm"`
+        // Sampling.
+        LLM LLMOptions `json:"llm" yaml:"llm"`
 
-	// Browser automation.
-	BrowserExecutablePath string `json:"browserExecutablePath" yaml:"browserExecutablePath"`
-	BrowserHeadless       bool   `json:"browserHeadless" yaml:"browserHeadless"`
-	BrowserSlowMo         int    `json:"browserSlowMoMs" yaml:"browserSlowMoMs"`
+        // Browser automation.
+        BrowserExecutablePath string `json:"browserExecutablePath" yaml:"browserExecutablePath"`
+        BrowserHeadless       bool   `json:"browserHeadless" yaml:"browserHeadless"`
+        BrowserSlowMo         int    `json:"browserSlowMoMs" yaml:"browserSlowMoMs"`
 
-	// Experience and maintenance.
-	ProMode         bool   `json:"proMode" yaml:"proMode"`
-	UpdateSchedule  string `json:"updateSchedule" yaml:"updateSchedule"`
-	LastUpdateCheck string `json:"lastUpdateCheck" yaml:"lastUpdateCheck"`
+        // Experience and maintenance.
+        ProMode         bool   `json:"proMode" yaml:"proMode"`
+        UpdateSchedule  string `json:"updateSchedule" yaml:"updateSchedule"`
+        LastUpdateCheck string `json:"lastUpdateCheck" yaml:"lastUpdateCheck"`
 
-	// Thinking, tools, attachments, history, recall.
-	ThinkingMode        bool     `json:"thinkingMode" yaml:"thinkingMode"`
-	EnabledTools        []string `json:"enabledTools" yaml:"enabledTools"`
-	AttachmentsBudgetKB int      `json:"attachmentsBudgetKb" yaml:"attachmentsBudgetKb"`
-	HistoryWindowPct    int      `json:"historyWindowPct" yaml:"historyWindowPct"`
-	RecallEnabled       bool     `json:"recallEnabled" yaml:"recallEnabled"`
-	RecallTopK          int      `json:"recallTopK" yaml:"recallTopK"`
+        // Thinking, tools, attachments, history, recall.
+        ThinkingMode        bool     `json:"thinkingMode" yaml:"thinkingMode"`
+        EnabledTools        []string `json:"enabledTools" yaml:"enabledTools"`
+        AttachmentsBudgetKB int      `json:"attachmentsBudgetKb" yaml:"attachmentsBudgetKb"`
+        HistoryWindowPct    int      `json:"historyWindowPct" yaml:"historyWindowPct"`
+        RecallEnabled       bool     `json:"recallEnabled" yaml:"recallEnabled"`
+        RecallTopK          int      `json:"recallTopK" yaml:"recallTopK"`
 
-	// Local engine tuning.
-	GPUAutoOffload bool   `json:"gpuAutoOffload" yaml:"gpuAutoOffload"`
-	EngineCompat   int    `json:"engineCompat" yaml:"engineCompat"`
-	FlashAttention bool   `json:"flashAttention" yaml:"flashAttention"`
-	CacheReuse     int    `json:"cacheReuse" yaml:"cacheReuse"`
-	UBatchSize     int    `json:"ubatchSize" yaml:"ubatchSize"`
-	ThreadsBatch   int    `json:"threadsBatch" yaml:"threadsBatch"`
-	KVCacheQuant   string `json:"kvCacheQuant" yaml:"kvCacheQuant"`
-	Mlock          bool   `json:"mlock" yaml:"mlock"`
-	DraftModel     string `json:"draftModel" yaml:"draftModel"`
-	ShowPerfHUD    bool   `json:"showPerfHud" yaml:"showPerfHud"`
+        // Local engine tuning.
+        GPUAutoOffload bool   `json:"gpuAutoOffload" yaml:"gpuAutoOffload"`
+        EngineCompat   int    `json:"engineCompat" yaml:"engineCompat"`
+        FlashAttention bool   `json:"flashAttention" yaml:"flashAttention"`
+        CacheReuse     int    `json:"cacheReuse" yaml:"cacheReuse"`
+        UBatchSize     int    `json:"ubatchSize" yaml:"ubatchSize"`
+        ThreadsBatch   int    `json:"threadsBatch" yaml:"threadsBatch"`
+        KVCacheQuant   string `json:"kvCacheQuant" yaml:"kvCacheQuant"`
+        Mlock          bool   `json:"mlock" yaml:"mlock"`
+        DraftModel     string `json:"draftModel" yaml:"draftModel"`
+        ShowPerfHUD    bool   `json:"showPerfHud" yaml:"showPerfHud"`
 
-	// Vision.
-	VisionEnabled bool   `json:"visionEnabled" yaml:"visionEnabled"`
-	VisionMMProj  string `json:"visionMmproj" yaml:"visionMmproj"`
+        // Vision.
+        VisionEnabled bool   `json:"visionEnabled" yaml:"visionEnabled"`
+        VisionMMProj  string `json:"visionMmproj" yaml:"visionMmproj"`
 
-	// Resource retention.
-	MaxWorkspaceMB  int `json:"maxWorkspaceMb" yaml:"maxWorkspaceMb"`
-	MaxSessionsKept int `json:"maxSessionsKept" yaml:"maxSessionsKept"`
-	MaxLogMB        int `json:"maxLogMb" yaml:"maxLogMb"`
+        // Resource retention.
+        MaxWorkspaceMB  int `json:"maxWorkspaceMb" yaml:"maxWorkspaceMb"`
+        MaxSessionsKept int `json:"maxSessionsKept" yaml:"maxSessionsKept"`
+        MaxLogMB        int `json:"maxLogMb" yaml:"maxLogMb"`
 
-	// Multi-agent pipeline.
-	MultiAgentDepth int `json:"multiAgentDepth" yaml:"multiAgentDepth"`
+        // Multi-agent pipeline.
+        MultiAgentDepth int `json:"multiAgentDepth" yaml:"multiAgentDepth"`
 
-	// Continuum context.
-	ContinuumEnabled         bool `json:"continuumEnabled" yaml:"continuumEnabled"`
-	ContinuumThresholdPct    int  `json:"continuumThresholdPct" yaml:"continuumThresholdPct"`
-	ContinuumCarryMessages   int  `json:"continuumCarryMessages" yaml:"continuumCarryMessages"`
-	ContinuumFrameworkTokens int  `json:"continuumFrameworkTokens" yaml:"continuumFrameworkTokens"`
+        // Continuum context.
+        ContinuumEnabled         bool `json:"continuumEnabled" yaml:"continuumEnabled"`
+        ContinuumThresholdPct    int  `json:"continuumThresholdPct" yaml:"continuumThresholdPct"`
+        ContinuumCarryMessages   int  `json:"continuumCarryMessages" yaml:"continuumCarryMessages"`
+        ContinuumFrameworkTokens int  `json:"continuumFrameworkTokens" yaml:"continuumFrameworkTokens"`
 
-	// Streaming/UI frame pacing.
-	SmoothStream bool `json:"smoothStream" yaml:"smoothStream"`
-	TargetFPS    int  `json:"targetFps" yaml:"targetFps"`
+        // Streaming/UI frame pacing.
+        SmoothStream bool `json:"smoothStream" yaml:"smoothStream"`
+        TargetFPS    int  `json:"targetFps" yaml:"targetFps"`
 
-	// ---------------------------------------------------------------------
-	// Version Zeta — Autonomous Coding Lab.
-	// ---------------------------------------------------------------------
+        // ---------------------------------------------------------------------
+        // Version Zeta — Autonomous Coding Lab.
+        // ---------------------------------------------------------------------
 
-	// LabEnabled enables the autonomous coding-laboratory subsystem.
-	LabEnabled bool `json:"labEnabled" yaml:"labEnabled"`
+        // LabEnabled enables the autonomous coding-laboratory subsystem.
+        LabEnabled bool `json:"labEnabled" yaml:"labEnabled"`
 
-	// LabWorkspaceRoot is the root directory under which disposable coding
-	// workspaces are created.
-	LabWorkspaceRoot string `json:"labWorkspaceRoot" yaml:"labWorkspaceRoot"`
+        // LabWorkspaceRoot is the root directory under which disposable coding
+        // workspaces are created.
+        LabWorkspaceRoot string `json:"labWorkspaceRoot" yaml:"labWorkspaceRoot"`
 
-	// LabCommandTimeoutSec limits one laboratory process execution.
-	LabCommandTimeoutSec int `json:"labCommandTimeoutSec" yaml:"labCommandTimeoutSec"`
+        // LabCommandTimeoutSec limits one laboratory process execution.
+        LabCommandTimeoutSec int `json:"labCommandTimeoutSec" yaml:"labCommandTimeoutSec"`
 
-	// LabMaxIterations controls autonomous repair/verification iterations.
-	// If <= 0, MaxIterations is used.
-	LabMaxIterations int `json:"labMaxIterations" yaml:"labMaxIterations"`
+        // LabMaxIterations controls autonomous repair/verification iterations.
+        // If <= 0, MaxIterations is used.
+        LabMaxIterations int `json:"labMaxIterations" yaml:"labMaxIterations"`
 
-	// LabKeepWorkspaces preserves completed workspaces for inspection.
-	LabKeepWorkspaces bool `json:"labKeepWorkspaces" yaml:"labKeepWorkspaces"`
+        // LabKeepWorkspaces preserves completed workspaces for inspection.
+        LabKeepWorkspaces bool `json:"labKeepWorkspaces" yaml:"labKeepWorkspaces"`
 
-	// LabAllowNetwork controls whether laboratory commands may eventually use
-	// network access. The current runner may impose stricter policy.
-	LabAllowNetwork bool `json:"labAllowNetwork" yaml:"labAllowNetwork"`
+        // LabAllowNetwork controls whether laboratory commands may eventually use
+        // network access. The current runner may impose stricter policy.
+        LabAllowNetwork bool `json:"labAllowNetwork" yaml:"labAllowNetwork"`
 
-	// ---------------------------------------------------------------------
-	// Version Zeta — Web Research Engine.
-	// ---------------------------------------------------------------------
+        // ---------------------------------------------------------------------
+        // Version Zeta — Web Research Engine.
+        // ---------------------------------------------------------------------
 
-	// ResearchEnabled enables external research tools.
-	ResearchEnabled bool `json:"researchEnabled" yaml:"researchEnabled"`
+        // ResearchEnabled enables external research tools.
+        ResearchEnabled bool `json:"researchEnabled" yaml:"researchEnabled"`
 
-	// ResearchBackend selects the search implementation.
-	// Supported design targets include "auto", "searxng", "duckduckgo".
-	ResearchBackend string `json:"researchBackend" yaml:"researchBackend"`
+        // ResearchBackend selects the search implementation.
+        // Supported design targets include "auto", "searxng", "duckduckgo".
+        ResearchBackend string `json:"researchBackend" yaml:"researchBackend"`
 
-	// ResearchSearXNGURL is the optional local/self-hosted SearXNG endpoint.
-	ResearchSearXNGURL string `json:"researchSearxngUrl" yaml:"researchSearxngUrl"`
+        // ResearchSearXNGURL is the optional local/self-hosted SearXNG endpoint.
+        ResearchSearXNGURL string `json:"researchSearxngUrl" yaml:"researchSearxngUrl"`
 
-	// ResearchMaxResults limits results returned to the agent per search.
-	ResearchMaxResults int `json:"researchMaxResults" yaml:"researchMaxResults"`
+        // ResearchMaxResults limits results returned to the agent per search.
+        ResearchMaxResults int `json:"researchMaxResults" yaml:"researchMaxResults"`
 
-	// ResearchTimeoutSec bounds one research HTTP operation.
-	ResearchTimeoutSec int `json:"researchTimeoutSec" yaml:"researchTimeoutSec"`
+        // ResearchTimeoutSec bounds one research HTTP operation.
+        ResearchTimeoutSec int `json:"researchTimeoutSec" yaml:"researchTimeoutSec"`
 
-	// ResearchCacheTTLMin controls cached research lifetime.
-	ResearchCacheTTLMin int `json:"researchCacheTtlMin" yaml:"researchCacheTtlMin"`
+        // ResearchCacheTTLMin controls cached research lifetime.
+        ResearchCacheTTLMin int `json:"researchCacheTtlMin" yaml:"researchCacheTtlMin"`
 
-	// ResearchGitHub enables GitHub-specific research tools.
-	ResearchGitHub bool `json:"researchGitHub" yaml:"researchGitHub"`
+        // ResearchGitHub enables GitHub-specific research tools.
+        ResearchGitHub bool `json:"researchGitHub" yaml:"researchGitHub"`
 
-	// ResearchReddit enables Reddit-specific research tools.
-	ResearchReddit bool `json:"researchReddit" yaml:"researchReddit"`
+        // ResearchReddit enables Reddit-specific research tools.
+        ResearchReddit bool `json:"researchReddit" yaml:"researchReddit"`
 
-	// ResearchWeb enables general web research/fetching.
-	ResearchWeb bool `json:"researchWeb" yaml:"researchWeb"`
+        // ResearchWeb enables general web research/fetching.
+        ResearchWeb bool `json:"researchWeb" yaml:"researchWeb"`
 
-	// ResearchUserAgent identifies bounded research requests.
-	ResearchUserAgent string `json:"researchUserAgent" yaml:"researchUserAgent"`
+        // ResearchUserAgent identifies bounded research requests.
+        ResearchUserAgent string `json:"researchUserAgent" yaml:"researchUserAgent"`
 }
 
 // AppRoot resolves the portable application root.
 func AppRoot() string {
-	if exe, err := os.Executable(); err == nil && exe != "" {
-		if resolved, err := filepath.EvalSymlinks(exe); err == nil {
-			exe = resolved
-		}
-		return filepath.Dir(exe)
-	}
+        if exe, err := os.Executable(); err == nil && exe != "" {
+                if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+                        exe = resolved
+                }
+                return filepath.Dir(exe)
+        }
 
-	wd, err := os.Getwd()
-	if err != nil {
-		return "."
-	}
-	return wd
+        wd, err := os.Getwd()
+        if err != nil {
+                return "."
+        }
+        return wd
 }
 
 // Default returns Version Zeta defaults.
 func Default() *Config {
-	dataDir := AppRoot()
+        dataDir := AppRoot()
 
-	if v := os.Getenv("SHEYTAN_DATA_DIR"); v != "" {
-		dataDir = v
-	}
+        if v := os.Getenv("SHEYTAN_DATA_DIR"); v != "" {
+                dataDir = v
+        }
 
-	return &Config{
-		DataDir:     dataDir,
-		ModelsDir:   filepath.Join(dataDir, "models"),
-		SessionsDir: filepath.Join(dataDir, "sessions"),
+        return &Config{
+                DataDir:     dataDir,
+                ModelsDir:   filepath.Join(dataDir, "models"),
+                SessionsDir: filepath.Join(dataDir, "sessions"),
 
-		Host:       "127.0.0.1",
-		Port:       8765,
-		LLMBaseURL: "http://127.0.0.1:8080/v1",
-		Model:      "",
+                Host:       "127.0.0.1",
+                Port:       8765,
+                LLMBaseURL: "http://127.0.0.1:8080/v1",
+                Model:      "",
 
-		LlamaHost:      "127.0.0.1",
-		LlamaPort:      8080,
-		LlamaAutoStart: true,
+                LlamaHost:      "127.0.0.1",
+                LlamaPort:      8080,
+                LlamaAutoStart: true,
 
-		MaxIterations: 25,
-		ParallelTools: true,
-		VerboseAgent:  true,
+                MaxIterations: 25,
+                ParallelTools: true,
+                VerboseAgent:  true,
 
-		SandboxEnabled: false,
-		SandboxMemory:  "512m",
-		SandboxCPU:     1,
+                SandboxEnabled: false,
+                SandboxMemory:  "512m",
+                SandboxCPU:     1,
 
-		LLM: LLMOptions{
-			Temperature:   0.7,
-			TopP:          0.95,
-			TopK:          40,
-			MaxTokens:     1024,
-			NumCtx:        8192,
-			NumBatch:      512,
-			NumGPU:        0,
-			NumThread:     runtime.NumCPU(),
-			Stream:        true,
-			Preset:        "balanced",
-			RepeatPenalty: 1.1,
-		},
+                LLM: LLMOptions{
+                        Temperature:   0.7,
+                        TopP:          0.95,
+                        TopK:          40,
+                        MaxTokens:     1024,
+                        NumCtx:        8192,
+                        NumBatch:      512,
+                        NumGPU:        0,
+                        NumThread:     runtime.NumCPU(),
+                        Stream:        true,
+                        Preset:        "balanced",
+                        RepeatPenalty: 1.1,
+                },
 
-		Provider:        ProviderLocal,
-		ProMode:         false,
-		UpdateSchedule:  "daily",
-		BrowserHeadless: true,
-		BrowserSlowMo:   0,
+                Provider:        ProviderLocal,
+                ProMode:         false,
+                UpdateSchedule:  "daily",
+                BrowserHeadless: true,
+                BrowserSlowMo:   0,
 
-		ThinkingMode:        false,
-		AttachmentsBudgetKB: 256,
-		HistoryWindowPct:    60,
-		RecallEnabled:       true,
-		RecallTopK:          4,
+                ThinkingMode:        false,
+                AttachmentsBudgetKB: 256,
+                HistoryWindowPct:    60,
+                RecallEnabled:       true,
+                RecallTopK:          4,
 
-		GPUAutoOffload: true,
+                GPUAutoOffload: true,
 
-		EngineCompat:   0,
-		FlashAttention: true,
-		CacheReuse:     32,
-		UBatchSize:     512,
-		ThreadsBatch:   0,
-		KVCacheQuant:   "",
-		Mlock:          false,
-		DraftModel:     "",
-		ShowPerfHUD:    true,
+                EngineCompat:   0,
+                FlashAttention: true,
+                CacheReuse:     32,
+                UBatchSize:     512,
+                ThreadsBatch:   0,
+                KVCacheQuant:   "",
+                Mlock:          false,
+                DraftModel:     "",
+                ShowPerfHUD:    true,
 
-		VisionEnabled: true,
-		VisionMMProj:  "",
+                VisionEnabled: true,
+                VisionMMProj:  "",
 
-		MaxWorkspaceMB:  512,
-		MaxSessionsKept: 100,
-		MaxLogMB:        50,
+                MaxWorkspaceMB:  512,
+                MaxSessionsKept: 100,
+                MaxLogMB:        50,
 
-		MultiAgentDepth: 3,
+                MultiAgentDepth: 3,
 
-		ContinuumEnabled:         true,
-		ContinuumThresholdPct:    75,
-		ContinuumCarryMessages:   4,
-		ContinuumFrameworkTokens: 700,
+                ContinuumEnabled:         true,
+                ContinuumThresholdPct:    75,
+                ContinuumCarryMessages:   4,
+                ContinuumFrameworkTokens: 700,
 
-		SmoothStream: true,
-		TargetFPS:    120,
+                SmoothStream: true,
+                TargetFPS:    120,
 
-		// Version Zeta — Coding Lab defaults.
-		LabEnabled:           true,
-		LabWorkspaceRoot:     filepath.Join(dataDir, "lab", "workspaces"),
-		LabCommandTimeoutSec: 300,
-		LabMaxIterations:     25,
-		LabKeepWorkspaces:    false,
-		LabAllowNetwork:      false,
+                // Version Zeta — Coding Lab defaults.
+                LabEnabled:           true,
+                LabWorkspaceRoot:     filepath.Join(dataDir, "lab", "workspaces"),
+                LabCommandTimeoutSec: 300,
+                LabMaxIterations:     25,
+                LabKeepWorkspaces:    false,
+                LabAllowNetwork:      false,
 
-		// Version Zeta — research defaults.
-		ResearchEnabled:     true,
-		ResearchBackend:     "auto",
-		ResearchMaxResults:  8,
-		ResearchTimeoutSec:  20,
-		ResearchCacheTTLMin: 60,
-		ResearchGitHub:      true,
-		ResearchReddit:      true,
-		ResearchWeb:         true,
-		ResearchUserAgent:   AppName + "/" + AppVersion,
-	}
+                // Version Zeta — research defaults.
+                ResearchEnabled:     true,
+                ResearchBackend:     "auto",
+                ResearchMaxResults:  8,
+                ResearchTimeoutSec:  20,
+                ResearchCacheTTLMin: 60,
+                ResearchGitHub:      true,
+                ResearchReddit:      true,
+                ResearchWeb:         true,
+                ResearchUserAgent:   AppName + "/" + AppVersion,
+        }
 }
 
 // Load reads the portable JSON configuration.
 func Load(path string) (*Config, error) {
-	cfg := Default()
+        cfg := Default()
 
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			MigrateLegacy(cfg.DataDir)
+        data, err := os.ReadFile(path)
+        if err != nil {
+                if os.IsNotExist(err) {
+                        MigrateLegacy(cfg.DataDir)
 
-			if migrated, rerr := os.ReadFile(path); rerr == nil {
-				data = migrated
-			} else {
-				applyEnv(cfg)
-				return cfg, nil
-			}
-		} else {
-			return nil, err
-		}
-	}
+                        if migrated, rerr := os.ReadFile(path); rerr == nil {
+                                data = migrated
+                        } else {
+                                applyEnv(cfg)
+                                return cfg, nil
+                        }
+                } else {
+                        return nil, err
+                }
+        }
 
-	if err := json.Unmarshal(data, cfg); err != nil {
-		return nil, fmt.Errorf("parse config: %w", err)
-	}
+        if err := json.Unmarshal(data, cfg); err != nil {
+                return nil, fmt.Errorf("parse config: %w", err)
+        }
 
-	if cfg.DataDir == "" {
-		cfg.DataDir = Default().DataDir
-	}
-	if cfg.ModelsDir == "" {
-		cfg.ModelsDir = filepath.Join(cfg.DataDir, "models")
-	}
-	if cfg.SessionsDir == "" {
-		cfg.SessionsDir = filepath.Join(cfg.DataDir, "sessions")
-	}
-	if cfg.LabWorkspaceRoot == "" {
-		cfg.LabWorkspaceRoot = filepath.Join(cfg.DataDir, "lab", "workspaces")
-	}
-	if cfg.ResearchUserAgent == "" {
-		cfg.ResearchUserAgent = AppName + "/" + AppVersion
-	}
+        if cfg.DataDir == "" {
+                cfg.DataDir = Default().DataDir
+        }
+        if cfg.ModelsDir == "" {
+                cfg.ModelsDir = filepath.Join(cfg.DataDir, "models")
+        }
+        if cfg.SessionsDir == "" {
+                cfg.SessionsDir = filepath.Join(cfg.DataDir, "sessions")
+        }
+        if cfg.LabWorkspaceRoot == "" {
+                cfg.LabWorkspaceRoot = filepath.Join(cfg.DataDir, "lab", "workspaces")
+        }
+        if cfg.ResearchUserAgent == "" {
+                cfg.ResearchUserAgent = AppName + "/" + AppVersion
+        }
 
-	applyEnv(cfg)
-	return cfg, nil
+        applyEnv(cfg)
+        return cfg, nil
 }
 
 // MigrateLegacy copies legacy ~/.sheytan data into the portable root.
 func MigrateLegacy(root string) {
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		return
-	}
+        home, err := os.UserHomeDir()
+        if err != nil || home == "" {
+                return
+        }
 
-	legacy := filepath.Join(home, ".sheytan")
+        legacy := filepath.Join(home, ".sheytan")
 
-	if legacy == root {
-		return
-	}
+        if legacy == root {
+                return
+        }
 
-	if _, err := os.Stat(filepath.Join(root, "config.json")); err == nil {
-		return
-	}
+        if _, err := os.Stat(filepath.Join(root, "config.json")); err == nil {
+                return
+        }
 
-	fi, err := os.Stat(legacy)
-	if err != nil || !fi.IsDir() {
-		return
-	}
+        fi, err := os.Stat(legacy)
+        if err != nil || !fi.IsDir() {
+                return
+        }
 
-	files := []string{
-		"config.json",
-		"memory.jsonl",
-		"installed.json",
-	}
+        files := []string{
+                "config.json",
+                "memory.jsonl",
+                "installed.json",
+        }
 
-	dirs := []string{
-		"sessions",
-		"logs",
-		"models",
-		"bin",
-	}
+        dirs := []string{
+                "sessions",
+                "logs",
+                "models",
+                "bin",
+        }
 
-	for _, file := range files {
-		src := filepath.Join(legacy, file)
-		if _, err := os.Stat(src); err == nil {
-			_ = copyFile(src, filepath.Join(root, file))
-		}
-	}
+        for _, file := range files {
+                src := filepath.Join(legacy, file)
+                if _, err := os.Stat(src); err == nil {
+                        _ = copyFile(src, filepath.Join(root, file))
+                }
+        }
 
-	for _, dir := range dirs {
-		src := filepath.Join(legacy, dir)
-		if fi, err := os.Stat(src); err == nil && fi.IsDir() {
-			_ = copyDir(src, filepath.Join(root, dir))
-		}
-	}
+        for _, dir := range dirs {
+                src := filepath.Join(legacy, dir)
+                if fi, err := os.Stat(src); err == nil && fi.IsDir() {
+                        _ = copyDir(src, filepath.Join(root, dir))
+                }
+        }
 }
 
 func copyFile(src, dst string) error {
-	data, err := os.ReadFile(src)
-	if err != nil {
-		return err
-	}
+        data, err := os.ReadFile(src)
+        if err != nil {
+                return err
+        }
 
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-		return err
-	}
+        if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+                return err
+        }
 
-	return os.WriteFile(dst, data, 0o644)
+        return os.WriteFile(dst, data, 0o644)
 }
 
 func copyDir(src, dst string) error {
-	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
+        return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+                if err != nil {
+                        return err
+                }
 
-		rel, _ := filepath.Rel(src, path)
-		target := filepath.Join(dst, rel)
+                rel, _ := filepath.Rel(src, path)
+                target := filepath.Join(dst, rel)
 
-		if info.IsDir() {
-			return os.MkdirAll(target, 0o755)
-		}
+                if info.IsDir() {
+                        return os.MkdirAll(target, 0o755)
+                }
 
-		return copyFile(path, target)
-	})
+                return copyFile(path, target)
+        })
 }
 
 // Save writes configuration as pretty JSON.
 func Save(path string, cfg *Config) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
+        if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+                return err
+        }
 
-	data, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		return err
-	}
+        data, err := json.MarshalIndent(cfg, "", "  ")
+        if err != nil {
+                return err
+        }
 
-	return os.WriteFile(path, data, 0o644)
+        return os.WriteFile(path, data, 0o644)
 }
 
 // applyEnv overlays supported SHEYTAN_* variables.
 func applyEnv(cfg *Config) {
-	if v := os.Getenv("SHEYTAN_HOST"); v != "" {
-		cfg.Host = v
-	}
-	if v := os.Getenv("SHEYTAN_PORT"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			cfg.Port = n
-		}
-	}
-	if v := os.Getenv("SHEYTAN_BASE_URL"); v != "" {
-		cfg.LLMBaseURL = v
-	}
-	if v := os.Getenv("SHEYTAN_MODEL"); v != "" {
-		cfg.Model = v
-	}
-	if v := os.Getenv("SHEYTAN_DATA_DIR"); v != "" {
-		cfg.DataDir = v
-		cfg.ModelsDir = filepath.Join(v, "models")
-		cfg.SessionsDir = filepath.Join(v, "sessions")
-		cfg.LabWorkspaceRoot = filepath.Join(v, "lab", "workspaces")
-	}
-	if v := os.Getenv("SHEYTAN_PROVIDER"); v != "" {
-		cfg.Provider = strings.ToLower(v)
-	}
-	if v := os.Getenv("SHEYTAN_REMOTE_BASE_URL"); v != "" {
-		cfg.RemoteBaseURL = v
-		if cfg.Provider == "" {
-			cfg.Provider = ProviderRemote
-		}
-	}
-	if v := os.Getenv("SHEYTAN_REMOTE_API_KEY"); v != "" {
-		cfg.RemoteAPIKey = v
-	}
-	if v := os.Getenv("SHEYTAN_REMOTE_MODEL"); v != "" {
-		cfg.RemoteModel = v
-	}
-	if v := os.Getenv("SHEYTAN_BROWSER_PATH"); v != "" {
-		cfg.BrowserExecutablePath = v
-	}
+        if v := os.Getenv("SHEYTAN_HOST"); v != "" {
+                cfg.Host = v
+        }
+        if v := os.Getenv("SHEYTAN_PORT"); v != "" {
+                if n, err := strconv.Atoi(v); err == nil {
+                        cfg.Port = n
+                }
+        }
+        if v := os.Getenv("SHEYTAN_BASE_URL"); v != "" {
+                cfg.LLMBaseURL = v
+        }
+        if v := os.Getenv("SHEYTAN_MODEL"); v != "" {
+                cfg.Model = v
+        }
+        if v := os.Getenv("SHEYTAN_DATA_DIR"); v != "" {
+                cfg.DataDir = v
+                cfg.ModelsDir = filepath.Join(v, "models")
+                cfg.SessionsDir = filepath.Join(v, "sessions")
+                cfg.LabWorkspaceRoot = filepath.Join(v, "lab", "workspaces")
+        }
+        if v := os.Getenv("SHEYTAN_PROVIDER"); v != "" {
+                cfg.Provider = strings.ToLower(v)
+        }
+        if v := os.Getenv("SHEYTAN_REMOTE_BASE_URL"); v != "" {
+                cfg.RemoteBaseURL = v
+                if cfg.Provider == "" {
+                        cfg.Provider = ProviderRemote
+                }
+        }
+        if v := os.Getenv("SHEYTAN_REMOTE_API_KEY"); v != "" {
+                cfg.RemoteAPIKey = v
+        }
+        if v := os.Getenv("SHEYTAN_REMOTE_MODEL"); v != "" {
+                cfg.RemoteModel = v
+        }
+        if v := os.Getenv("SHEYTAN_BROWSER_PATH"); v != "" {
+                cfg.BrowserExecutablePath = v
+        }
 
-	// LLM.
-	if v := os.Getenv("SHEYTAN_LLM_PRESET"); v != "" {
-		cfg.LLM.Preset = strings.ToLower(v)
-	}
-	if v := os.Getenv("SHEYTAN_LLM_NUM_CTX"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			cfg.LLM.NumCtx = n
-		}
-	}
-	if v := os.Getenv("SHEYTAN_LLM_NUM_THREADS"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-			cfg.LLM.NumThread = n
-		}
-	}
-	if v := os.Getenv("SHEYTAN_LLM_MAX_TOKENS"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-			cfg.LLM.MaxTokens = n
-		}
-	}
-	if v := os.Getenv("SHEYTAN_LLM_TEMPERATURE"); v != "" {
-		if n, err := strconv.ParseFloat(v, 64); err == nil {
-			cfg.LLM.Temperature = n
-		}
-	}
+        // LLM.
+        if v := os.Getenv("SHEYTAN_LLM_PRESET"); v != "" {
+                cfg.LLM.Preset = strings.ToLower(v)
+        }
+        if v := os.Getenv("SHEYTAN_LLM_NUM_CTX"); v != "" {
+                if n, err := strconv.Atoi(v); err == nil && n > 0 {
+                        cfg.LLM.NumCtx = n
+                }
+        }
+        if v := os.Getenv("SHEYTAN_LLM_NUM_THREADS"); v != "" {
+                if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+                        cfg.LLM.NumThread = n
+                }
+        }
+        if v := os.Getenv("SHEYTAN_LLM_MAX_TOKENS"); v != "" {
+                if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+                        cfg.LLM.MaxTokens = n
+                }
+        }
+        if v := os.Getenv("SHEYTAN_LLM_TEMPERATURE"); v != "" {
+                if n, err := strconv.ParseFloat(v, 64); err == nil {
+                        cfg.LLM.Temperature = n
+                }
+        }
 
-	// Engine tuning.
-	if v := os.Getenv("SHEYTAN_FLASH_ATTENTION"); v != "" {
-		cfg.FlashAttention = parseBool(v)
-	}
-	if v := os.Getenv("SHEYTAN_KV_CACHE_QUANT"); v != "" {
-		cfg.KVCacheQuant = strings.ToLower(strings.TrimSpace(v))
-	}
-	if v := os.Getenv("SHEYTAN_CACHE_REUSE"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			cfg.CacheReuse = n
-		}
-	}
+        // Engine tuning.
+        if v := os.Getenv("SHEYTAN_FLASH_ATTENTION"); v != "" {
+                cfg.FlashAttention = parseBool(v)
+        }
+        if v := os.Getenv("SHEYTAN_KV_CACHE_QUANT"); v != "" {
+                cfg.KVCacheQuant = strings.ToLower(strings.TrimSpace(v))
+        }
+        if v := os.Getenv("SHEYTAN_CACHE_REUSE"); v != "" {
+                if n, err := strconv.Atoi(v); err == nil {
+                        cfg.CacheReuse = n
+                }
+        }
 
-	// Experience.
-	if v := os.Getenv("SHEYTAN_THINKING_MODE"); v != "" {
-		cfg.ThinkingMode = parseBool(v)
-	}
-	if v := os.Getenv("SHEYTAN_SMOOTH_STREAM"); v != "" {
-		cfg.SmoothStream = parseBool(v)
-	}
-	if v := os.Getenv("SHEYTAN_TARGET_FPS"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			cfg.TargetFPS = n
-		}
-	}
+        // Experience.
+        if v := os.Getenv("SHEYTAN_THINKING_MODE"); v != "" {
+                cfg.ThinkingMode = parseBool(v)
+        }
+        if v := os.Getenv("SHEYTAN_SMOOTH_STREAM"); v != "" {
+                cfg.SmoothStream = parseBool(v)
+        }
+        if v := os.Getenv("SHEYTAN_TARGET_FPS"); v != "" {
+                if n, err := strconv.Atoi(v); err == nil && n > 0 {
+                        cfg.TargetFPS = n
+                }
+        }
 
-	// Version Zeta — Coding Lab.
-	if v := os.Getenv("SHEYTAN_LAB_ENABLED"); v != "" {
-		cfg.LabEnabled = parseBool(v)
-	}
-	if v := os.Getenv("SHEYTAN_LAB_WORKSPACE_ROOT"); v != "" {
-		cfg.LabWorkspaceRoot = v
-	}
-	if v := os.Getenv("SHEYTAN_LAB_COMMAND_TIMEOUT"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			cfg.LabCommandTimeoutSec = n
-		}
-	}
-	if v := os.Getenv("SHEYTAN_LAB_MAX_ITERATIONS"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			cfg.LabMaxIterations = n
-		}
-	}
-	if v := os.Getenv("SHEYTAN_LAB_KEEP_WORKSPACES"); v != "" {
-		cfg.LabKeepWorkspaces = parseBool(v)
-	}
-	if v := os.Getenv("SHEYTAN_LAB_ALLOW_NETWORK"); v != "" {
-		cfg.LabAllowNetwork = parseBool(v)
-	}
+        // Version Zeta — Coding Lab.
+        if v := os.Getenv("SHEYTAN_LAB_ENABLED"); v != "" {
+                cfg.LabEnabled = parseBool(v)
+        }
+        if v := os.Getenv("SHEYTAN_LAB_WORKSPACE_ROOT"); v != "" {
+                cfg.LabWorkspaceRoot = v
+        }
+        if v := os.Getenv("SHEYTAN_LAB_COMMAND_TIMEOUT"); v != "" {
+                if n, err := strconv.Atoi(v); err == nil && n > 0 {
+                        cfg.LabCommandTimeoutSec = n
+                }
+        }
+        if v := os.Getenv("SHEYTAN_LAB_MAX_ITERATIONS"); v != "" {
+                if n, err := strconv.Atoi(v); err == nil && n > 0 {
+                        cfg.LabMaxIterations = n
+                }
+        }
+        if v := os.Getenv("SHEYTAN_LAB_KEEP_WORKSPACES"); v != "" {
+                cfg.LabKeepWorkspaces = parseBool(v)
+        }
+        if v := os.Getenv("SHEYTAN_LAB_ALLOW_NETWORK"); v != "" {
+                cfg.LabAllowNetwork = parseBool(v)
+        }
 
-	// Version Zeta — Research.
-	if v := os.Getenv("SHEYTAN_RESEARCH_ENABLED"); v != "" {
-		cfg.ResearchEnabled = parseBool(v)
-	}
-	if v := os.Getenv("SHEYTAN_RESEARCH_BACKEND"); v != "" {
-		cfg.ResearchBackend = strings.ToLower(strings.TrimSpace(v))
-	}
-	if v := os.Getenv("SHEYTAN_SEARXNG_URL"); v != "" {
-		cfg.ResearchSearXNGURL = strings.TrimRight(v, "/")
-	}
-	if v := os.Getenv("SHEYTAN_RESEARCH_MAX_RESULTS"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			cfg.ResearchMaxResults = n
-		}
-	}
-	if v := os.Getenv("SHEYTAN_RESEARCH_TIMEOUT"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			cfg.ResearchTimeoutSec = n
-		}
-	}
-	if v := os.Getenv("SHEYTAN_RESEARCH_CACHE_TTL"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-			cfg.ResearchCacheTTLMin = n
-		}
-	}
-	if v := os.Getenv("SHEYTAN_RESEARCH_GITHUB"); v != "" {
-		cfg.ResearchGitHub = parseBool(v)
-	}
-	if v := os.Getenv("SHEYTAN_RESEARCH_REDDIT"); v != "" {
-		cfg.ResearchReddit = parseBool(v)
-	}
-	if v := os.Getenv("SHEYTAN_RESEARCH_WEB"); v != "" {
-		cfg.ResearchWeb = parseBool(v)
-	}
-	if v := os.Getenv("SHEYTAN_RESEARCH_USER_AGENT"); v != "" {
-		cfg.ResearchUserAgent = v
-	}
+        // Version Zeta — Research.
+        if v := os.Getenv("SHEYTAN_RESEARCH_ENABLED"); v != "" {
+                cfg.ResearchEnabled = parseBool(v)
+        }
+        if v := os.Getenv("SHEYTAN_RESEARCH_BACKEND"); v != "" {
+                cfg.ResearchBackend = strings.ToLower(strings.TrimSpace(v))
+        }
+        if v := os.Getenv("SHEYTAN_SEARXNG_URL"); v != "" {
+                cfg.ResearchSearXNGURL = strings.TrimRight(v, "/")
+        }
+        if v := os.Getenv("SHEYTAN_RESEARCH_MAX_RESULTS"); v != "" {
+                if n, err := strconv.Atoi(v); err == nil && n > 0 {
+                        cfg.ResearchMaxResults = n
+                }
+        }
+        if v := os.Getenv("SHEYTAN_RESEARCH_TIMEOUT"); v != "" {
+                if n, err := strconv.Atoi(v); err == nil && n > 0 {
+                        cfg.ResearchTimeoutSec = n
+                }
+        }
+        if v := os.Getenv("SHEYTAN_RESEARCH_CACHE_TTL"); v != "" {
+                if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+                        cfg.ResearchCacheTTLMin = n
+                }
+        }
+        if v := os.Getenv("SHEYTAN_RESEARCH_GITHUB"); v != "" {
+                cfg.ResearchGitHub = parseBool(v)
+        }
+        if v := os.Getenv("SHEYTAN_RESEARCH_REDDIT"); v != "" {
+                cfg.ResearchReddit = parseBool(v)
+        }
+        if v := os.Getenv("SHEYTAN_RESEARCH_WEB"); v != "" {
+                cfg.ResearchWeb = parseBool(v)
+        }
+        if v := os.Getenv("SHEYTAN_RESEARCH_USER_AGENT"); v != "" {
+                cfg.ResearchUserAgent = v
+        }
 }
 
 func parseBool(v string) bool {
-	v = strings.TrimSpace(strings.ToLower(v))
-	return v == "1" || v == "true" || v == "yes" || v == "on"
+        v = strings.TrimSpace(strings.ToLower(v))
+        return v == "1" || v == "true" || v == "yes" || v == "on"
 }
 
 // EnsureDirs creates all required portable directories.
 func (c *Config) EnsureDirs() error {
-	dirs := []string{
-		c.DataDir,
-		c.ModelsDir,
-		c.SessionsDir,
-		c.LogsDir(),
-		c.ScreenshotsDir(),
-		c.ChartsDir(),
-		c.BrowserProfileDir(),
-		c.SandboxDir(),
-		c.WorkspaceDir(),
-		c.LabWorkspaceRoot,
-		filepath.Join(c.DataDir, "lab"),
-		filepath.Join(c.DataDir, "research"),
-		filepath.Join(c.DataDir, "bin"),
-	}
+        dirs := []string{
+                c.DataDir,
+                c.ModelsDir,
+                c.SessionsDir,
+                c.LogsDir(),
+                c.ScreenshotsDir(),
+                c.ChartsDir(),
+                c.BrowserProfileDir(),
+                c.SandboxDir(),
+                c.WorkspaceDir(),
+                c.LabWorkspaceRoot,
+                filepath.Join(c.DataDir, "lab"),
+                filepath.Join(c.DataDir, "research"),
+                filepath.Join(c.DataDir, "bin"),
+        }
 
-	for _, path := range dirs {
-		if path == "" {
-			continue
-		}
+        for _, path := range dirs {
+                if path == "" {
+                        continue
+                }
 
-		if err := os.MkdirAll(path, 0o755); err != nil {
-			return fmt.Errorf("mkdir %s: %w", path, err)
-		}
-	}
+                if err := os.MkdirAll(path, 0o755); err != nil {
+                        return fmt.Errorf("mkdir %s: %w", path, err)
+                }
+        }
 
-	return nil
+        return nil
 }
 
 // LogsDir returns the log directory.
 func (c *Config) LogsDir() string {
-	return filepath.Join(c.DataDir, "logs")
+        return filepath.Join(c.DataDir, "logs")
 }
 
 // ScreenshotsDir returns the browser screenshot directory.
 func (c *Config) ScreenshotsDir() string {
-	return filepath.Join(c.DataDir, "logs", "screenshots")
+        return filepath.Join(c.DataDir, "logs", "screenshots")
 }
 
 // ChartsDir returns the chart directory.
 func (c *Config) ChartsDir() string {
-	return filepath.Join(c.DataDir, "charts")
+        return filepath.Join(c.DataDir, "charts")
 }
 
 // BrowserProfileDir returns the persistent browser profile directory.
 func (c *Config) BrowserProfileDir() string {
-	return filepath.Join(c.DataDir, "browser-profile")
+        return filepath.Join(c.DataDir, "browser-profile")
 }
 
 // SandboxDir returns the sandbox runtime directory.
 func (c *Config) SandboxDir() string {
-	return filepath.Join(c.DataDir, "sandbox")
+        return filepath.Join(c.DataDir, "sandbox")
 }
 
 // WorkspaceDir returns the legacy/general scratch workspace.
 func (c *Config) WorkspaceDir() string {
-	return filepath.Join(c.DataDir, "workspace")
+        return filepath.Join(c.DataDir, "workspace")
 }
 
 // LabDir returns the Coding Lab root.
 func (c *Config) LabDir() string {
-	return filepath.Join(c.DataDir, "lab")
+        return filepath.Join(c.DataDir, "lab")
 }
 
 // ResearchDir returns the research cache/storage root.
 func (c *Config) ResearchDir() string {
-	return filepath.Join(c.DataDir, "research")
+        return filepath.Join(c.DataDir, "research")
 }
 
 // ProviderKind returns local or remote.
 func (c *Config) ProviderKind() string {
-	if strings.EqualFold(c.Provider, ProviderRemote) {
-		return ProviderRemote
-	}
-	return ProviderLocal
+        if strings.EqualFold(c.Provider, ProviderRemote) {
+                return ProviderRemote
+        }
+        return ProviderLocal
 }
 
 // IsRemote reports whether a remote provider is active.
 func (c *Config) IsRemote() bool {
-	return c.ProviderKind() == ProviderRemote
+        return c.ProviderKind() == ProviderRemote
 }
 
 // EffectiveBaseURL returns the active LLM endpoint without a trailing slash.
 func (c *Config) EffectiveBaseURL() string {
-	if c.IsRemote() && c.RemoteBaseURL != "" {
-		return strings.TrimRight(c.RemoteBaseURL, "/")
-	}
-	return strings.TrimRight(c.LLMBaseURL, "/")
+        if c.IsRemote() && c.RemoteBaseURL != "" {
+                return strings.TrimRight(c.RemoteBaseURL, "/")
+        }
+        return strings.TrimRight(c.LLMBaseURL, "/")
 }
 
 // EffectiveAPIKey returns the active bearer token.
 func (c *Config) EffectiveAPIKey() string {
-	if c.IsRemote() && c.RemoteAPIKey != "" {
-		return c.RemoteAPIKey
-	}
-	return "no-key"
+        if c.IsRemote() && c.RemoteAPIKey != "" {
+                return c.RemoteAPIKey
+        }
+        return "no-key"
 }
 
 // EffectiveModel returns the active model ID.
 func (c *Config) EffectiveModel() string {
-	if c.IsRemote() && c.RemoteModel != "" {
-		return c.RemoteModel
-	}
-	return c.Model
+        if c.IsRemote() && c.RemoteModel != "" {
+                return c.RemoteModel
+        }
+        return c.Model
 }
 
 // DisplayModel returns a human-friendly model label.
 func (c *Config) DisplayModel() string {
-	model := c.EffectiveModel()
-	if model == "" {
-		return ""
-	}
-	return strings.TrimSuffix(model, ".gguf")
+        model := c.EffectiveModel()
+        if model == "" {
+                return ""
+        }
+        return strings.TrimSuffix(model, ".gguf")
 }
 
 // DefaultPath returns the canonical portable config path.
 func DefaultPath() string {
-	return Default().ConfigPath()
+        return Default().ConfigPath()
 }
 
 // ConfigPath returns config.json under DataDir.
 func (c *Config) ConfigPath() string {
-	return filepath.Join(c.DataDir, "config.json")
+        return filepath.Join(c.DataDir, "config.json")
 }
 
 // StatePath returns the installed-component state file.
 func (c *Config) StatePath() string {
-	return filepath.Join(c.DataDir, "installed.json")
+        return filepath.Join(c.DataDir, "installed.json")
 }
 
 // ToolEnabled reports whether a tool is enabled.
 func (c *Config) ToolEnabled(name string) bool {
-	if len(c.EnabledTools) == 0 {
-		return true
-	}
+        if len(c.EnabledTools) == 0 {
+                return true
+        }
 
-	for _, item := range c.EnabledTools {
-		if strings.EqualFold(item, name) {
-			return true
-		}
-	}
+        for _, item := range c.EnabledTools {
+                if strings.EqualFold(item, name) {
+                        return true
+                }
+        }
 
-	return false
+        return false
 }
 
 // EnabledToolList returns only enabled tools.
 func (c *Config) EnabledToolList(all []string) []string {
-	if len(c.EnabledTools) == 0 {
-		return all
-	}
+        if len(c.EnabledTools) == 0 {
+                return all
+        }
 
-	out := make([]string, 0, len(all))
+        out := make([]string, 0, len(all))
 
-	for _, name := range all {
-		if c.ToolEnabled(name) {
-			out = append(out, name)
-		}
-	}
+        for _, name := range all {
+                if c.ToolEnabled(name) {
+                        out = append(out, name)
+                }
+        }
 
-	return out
+        return out
 }
 
 // AttachmentsBudgetBytes returns the configured attachment byte budget.
 func (c *Config) AttachmentsBudgetBytes() int {
-	kb := c.AttachmentsBudgetKB
-	if kb <= 0 {
-		kb = 256
-	}
-	return kb * 1024
+        kb := c.AttachmentsBudgetKB
+        if kb <= 0 {
+                kb = 256
+        }
+        return kb * 1024
 }
 
 // HistoryWindowTokens returns the configured history token budget.
 func (c *Config) HistoryWindowTokens() int {
-	ctxN := c.LLM.NumCtx
-	if ctxN <= 0 {
-		ctxN = 8192
-	}
+        ctxN := c.LLM.NumCtx
+        if ctxN <= 0 {
+                ctxN = 8192
+        }
 
-	pct := c.HistoryWindowPct
-	if pct <= 0 {
-		pct = 60
-	}
-	if pct > 95 {
-		pct = 95
-	}
+        pct := c.HistoryWindowPct
+        if pct <= 0 {
+                pct = 60
+        }
+        if pct > 95 {
+                pct = 95
+        }
 
-	return ctxN * pct / 100
+        return ctxN * pct / 100
 }
 
 // EffectiveRecallTopK returns the bounded recall capsule count.
 func (c *Config) EffectiveRecallTopK() int {
-	if c.RecallTopK <= 0 {
-		return 4
-	}
-	if c.RecallTopK > 12 {
-		return 12
-	}
-	return c.RecallTopK
+        if c.RecallTopK <= 0 {
+                return 4
+        }
+        if c.RecallTopK > 12 {
+                return 12
+        }
+        return c.RecallTopK
 }
 
 // EffectiveKVCacheQuant validates the KV cache quantization.
 func (c *Config) EffectiveKVCacheQuant() string {
-	switch strings.ToLower(strings.TrimSpace(c.KVCacheQuant)) {
-	case "q8_0":
-		return "q8_0"
-	case "q4_0":
-		return "q4_0"
-	default:
-		return ""
-	}
+        switch strings.ToLower(strings.TrimSpace(c.KVCacheQuant)) {
+        case "q8_0":
+                return "q8_0"
+        case "q4_0":
+                return "q4_0"
+        default:
+                return ""
+        }
 }
 
 // EffectiveCacheReuse returns the bounded KV reuse chunk.
 func (c *Config) EffectiveCacheReuse() int {
-	if c.CacheReuse <= 0 {
-		return 0
-	}
-	if c.CacheReuse > 512 {
-		return 512
-	}
-	return c.CacheReuse
+        if c.CacheReuse <= 0 {
+                return 0
+        }
+        if c.CacheReuse > 512 {
+                return 512
+        }
+        return c.CacheReuse
 }
 
 // EffectiveUBatchSize returns the bounded physical batch.
 func (c *Config) EffectiveUBatchSize() int {
-	if c.UBatchSize <= 0 {
-		return 512
-	}
-	if c.UBatchSize > 8192 {
-		return 8192
-	}
-	return c.UBatchSize
+        if c.UBatchSize <= 0 {
+                return 512
+        }
+        if c.UBatchSize > 8192 {
+                return 8192
+        }
+        return c.UBatchSize
 }
 
 // EffectiveMultiAgentDepth returns the bounded planning depth.
 func (c *Config) EffectiveMultiAgentDepth() int {
-	if c.MultiAgentDepth <= 0 {
-		return 3
-	}
-	if c.MultiAgentDepth > 5 {
-		return 5
-	}
-	return c.MultiAgentDepth
+        if c.MultiAgentDepth <= 0 {
+                return 3
+        }
+        if c.MultiAgentDepth > 5 {
+                return 5
+        }
+        return c.MultiAgentDepth
 }
 
 // EffectiveContinuumThreshold returns the rollover threshold.
 func (c *Config) EffectiveContinuumThreshold() int {
-	if c.ContinuumThresholdPct <= 0 {
-		return 75
-	}
-	if c.ContinuumThresholdPct < 50 {
-		return 50
-	}
-	if c.ContinuumThresholdPct > 95 {
-		return 95
-	}
-	return c.ContinuumThresholdPct
+        if c.ContinuumThresholdPct <= 0 {
+                return 75
+        }
+        if c.ContinuumThresholdPct < 50 {
+                return 50
+        }
+        if c.ContinuumThresholdPct > 95 {
+                return 95
+        }
+        return c.ContinuumThresholdPct
 }
 
 // EffectiveContinuumCarry returns the number of carried messages.
 func (c *Config) EffectiveContinuumCarry() int {
-	if c.ContinuumCarryMessages < 0 {
-		return 4
-	}
-	if c.ContinuumCarryMessages > 16 {
-		return 16
-	}
-	return c.ContinuumCarryMessages
+        if c.ContinuumCarryMessages < 0 {
+                return 4
+        }
+        if c.ContinuumCarryMessages > 16 {
+                return 16
+        }
+        return c.ContinuumCarryMessages
 }
 
 // EffectiveContinuumFrameworkTokens returns the Framework token budget.
 func (c *Config) EffectiveContinuumFrameworkTokens() int {
-	if c.ContinuumFrameworkTokens <= 0 {
-		return 700
-	}
-	if c.ContinuumFrameworkTokens < 200 {
-		return 200
-	}
-	if c.ContinuumFrameworkTokens > 2000 {
-		return 2000
-	}
-	return c.ContinuumFrameworkTokens
+        if c.ContinuumFrameworkTokens <= 0 {
+                return 700
+        }
+        if c.ContinuumFrameworkTokens < 200 {
+                return 200
+        }
+        if c.ContinuumFrameworkTokens > 2000 {
+                return 2000
+        }
+        return c.ContinuumFrameworkTokens
 }
 
 // EffectiveMaxWorkspaceMB returns the general workspace quota.
 func (c *Config) EffectiveMaxWorkspaceMB() int {
-	if c.MaxWorkspaceMB < 0 {
-		return 0
-	}
-	return c.MaxWorkspaceMB
+        if c.MaxWorkspaceMB < 0 {
+                return 0
+        }
+        return c.MaxWorkspaceMB
 }
 
 // EffectiveMaxSessionsKept returns session retention.
 func (c *Config) EffectiveMaxSessionsKept() int {
-	if c.MaxSessionsKept <= 0 {
-		return 0
-	}
-	if c.MaxSessionsKept < 10 {
-		return 10
-	}
-	return c.MaxSessionsKept
+        if c.MaxSessionsKept <= 0 {
+                return 0
+        }
+        if c.MaxSessionsKept < 10 {
+                return 10
+        }
+        return c.MaxSessionsKept
 }
 
 // EffectiveMaxLogMB returns the log quota.
 func (c *Config) EffectiveMaxLogMB() int {
-	if c.MaxLogMB < 0 {
-		return 0
-	}
-	return c.MaxLogMB
+        if c.MaxLogMB < 0 {
+                return 0
+        }
+        return c.MaxLogMB
 }
 
 // EffectiveTargetFPS returns a bounded UI frame target.
 func (c *Config) EffectiveTargetFPS() int {
-	fps := c.TargetFPS
+        fps := c.TargetFPS
 
-	if fps == 0 {
-		fps = 120
-	}
-	if fps < 30 {
-		fps = 30
-	}
-	if fps > 240 {
-		fps = 240
-	}
+        if fps == 0 {
+                fps = 120
+        }
+        if fps < 30 {
+                fps = 30
+        }
+        if fps > 240 {
+                fps = 240
+        }
 
-	return fps
+        return fps
 }
 
 // EffectiveStreamEmitInterval returns the streaming update cadence.
 func (c *Config) EffectiveStreamEmitInterval() time.Duration {
-	interval := time.Second / time.Duration(c.EffectiveTargetFPS())
+        interval := time.Second / time.Duration(c.EffectiveTargetFPS())
 
-	if interval < 8*time.Millisecond {
-		interval = 8 * time.Millisecond
-	}
-	if interval > 80*time.Millisecond {
-		interval = 80 * time.Millisecond
-	}
+        if interval < 8*time.Millisecond {
+                interval = 8 * time.Millisecond
+        }
+        if interval > 80*time.Millisecond {
+                interval = 80 * time.Millisecond
+        }
 
-	return interval
+        return interval
 }
 
 // EffectiveLabCommandTimeout returns the per-command laboratory timeout.
 func (c *Config) EffectiveLabCommandTimeout() time.Duration {
-	seconds := c.LabCommandTimeoutSec
-	if seconds <= 0 {
-		seconds = 300
-	}
-	if seconds > 3600 {
-		seconds = 3600
-	}
-	return time.Duration(seconds) * time.Second
+        seconds := c.LabCommandTimeoutSec
+        if seconds <= 0 {
+                seconds = 300
+        }
+        if seconds > 3600 {
+                seconds = 3600
+        }
+        return time.Duration(seconds) * time.Second
 }
 
 // EffectiveLabMaxIterations returns the Coding Lab repair limit.
 func (c *Config) EffectiveLabMaxIterations() int {
-	if c.LabMaxIterations > 0 {
-		if c.LabMaxIterations > 100 {
-			return 100
-		}
-		return c.LabMaxIterations
-	}
+        if c.LabMaxIterations > 0 {
+                if c.LabMaxIterations > 100 {
+                        return 100
+                }
+                return c.LabMaxIterations
+        }
 
-	if c.MaxIterations > 0 {
-		if c.MaxIterations > 100 {
-			return 100
-		}
-		return c.MaxIterations
-	}
+        if c.MaxIterations > 0 {
+                if c.MaxIterations > 100 {
+                        return 100
+                }
+                return c.MaxIterations
+        }
 
-	return 25
+        return 25
 }
 
 // EffectiveResearchMaxResults returns the per-search result limit.
 func (c *Config) EffectiveResearchMaxResults() int {
-	n := c.ResearchMaxResults
-	if n <= 0 {
-		n = 8
-	}
-	if n > 50 {
-		n = 50
-	}
-	return n
+        n := c.ResearchMaxResults
+        if n <= 0 {
+                n = 8
+        }
+        if n > 50 {
+                n = 50
+        }
+        return n
 }
 
 // EffectiveResearchTimeout returns the research request timeout.
 func (c *Config) EffectiveResearchTimeout() time.Duration {
-	seconds := c.ResearchTimeoutSec
-	if seconds <= 0 {
-		seconds = 20
-	}
-	if seconds > 120 {
-		seconds = 120
-	}
-	return time.Duration(seconds) * time.Second
+        seconds := c.ResearchTimeoutSec
+        if seconds <= 0 {
+                seconds = 20
+        }
+        if seconds > 120 {
+                seconds = 120
+        }
+        return time.Duration(seconds) * time.Second
 }
 
 // EffectiveResearchBackend returns a normalized research backend.
 func (c *Config) EffectiveResearchBackend() string {
-	switch strings.ToLower(strings.TrimSpace(c.ResearchBackend)) {
-	case "searxng":
-		return "searxng"
-	case "duckduckgo":
-		return "duckduckgo"
-	case "auto":
-		return "auto"
-	default:
-		return "auto"
-	}
+        switch strings.ToLower(strings.TrimSpace(c.ResearchBackend)) {
+        case "searxng":
+                return "searxng"
+        case "duckduckgo":
+                return "duckduckgo"
+        case "auto":
+                return "auto"
+        default:
+                return "auto"
+        }
 }
 
 // EffectiveResearchCacheTTL returns the research cache lifetime.
 func (c *Config) EffectiveResearchCacheTTL() time.Duration {
-	minutes := c.ResearchCacheTTLMin
-	if minutes < 0 {
-		minutes = 0
-	}
-	if minutes > 10080 {
-		minutes = 10080
-	}
-	return time.Duration(minutes) * time.Minute
+        minutes := c.ResearchCacheTTLMin
+        if minutes < 0 {
+                minutes = 0
+        }
+        if minutes > 10080 {
+                minutes = 10080
+        }
+        return time.Duration(minutes) * time.Minute
 }
 
 // EffectiveResearchUserAgent returns the configured research User-Agent.
 func (c *Config) EffectiveResearchUserAgent() string {
-	if strings.TrimSpace(c.ResearchUserAgent) == "" {
-		return AppName + "/" + AppVersion
-	}
-	return c.ResearchUserAgent
+        if strings.TrimSpace(c.ResearchUserAgent) == "" {
+                return AppName + "/" + AppVersion
+        }
+        return c.ResearchUserAgent
 }

@@ -3,26 +3,30 @@
 package api
 
 import (
-	"context"
-	"encoding/json"
-	"fmt"
-	"io/fs"
-	"net/http"
-	"strconv"
-	"strings"
-	"sync"
-	"time"
+        "context"
+        "encoding/json"
+        "fmt"
+        "io/fs"
+        "net/http"
+        "os"
+        "path/filepath"
+        "strconv"
+        "strings"
+        "sync"
+        "time"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/agent"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/chunking"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/installer"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/recall"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/runtime"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/sessions"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/sysinfo"
-	"github.com/Parsaetak/SHEYTAN-local-agent/web"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/agent"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/chunking"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/installer"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/recall"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/runtime"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/sessions"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/sysinfo"
+        "github.com/Parsaetak/SHEYTAN-local-agent/web"
+
+        "github.com/gorilla/websocket"
 )
 
 // Server bundles everything the HTTP handlers need.
@@ -31,163 +35,221 @@ import (
 // This keeps the HTTP/API surface feature-identical with the CLI and desktop
 // runtime instead of constructing a second independent orchestrator.
 type Server struct {
-	cfg       *config.Config
-	store     *sessions.Store
-	stack     *runtime.Stack
-	orch      *agent.Orchestrator
-	llama     *llm.LlamaServer
-	installer *installer.Manager
-	sys       *sysinfo.SysInfo
-	recall    *recall.Engine // v1.0.2 persistent memory over past chats
+        cfg       *config.Config
+        store     *sessions.Store
+        stack     *runtime.Stack
+        orch      *agent.Orchestrator
+        llama     *llm.LlamaServer
+        installer *installer.Manager
+        sys       *sysinfo.SysInfo
+        recall    *recall.Engine // v1.0.2 persistent memory over past chats
 
-	// active runs: sessionID → runState
-	runsMu sync.Mutex
-	runs   map[string]*runState
+        // active runs: sessionID → runState
+        runsMu sync.Mutex
+        runs   map[string]*runState
+
+        // v1.1.2Z: idle WebSocket standby registry — sessionID → wake channels.
+        // Before this, an activity WebSocket with no active run was closed
+        // immediately after one "idle" sentinel, so the UI permanently showed
+        // "Offline" between runs. Idle connections now stay open, and the
+        // instant a run starts they are woken and attached to the run hub.
+        standbyMu sync.Mutex
+        standby   map[string][]chan struct{}
 }
 
 type runState struct {
-	cancel context.CancelFunc
-	hub    *activityHub
+        cancel context.CancelFunc
+        hub    *activityHub
 }
 
 // activityHub broadcasts activity events to all WebSocket subscribers of a
 // single active run. Each client receives its own buffered channel so clients
 // do not consume events from one another.
 type activityHub struct {
-	mu      sync.RWMutex
-	clients map[int]chan agent.Activity
-	nextID  int
-	closed  bool
+        mu      sync.RWMutex
+        clients map[int]chan agent.Activity
+        nextID  int
+        closed  bool
 }
 
 func newActivityHub() *activityHub {
-	return &activityHub{
-		clients: make(map[int]chan agent.Activity),
-	}
+        return &activityHub{
+                clients: make(map[int]chan agent.Activity),
+        }
 }
 
 func (h *activityHub) subscribe() (int, <-chan agent.Activity, func()) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
+        h.mu.Lock()
+        defer h.mu.Unlock()
 
-	if h.closed {
-		ch := make(chan agent.Activity)
-		close(ch)
-		return 0, ch, func() {}
-	}
+        if h.closed {
+                ch := make(chan agent.Activity)
+                close(ch)
+                return 0, ch, func() {}
+        }
 
-	id := h.nextID
-	h.nextID++
+        id := h.nextID
+        h.nextID++
 
-	ch := make(chan agent.Activity, 128)
-	h.clients[id] = ch
+        ch := make(chan agent.Activity, 128)
+        h.clients[id] = ch
 
-	var once sync.Once
+        var once sync.Once
 
-	unsubscribe := func() {
-		once.Do(func() {
-			h.mu.Lock()
-			defer h.mu.Unlock()
+        unsubscribe := func() {
+                once.Do(func() {
+                        h.mu.Lock()
+                        defer h.mu.Unlock()
 
-			if existing, ok := h.clients[id]; ok {
-				delete(h.clients, id)
-				close(existing)
-			}
-		})
-	}
+                        if existing, ok := h.clients[id]; ok {
+                                delete(h.clients, id)
+                                close(existing)
+                        }
+                })
+        }
 
-	return id, ch, unsubscribe
+        return id, ch, unsubscribe
 }
 
 func (h *activityHub) publish(ev agent.Activity) {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
+        h.mu.RLock()
+        defer h.mu.RUnlock()
 
-	for _, ch := range h.clients {
-		select {
-		case ch <- ev:
-		default:
-			// A slow WebSocket must never block the agent run.
-			// Only that slow subscriber may lose an event.
-		}
-	}
+        for _, ch := range h.clients {
+                select {
+                case ch <- ev:
+                default:
+                        // A slow WebSocket must never block the agent run.
+                        // Only that slow subscriber may lose an event.
+                }
+        }
 }
 
 func (h *activityHub) close() {
-	h.mu.Lock()
-	defer h.mu.Unlock()
+        h.mu.Lock()
+        defer h.mu.Unlock()
 
-	if h.closed {
-		return
-	}
+        if h.closed {
+                return
+        }
 
-	h.closed = true
+        h.closed = true
 
-	for id, ch := range h.clients {
-		delete(h.clients, id)
-		close(ch)
-	}
+        for id, ch := range h.clients {
+                delete(h.clients, id)
+                close(ch)
+        }
+}
+
+// enterStandby registers a wake channel for an idle activity connection.
+// The channel is closed by wakeStandby the moment a run starts for the
+// session, unblocking the standby wait.
+func (s *Server) enterStandby(sessionID string) chan struct{} {
+        ch := make(chan struct{})
+
+        s.standbyMu.Lock()
+        s.standby[sessionID] = append(s.standby[sessionID], ch)
+        s.standbyMu.Unlock()
+
+        return ch
+}
+
+// leaveStandby removes a wake channel that is no longer waiting (the client
+// disconnected, or the channel was already woken).
+func (s *Server) leaveStandby(sessionID string, ch chan struct{}) {
+        s.standbyMu.Lock()
+        defer s.standbyMu.Unlock()
+
+        waiting := s.standby[sessionID]
+
+        kept := waiting[:0]
+
+        for _, w := range waiting {
+                if w != ch {
+                        kept = append(kept, w)
+                }
+        }
+
+        if len(kept) == 0 {
+                delete(s.standby, sessionID)
+        } else {
+                s.standby[sessionID] = kept
+        }
+}
+
+// wakeStandby releases every idle connection waiting on a session so they
+// can attach to the freshly registered run hub.
+func (s *Server) wakeStandby(sessionID string) {
+        s.standbyMu.Lock()
+        waiting := s.standby[sessionID]
+        delete(s.standby, sessionID)
+        s.standbyMu.Unlock()
+
+        for _, ch := range waiting {
+                close(ch)
+        }
 }
 
 // New constructs a fully-wired server from the canonical runtime stack.
 func New(cfg *config.Config) (*Server, error) {
-	store := sessions.New(cfg.SessionsDir)
-	stack := runtime.NewStack(cfg)
+        store := sessions.New(cfg.SessionsDir)
+        stack := runtime.NewStack(cfg)
 
-	return &Server{
-		cfg:       cfg,
-		store:     store,
-		stack:     stack,
-		orch:      stack.Orch,
-		llama:     stack.Llama,
-		installer: installer.New(cfg),
-		runs:      make(map[string]*runState),
-		sys:       sysinfo.Probe(),
-		recall:    stack.Recall,
-	}, nil
+        return &Server{
+                cfg:       cfg,
+                store:     store,
+                stack:     stack,
+                orch:      stack.Orch,
+                llama:     stack.Llama,
+                installer: installer.New(cfg),
+                runs:      make(map[string]*runState),
+                standby:   make(map[string][]chan struct{}),
+                sys:       sysinfo.Probe(),
+                recall:    stack.Recall,
+        }, nil
 }
 
 // EnsureSetup runs the installer + creates directories before serving.
 func (s *Server) EnsureSetup() error {
-	if err := s.cfg.EnsureDirs(); err != nil {
-		return err
-	}
+        if err := s.cfg.EnsureDirs(); err != nil {
+                return err
+        }
 
-	if _, _, err := s.installer.EnsureRun(false); err != nil {
-		return err
-	}
+        if _, _, err := s.installer.EnsureRun(false); err != nil {
+                return err
+        }
 
-	return nil
+        return nil
 }
 
 // Handler returns the http.Handler with all routes mounted.
 func (s *Server) Handler() http.Handler {
-	mux := http.NewServeMux()
+        mux := http.NewServeMux()
 
-	// Static UI
-	staticRoot, _ := fs.Sub(web.StaticFS, "static")
-	mux.Handle("/", http.FileServer(http.FS(staticRoot)))
+        // Static UI
+        staticRoot, _ := fs.Sub(web.StaticFS, "static")
+        mux.Handle("/", http.FileServer(http.FS(staticRoot)))
 
-	// REST API
-	mux.HandleFunc("/api/state", s.handleState)
-	mux.HandleFunc("/api/sysinfo", s.handleSysinfo)
-	mux.HandleFunc("/api/presets", s.handlePresets)
-	mux.HandleFunc("/api/models", s.handleModels)
-	mux.HandleFunc("/api/sessions", s.handleSessions)
-	mux.HandleFunc("/api/sessions/", s.handleSession)
-	mux.HandleFunc("/api/config", s.handleConfig)
-	mux.HandleFunc("/api/llama", s.handleLlama)
-	mux.HandleFunc("/api/run", s.handleRun)
-	mux.HandleFunc("/api/abort", s.handleAbort)
-	mux.HandleFunc("/api/tools", s.handleTools)
-	mux.HandleFunc("/api/lab", s.handleLab)
-	mux.HandleFunc("/api/lab/", s.handleLabTask)
-	mux.HandleFunc("/api/research", s.handleResearch)
+        // REST API
+        mux.HandleFunc("/api/state", s.handleState)
+        mux.HandleFunc("/api/sysinfo", s.handleSysinfo)
+        mux.HandleFunc("/api/presets", s.handlePresets)
+        mux.HandleFunc("/api/models", s.handleModels)
+        mux.HandleFunc("/api/sessions", s.handleSessions)
+        mux.HandleFunc("/api/sessions/", s.handleSession)
+        mux.HandleFunc("/api/config", s.handleConfig)
+        mux.HandleFunc("/api/llama", s.handleLlama)
+        mux.HandleFunc("/api/run", s.handleRun)
+        mux.HandleFunc("/api/abort", s.handleAbort)
+        mux.HandleFunc("/api/tools", s.handleTools)
+        mux.HandleFunc("/api/lab", s.handleLab)
+        mux.HandleFunc("/api/lab/", s.handleLabTask)
+        mux.HandleFunc("/api/research", s.handleResearch)
 
-	// WebSocket: real-time agent activity for a session
-	mux.HandleFunc("/ws/activity", s.handleActivityWS)
+        // WebSocket: real-time agent activity for a session
+        mux.HandleFunc("/ws/activity", s.handleActivityWS)
 
-	return withCORS(mux)
+        return withCORS(mux)
 }
 
 // withCORS allows only approved local origins during development and
@@ -196,211 +258,251 @@ func (s *Server) Handler() http.Handler {
 // Wildcard origins are intentionally prohibited because this API can expose
 // local runtime state and perform privileged local operations.
 func withCORS(h http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		origin := strings.TrimSpace(r.Header.Get("Origin"))
+        return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+                origin := strings.TrimSpace(r.Header.Get("Origin"))
 
-		if origin != "" {
-			if !allowedOrigin(origin, r.Host) {
-				http.Error(w, "forbidden origin", http.StatusForbidden)
-				return
-			}
+                if origin != "" {
+                        if !allowedOrigin(origin, r.Host) {
+                                http.Error(w, "forbidden origin", http.StatusForbidden)
+                                return
+                        }
 
-			w.Header().Set("Access-Control-Allow-Origin", origin)
-			w.Header().Set("Vary", "Origin")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-		}
+                        w.Header().Set("Access-Control-Allow-Origin", origin)
+                        w.Header().Set("Vary", "Origin")
+                        w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+                        w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+                }
 
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
+                if r.Method == http.MethodOptions {
+                        w.WriteHeader(http.StatusNoContent)
+                        return
+                }
 
-		h.ServeHTTP(w, r)
-	})
+                h.ServeHTTP(w, r)
+        })
 }
 
 // --- State ---
 
 func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
-	st, _, _ := s.installer.EnsureRun(false)
+        st, _, _ := s.installer.EnsureRun(false)
 
-	writeJSON(w, map[string]any{
-		"appName":    config.AppName,
-		"appVersion": config.AppVersion,
-		"state":      st,
-	})
+        writeJSON(w, map[string]any{
+                "appName":    config.AppName,
+                "appVersion": config.AppVersion,
+                "state":      st,
+        })
 }
 
 func (s *Server) handleSysinfo(w http.ResponseWriter, r *http.Request) {
-	// Re-probe on demand so the UI can refresh.
-	info := sysinfo.Probe()
-	writeJSON(w, info)
+        // Re-probe on demand so the UI can refresh.
+        info := sysinfo.Probe()
+        writeJSON(w, info)
 }
 
 func (s *Server) handlePresets(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, llm.Presets())
+        writeJSON(w, llm.Presets())
+}
+
+// modelInfo is the rich local-model descriptor consumed by the UI's model
+// pickers. Before v1.1.2Z the API shipped bare filename strings while the
+// frontend expected {id, name, path, sizeBytes} objects — every <option>
+// rendered with an undefined value, so selecting a model silently wrote
+// "undefined" into the config. The wire format now matches the contract.
+type modelInfo struct {
+    ID        string `json:"id"`
+    Name      string `json:"name"`
+    Provider  string `json:"provider,omitempty"`
+    Path      string `json:"path,omitempty"`
+    SizeBytes int64  `json:"sizeBytes,omitempty"`
 }
 
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
-	local := llm.ListLocalModels(s.cfg.ModelsDir)
+        local := llm.ListLocalModels(s.cfg.ModelsDir)
 
-	loaded, err := s.llama.ListLoadedModels()
-	if err != nil {
-		loaded = nil
-	}
+        loaded, err := s.llama.ListLoadedModels()
+        if err != nil {
+                loaded = nil
+        }
 
-	writeJSON(w, map[string]any{
-		"local":        local,
-		"loaded":       loaded,
-		"llamaRunning": s.llama.IsRunning(),
-	})
+        localInfos := make([]modelInfo, 0, len(local))
+
+        for _, name := range local {
+                info := modelInfo{
+                        ID:       name,
+                        Name:     strings.TrimSuffix(name, ".gguf"),
+                        Provider: "local",
+                        Path:     filepath.Join(s.cfg.ModelsDir, name),
+                }
+
+                if fi, statErr := os.Stat(info.Path); statErr == nil {
+                        info.SizeBytes = fi.Size()
+                }
+
+                localInfos = append(localInfos, info)
+        }
+
+        loadedInfos := make([]modelInfo, 0, len(loaded))
+
+        for _, id := range loaded {
+                loadedInfos = append(loadedInfos, modelInfo{
+                        ID:       id,
+                        Name:     id,
+                        Provider: "local",
+                })
+        }
+
+        writeJSON(w, map[string]any{
+                "local":        localInfos,
+                "loaded":       loadedInfos,
+                "llamaRunning": s.llama.IsRunning(),
+        })
 }
 
 func (s *Server) handleLlama(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodGet:
-		writeJSON(w, map[string]any{
-			"state": s.llama.State(),
-			"logs":  s.llama.Logs(),
-		})
+        switch r.Method {
+        case http.MethodGet:
+                writeJSON(w, map[string]any{
+                        "state": s.llama.State(),
+                        "logs":  s.llama.Logs(),
+                })
 
-	case http.MethodPost:
-		var body struct {
-			Action string `json:"action"`
-		}
+        case http.MethodPost:
+                var body struct {
+                        Action string `json:"action"`
+                }
 
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			writeErr(w, http.StatusBadRequest, err)
-			return
-		}
+                if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+                        writeErr(w, http.StatusBadRequest, err)
+                        return
+                }
 
-		switch body.Action {
-		case "start":
-			if err := s.llama.Start(); err != nil {
-				writeErr(w, http.StatusInternalServerError, err)
-				return
-			}
+                switch body.Action {
+                case "start":
+                        if err := s.llama.Start(); err != nil {
+                                writeErr(w, http.StatusInternalServerError, err)
+                                return
+                        }
 
-		case "stop":
-			_ = s.llama.Stop()
+                case "stop":
+                        _ = s.llama.Stop()
 
-		default:
-			writeErr(w, http.StatusBadRequest, fmt.Errorf("unknown action %q", body.Action))
-			return
-		}
+                default:
+                        writeErr(w, http.StatusBadRequest, fmt.Errorf("unknown action %q", body.Action))
+                        return
+                }
 
-		writeJSON(w, map[string]any{
-			"state": s.llama.State(),
-		})
+                writeJSON(w, map[string]any{
+                        "state": s.llama.State(),
+                })
 
-	default:
-		writeErr(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
-	}
+        default:
+                writeErr(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
+        }
 }
 
 // --- Sessions ---
 
 func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodGet:
-		list, err := s.store.List()
-		if err != nil {
-			writeErr(w, http.StatusInternalServerError, err)
-			return
-		}
+        switch r.Method {
+        case http.MethodGet:
+                list, err := s.store.List()
+                if err != nil {
+                        writeErr(w, http.StatusInternalServerError, err)
+                        return
+                }
 
-		writeJSON(w, list)
+                writeJSON(w, list)
 
-	case http.MethodPost:
-		sess := s.store.Create()
-		writeJSON(w, sess)
+        case http.MethodPost:
+                sess := s.store.Create()
+                writeJSON(w, sess)
 
-	default:
-		writeErr(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
-	}
+        default:
+                writeErr(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
+        }
 }
 
 func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
-	id := strings.TrimPrefix(r.URL.Path, "/api/sessions/")
+        id := strings.TrimPrefix(r.URL.Path, "/api/sessions/")
 
-	if id == "" {
-		writeErr(w, http.StatusBadRequest, fmt.Errorf("missing session id"))
-		return
-	}
+        if id == "" {
+                writeErr(w, http.StatusBadRequest, fmt.Errorf("missing session id"))
+                return
+        }
 
-	switch r.Method {
-	case http.MethodGet:
-		sess, err := s.store.Get(id)
-		if err != nil {
-			writeErr(w, http.StatusNotFound, err)
-			return
-		}
+        switch r.Method {
+        case http.MethodGet:
+                sess, err := s.store.Get(id)
+                if err != nil {
+                        writeErr(w, http.StatusNotFound, err)
+                        return
+                }
 
-		writeJSON(w, sess)
+                writeJSON(w, sess)
 
-	case http.MethodDelete:
-		if err := s.store.Delete(id); err != nil {
-			writeErr(w, http.StatusInternalServerError, err)
-			return
-		}
+        case http.MethodDelete:
+                if err := s.store.Delete(id); err != nil {
+                        writeErr(w, http.StatusInternalServerError, err)
+                        return
+                }
 
-		writeJSON(w, map[string]any{
-			"ok": true,
-		})
+                writeJSON(w, map[string]any{
+                        "ok": true,
+                })
 
-	case http.MethodPut:
-		var body struct {
-			Title   *string           `json:"title,omitempty"`
-			Context *sessions.Context `json:"context,omitempty"`
-			Model   *string           `json:"model,omitempty"`
-		}
+        case http.MethodPut:
+                var body struct {
+                        Title   *string           `json:"title,omitempty"`
+                        Context *sessions.Context `json:"context,omitempty"`
+                        Model   *string           `json:"model,omitempty"`
+                }
 
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			writeErr(w, http.StatusBadRequest, err)
-			return
-		}
+                if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+                        writeErr(w, http.StatusBadRequest, err)
+                        return
+                }
 
-		if body.Title != nil {
-			if err := s.store.UpdateTitle(id, *body.Title); err != nil {
-				writeErr(w, http.StatusInternalServerError, err)
-				return
-			}
-		}
+                if body.Title != nil {
+                        if err := s.store.UpdateTitle(id, *body.Title); err != nil {
+                                writeErr(w, http.StatusInternalServerError, err)
+                                return
+                        }
+                }
 
-		if body.Context != nil {
-			if err := s.store.UpdateContext(id, *body.Context); err != nil {
-				writeErr(w, http.StatusInternalServerError, err)
-				return
-			}
-		}
+                if body.Context != nil {
+                        if err := s.store.UpdateContext(id, *body.Context); err != nil {
+                                writeErr(w, http.StatusInternalServerError, err)
+                                return
+                        }
+                }
 
-		if body.Model != nil {
-			if err := s.store.SetModel(id, *body.Model); err != nil {
-				writeErr(w, http.StatusInternalServerError, err)
-				return
-			}
-		}
+                if body.Model != nil {
+                        if err := s.store.SetModel(id, *body.Model); err != nil {
+                                writeErr(w, http.StatusInternalServerError, err)
+                                return
+                        }
+                }
 
-		sess, err := s.store.Get(id)
-		if err != nil {
-			writeErr(w, http.StatusNotFound, err)
-			return
-		}
+                sess, err := s.store.Get(id)
+                if err != nil {
+                        writeErr(w, http.StatusNotFound, err)
+                        return
+                }
 
-		writeJSON(w, sess)
+                writeJSON(w, sess)
 
-	default:
-		writeErr(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
-	}
+        default:
+                writeErr(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
+        }
 }
 
 // redactedConfig returns a copy safe for API responses.
 // Secrets are never returned to the browser.
 func (s *Server) redactedConfig() config.Config {
-	cfg := *s.cfg
-	cfg.RemoteAPIKey = ""
-	return cfg
+        cfg := *s.cfg
+        cfg.RemoteAPIKey = ""
+        return cfg
 }
 
 // mergeConfigPatch applies a JSON object as a partial configuration update.
@@ -409,52 +511,52 @@ func (s *Server) redactedConfig() config.Config {
 // Config pointer is preserved so all runtime components continue sharing the
 // same configuration object.
 func (s *Server) mergeConfigPatch(data []byte) error {
-	var patch map[string]json.RawMessage
-	if err := json.Unmarshal(data, &patch); err != nil {
-		return err
-	}
-	if patch == nil {
-		return fmt.Errorf("configuration patch must be a JSON object")
-	}
+        var patch map[string]json.RawMessage
+        if err := json.Unmarshal(data, &patch); err != nil {
+                return err
+        }
+        if patch == nil {
+                return fmt.Errorf("configuration patch must be a JSON object")
+        }
 
-	currentData, err := json.Marshal(s.cfg)
-	if err != nil {
-		return err
-	}
+        currentData, err := json.Marshal(s.cfg)
+        if err != nil {
+                return err
+        }
 
-	var current map[string]json.RawMessage
-	if err := json.Unmarshal(currentData, &current); err != nil {
-		return err
-	}
+        var current map[string]json.RawMessage
+        if err := json.Unmarshal(currentData, &current); err != nil {
+                return err
+        }
 
-	for key, value := range patch {
-		// A blank remoteApiKey coming from a redacted GET response must never
-		// erase the stored secret. A non-empty value can intentionally replace
-		// the configured key.
-		if key == "remoteApiKey" {
-			var candidate string
-			if err := json.Unmarshal(value, &candidate); err == nil && candidate == "" {
-				continue
-			}
-		}
+        for key, value := range patch {
+                // A blank remoteApiKey coming from a redacted GET response must never
+                // erase the stored secret. A non-empty value can intentionally replace
+                // the configured key.
+                if key == "remoteApiKey" {
+                        var candidate string
+                        if err := json.Unmarshal(value, &candidate); err == nil && candidate == "" {
+                                continue
+                        }
+                }
 
-		current[key] = value
-	}
+                current[key] = value
+        }
 
-	merged, err := json.Marshal(current)
-	if err != nil {
-		return err
-	}
+        merged, err := json.Marshal(current)
+        if err != nil {
+                return err
+        }
 
-	var updated config.Config
-	if err := json.Unmarshal(merged, &updated); err != nil {
-		return err
-	}
+        var updated config.Config
+        if err := json.Unmarshal(merged, &updated); err != nil {
+                return err
+        }
 
-	// Preserve the original shared pointer.
-	*s.cfg = updated
+        // Preserve the original shared pointer.
+        *s.cfg = updated
 
-	return nil
+        return nil
 }
 
 // handleConfig deliberately updates the existing Config object in place.
@@ -464,345 +566,420 @@ func (s *Server) mergeConfigPatch(data []byte) error {
 // PUT/POST behave as patch operations: only fields supplied by the caller are
 // changed; unspecified settings remain untouched.
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodGet:
-		writeJSON(w, s.redactedConfig())
+        switch r.Method {
+        case http.MethodGet:
+                writeJSON(w, s.redactedConfig())
 
-	case http.MethodPut, http.MethodPost:
-		var raw json.RawMessage
+        case http.MethodPut, http.MethodPost:
+                var raw json.RawMessage
 
-		decoder := json.NewDecoder(r.Body)
-		decoder.UseNumber()
+                decoder := json.NewDecoder(r.Body)
+                decoder.UseNumber()
 
-		if err := decoder.Decode(&raw); err != nil {
-			writeErr(w, http.StatusBadRequest, err)
-			return
-		}
+                if err := decoder.Decode(&raw); err != nil {
+                        writeErr(w, http.StatusBadRequest, err)
+                        return
+                }
 
-		if len(raw) == 0 || string(raw) == "null" {
-			writeErr(w, http.StatusBadRequest, fmt.Errorf("configuration patch must be a JSON object"))
-			return
-		}
+                if len(raw) == 0 || string(raw) == "null" {
+                        writeErr(w, http.StatusBadRequest, fmt.Errorf("configuration patch must be a JSON object"))
+                        return
+                }
 
-		if err := s.mergeConfigPatch(raw); err != nil {
-			writeErr(w, http.StatusBadRequest, err)
-			return
-		}
+                if err := s.mergeConfigPatch(raw); err != nil {
+                        writeErr(w, http.StatusBadRequest, err)
+                        return
+                }
 
-		if err := config.Save(s.cfg.ConfigPath(), s.cfg); err != nil {
-			writeErr(w, http.StatusInternalServerError, err)
-			return
-		}
+                if err := config.Save(s.cfg.ConfigPath(), s.cfg); err != nil {
+                        writeErr(w, http.StatusInternalServerError, err)
+                        return
+                }
 
-		if err := s.cfg.EnsureDirs(); err != nil {
-			writeErr(w, http.StatusInternalServerError, err)
-			return
-		}
+                if err := s.cfg.EnsureDirs(); err != nil {
+                        writeErr(w, http.StatusInternalServerError, err)
+                        return
+                }
 
-		writeJSON(w, s.redactedConfig())
-	default:
-		writeErr(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
-	}
+                writeJSON(w, s.redactedConfig())
+        default:
+                writeErr(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
+        }
 }
 
 func (s *Server) handleTools(w http.ResponseWriter, r *http.Request) {
-	out := make([]map[string]any, 0)
+        out := make([]map[string]any, 0)
 
-	for _, t := range s.orch.Tools() {
-		out = append(out, map[string]any{
-			"name":        t.Name(),
-			"description": t.Description(),
-		})
-	}
+        for _, t := range s.orch.Tools() {
+                out = append(out, map[string]any{
+                        "name":        t.Name(),
+                        "description": t.Description(),
+                })
+        }
 
-	writeJSON(w, out)
+        writeJSON(w, out)
 }
 
 // --- Run / Abort ---
 
 func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeErr(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
-		return
-	}
+        if r.Method != http.MethodPost {
+                writeErr(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
+                return
+        }
 
-	var body struct {
-		SessionID string `json:"sessionId"`
-		Message   string `json:"message"`
-	}
+        var body struct {
+                SessionID string `json:"sessionId"`
+                Message   string `json:"message"`
+        }
 
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeErr(w, http.StatusBadRequest, err)
-		return
-	}
+        if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+                writeErr(w, http.StatusBadRequest, err)
+                return
+        }
 
-	if body.SessionID == "" || body.Message == "" {
-		writeErr(w, http.StatusBadRequest, fmt.Errorf("sessionId and message required"))
-		return
-	}
+        if body.SessionID == "" || body.Message == "" {
+                writeErr(w, http.StatusBadRequest, fmt.Errorf("sessionId and message required"))
+                return
+        }
 
-	sess, err := s.store.Get(body.SessionID)
-	if err != nil {
-		writeErr(w, http.StatusNotFound, err)
-		return
-	}
+        sess, err := s.store.Get(body.SessionID)
+        if err != nil {
+                writeErr(w, http.StatusNotFound, err)
+                return
+        }
 
-	// Append user message.
-	userMsg := llm.Message{
-		Role:    "user",
-		Content: body.Message,
-	}
+        // Append user message.
+        userMsg := llm.Message{
+                Role:    "user",
+                Content: body.Message,
+        }
 
-	sess.Messages = append(sess.Messages, userMsg)
+        sess.Messages = append(sess.Messages, userMsg)
 
-	// If first user message, derive a title.
-	if len(sess.Messages) == 1 {
-		title := body.Message
-		if len(title) > 60 {
-			title = title[:60] + "..."
-		}
+        // If first user message, derive a title.
+        if len(sess.Messages) == 1 {
+                title := body.Message
+                if len(title) > 60 {
+                        title = title[:60] + "..."
+                }
 
-		_ = s.store.UpdateTitle(sess.ID, title)
-	}
+                _ = s.store.UpdateTitle(sess.ID, title)
+        }
 
-	_ = s.store.Save(sess)
+        _ = s.store.Save(sess)
 
-	// Build the LLM message list (with optional system prompt).
-	var messages []llm.Message
+        // Build the LLM message list (with optional system prompt).
+        var messages []llm.Message
 
-	if sess.Context.SystemPrompt != "" {
-		messages = append(messages, llm.Message{
-			Role:    "system",
-			Content: sess.Context.SystemPrompt,
-		})
-	}
+        if sess.Context.SystemPrompt != "" {
+                messages = append(messages, llm.Message{
+                        Role:    "system",
+                        Content: sess.Context.SystemPrompt,
+                })
+        }
 
-	// Attach file contents through the chunking engine.
-	attachedImages, _ := chunking.SplitAttachments(sess.Context.AttachedFiles)
+        // Attach file contents through the chunking engine.
+        attachedImages, _ := chunking.SplitAttachments(sess.Context.AttachedFiles)
 
-	if len(sess.Context.AttachedFiles) > 0 {
-		note := chunking.ComposeUserMessage(
-			"",
-			sess.Context.AttachedFiles,
-			s.cfg.AttachmentsBudgetBytes(),
-		)
+        if len(sess.Context.AttachedFiles) > 0 {
+                note := chunking.ComposeUserMessage(
+                        "",
+                        sess.Context.AttachedFiles,
+                        s.cfg.AttachmentsBudgetBytes(),
+                )
 
-		messages = append(messages, llm.Message{
-			Role:    "system",
-			Content: note,
-		})
-	}
+                messages = append(messages, llm.Message{
+                        Role:    "system",
+                        Content: note,
+                })
+        }
 
-	messages = append(messages, sess.Messages...)
+        messages = append(messages, sess.Messages...)
 
-	// The freshest user message carries the current turn's images.
-	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role == "user" {
-			messages[i].Images = append(messages[i].Images, attachedImages...)
-			break
-		}
-	}
+        // The freshest user message carries the current turn's images.
+        for i := len(messages) - 1; i >= 0; i-- {
+                if messages[i].Role == "user" {
+                        messages[i].Images = append(messages[i].Images, attachedImages...)
+                        break
+                }
+        }
 
-	// Spawn the run.
-	ctx, cancel := context.WithCancel(context.Background())
-	hub := newActivityHub()
+        // Spawn the run.
+        ctx, cancel := context.WithCancel(context.Background())
+        hub := newActivityHub()
 
-	s.runsMu.Lock()
+        s.runsMu.Lock()
 
-	// There can be only one active run per session. Cancel the previous run
-	// before replacing its state.
-	if old, ok := s.runs[sess.ID]; ok {
-		old.cancel()
-		old.hub.close()
-	}
+        // There can be only one active run per session. Cancel the previous run
+        // before replacing its state.
+        if old, ok := s.runs[sess.ID]; ok {
+                old.cancel()
+                old.hub.close()
+        }
 
-	s.runs[sess.ID] = &runState{
-		cancel: cancel,
-		hub:    hub,
-	}
+        s.runs[sess.ID] = &runState{
+                cancel: cancel,
+                hub:    hub,
+        }
 
-	s.runsMu.Unlock()
+        s.runsMu.Unlock()
 
-	go func() {
-		defer func() {
-			s.runsMu.Lock()
+        // v1.1.2Z: release every activity connection parked in standby for
+        // this session so they attach to the new run hub immediately.
+        s.wakeStandby(sess.ID)
 
-			// Only remove the run if this goroutine still owns the current
-			// session entry. A newer run may already have replaced it.
-			if current, ok := s.runs[sess.ID]; ok && current.hub == hub {
-				delete(s.runs, sess.ID)
-			}
+        go func() {
+                defer func() {
+                        s.runsMu.Lock()
 
-			s.runsMu.Unlock()
+                        // Only remove the run if this goroutine still owns the current
+                        // session entry. A newer run may already have replaced it.
+                        if current, ok := s.runs[sess.ID]; ok && current.hub == hub {
+                                delete(s.runs, sess.ID)
+                        }
 
-			hub.close()
-			cancel()
-		}()
+                        s.runsMu.Unlock()
 
-		res, err := s.orch.RunDetailed(
-			ctx,
-			messages,
-			func(a agent.Activity) {
-				hub.publish(a)
+                        hub.close()
+                        cancel()
+                }()
 
-				// Persist milestone events only. Streaming response/reasoning
-				// deltas are intentionally not persisted individually because
-				// each persistence operation rewrites the session JSON.
-				switch a.Type {
-				case "response", "thinking", "reasoning":
-					return
-				}
+                res, err := s.orch.RunDetailed(
+                        ctx,
+                        messages,
+                        func(a agent.Activity) {
+                                hub.publish(a)
 
-				_ = s.store.AppendActivity(
-					sess.ID,
-					sessions.ActivityEntry{
-						Type:      a.Type,
-						Caption:   a.Caption,
-						Timestamp: a.Timestamp,
-					},
-				)
-			},
-		)
+                                // Persist milestone events only. Streaming response/reasoning
+                                // deltas are intentionally not persisted individually because
+                                // each persistence operation rewrites the session JSON.
+                                switch a.Type {
+                                case "response", "thinking", "reasoning":
+                                        return
+                                }
 
-		if err != nil {
-			hub.publish(agent.Activity{
-				Type:      "error",
-				Caption:   err.Error(),
-				Timestamp: time.Now(),
-			})
-			return
-		}
+                                _ = s.store.AppendActivity(
+                                        sess.ID,
+                                        sessions.ActivityEntry{
+                                                Type:      a.Type,
+                                                Caption:   a.Caption,
+                                                Timestamp: a.Timestamp,
+                                        },
+                                )
+                        },
+                )
 
-		// Append assistant reply.
-		if res.Text != "" {
-			_, _ = s.store.AppendMessage(
-				sess.ID,
-				llm.Message{
-					Role:      "assistant",
-					Content:   res.Text,
-					Reasoning: res.Reasoning,
-				},
-			)
-		}
+                if err != nil {
+                        hub.publish(agent.Activity{
+                                Type:      "error",
+                                Caption:   err.Error(),
+                                Timestamp: time.Now(),
+                        })
+                        return
+                }
 
-		// Index completed exchange into persistent recall.
-		if s.recall != nil && res.Text != "" {
-			_ = s.recall.IndexTurn(
-				sess.ID,
-				sess.Title,
-				body.Message,
-				res.Text,
-				res.ToolsUsed,
-			)
-		}
-	}()
+                // Append assistant reply.
+                if res.Text != "" {
+                        _, _ = s.store.AppendMessage(
+                                sess.ID,
+                                llm.Message{
+                                        Role:      "assistant",
+                                        Content:   res.Text,
+                                        Reasoning: res.Reasoning,
+                                },
+                        )
+                }
 
-	writeJSON(w, map[string]any{
-		"ok":        true,
-		"sessionId": sess.ID,
-	})
+                // Index completed exchange into persistent recall.
+                if s.recall != nil && res.Text != "" {
+                        _ = s.recall.IndexTurn(
+                                sess.ID,
+                                sess.Title,
+                                body.Message,
+                                res.Text,
+                                res.ToolsUsed,
+                        )
+                }
+        }()
+
+        writeJSON(w, map[string]any{
+                "ok":        true,
+                "sessionId": sess.ID,
+        })
 }
 
 func (s *Server) handleAbort(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeErr(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
-		return
-	}
+        if r.Method != http.MethodPost {
+                writeErr(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
+                return
+        }
 
-	var body struct {
-		SessionID string `json:"sessionId"`
-	}
+        var body struct {
+                SessionID string `json:"sessionId"`
+        }
 
-	_ = json.NewDecoder(r.Body).Decode(&body)
+        _ = json.NewDecoder(r.Body).Decode(&body)
 
-	s.runsMu.Lock()
-	rs, ok := s.runs[body.SessionID]
-	s.runsMu.Unlock()
+        s.runsMu.Lock()
+        rs, ok := s.runs[body.SessionID]
+        s.runsMu.Unlock()
 
-	if ok {
-		rs.cancel()
-	}
+        if ok {
+                rs.cancel()
+        }
 
-	writeJSON(w, map[string]any{
-		"ok": true,
-	})
+        writeJSON(w, map[string]any{
+                "ok": true,
+        })
 }
 
 // --- WebSocket: live activity ---
 
+// wsPingInterval is how often an idle standby connection is pinged at the
+// protocol level so half-open TCP sockets are detected and released.
+const wsPingInterval = 25 * time.Second
+
 func (s *Server) handleActivityWS(w http.ResponseWriter, r *http.Request) {
-	sessionID := r.URL.Query().Get("sessionId")
+        sessionID := r.URL.Query().Get("sessionId")
 
-	if sessionID == "" {
-		writeErr(w, http.StatusBadRequest, fmt.Errorf("sessionId required"))
-		return
-	}
+        if sessionID == "" {
+                writeErr(w, http.StatusBadRequest, fmt.Errorf("sessionId required"))
+                return
+        }
 
-	conn, err := upgrader.Upgrade(w, r, nil)
-	if err != nil {
-		return
-	}
+        conn, err := upgrader.Upgrade(w, r, nil)
+        if err != nil {
+                return
+        }
 
-	defer conn.Close()
+        defer conn.Close()
 
-	s.runsMu.Lock()
-	rs, ok := s.runs[sessionID]
-	s.runsMu.Unlock()
+        // v1.1.2Z: the read pump owns every incoming frame. It detects client
+        // disconnects (read error closes clientGone) and routes abort actions
+        // to whatever run is currently active for the session.
+        clientGone := make(chan struct{})
 
-	if !ok {
-		// No active run — close after sending a sentinel.
-		_ = conn.WriteJSON(map[string]any{
-			"type":    "idle",
-			"caption": "No active run",
-		})
-		return
-	}
+        go func() {
+                defer close(clientGone)
 
-	_, updates, unsubscribe := rs.hub.subscribe()
-	defer unsubscribe()
+                conn.SetReadLimit(1024)
 
-	// Read loop: client may send {"action":"abort"} to cancel.
-	go func() {
-		for {
-			var msg map[string]any
+                for {
+                        var msg map[string]any
 
-			if err := conn.ReadJSON(&msg); err != nil {
-				return
-			}
+                        if err := conn.ReadJSON(&msg); err != nil {
+                                return
+                        }
 
-			if action, _ := msg["action"].(string); action == "abort" {
-				rs.cancel()
-			}
-		}
-	}()
+                        if action, _ := msg["action"].(string); action == "abort" {
+                                s.runsMu.Lock()
+                                rs, ok := s.runs[sessionID]
+                                s.runsMu.Unlock()
 
-	// Forward every activity published to this specific subscriber.
-	for ev := range updates {
-		if err := conn.WriteJSON(ev); err != nil {
-			return
-		}
-	}
+                                if ok {
+                                        rs.cancel()
+                                }
+                        }
+                }
+        }()
+
+        idleSentinel := map[string]any{
+                "type":    "idle",
+                "caption": "No active run",
+        }
+
+        for {
+                // Fast path: a run is already active — attach to its hub.
+                s.runsMu.Lock()
+                rs, ok := s.runs[sessionID]
+                s.runsMu.Unlock()
+
+                if ok {
+                        _, updates, unsubscribe := rs.hub.subscribe()
+
+                        served := false
+
+                        for ev := range updates {
+                                if err := conn.WriteJSON(ev); err != nil {
+                                        served = true
+                                        break
+                                }
+
+                                served = true
+                        }
+
+                        unsubscribe()
+
+                        // Hub closed (run finished) or write failed. On write
+                        // failure the client is gone; wait for clientGone so
+                        // the read pump teardown wins the race deterministically.
+                        if served {
+                                select {
+                                case <-clientGone:
+                                        return
+                                default:
+                                }
+                        } else {
+                                <-clientGone
+                                return
+                        }
+
+                        // Run finished: fall through to standby.
+                        _ = conn.WriteJSON(idleSentinel)
+                }
+
+                // Standby: park the connection until a run starts, the client
+                // leaves, or a keepalive ping is due.
+                woken := s.enterStandby(sessionID)
+
+                _ = conn.WriteJSON(idleSentinel)
+
+                disconnected := false
+
+                for !disconnected {
+                        select {
+                        case <-woken:
+                                disconnected = false
+                                goto attached
+                        case <-clientGone:
+                                disconnected = true
+                        case <-time.After(wsPingInterval):
+                                _ = conn.WriteControl(
+                                        websocket.PingMessage,
+                                        nil,
+                                        time.Now().Add(5*time.Second),
+                                )
+                        }
+                }
+
+                s.leaveStandby(sessionID, woken)
+                return
+
+        attached:
+                s.leaveStandby(sessionID, woken)
+        }
 }
 
 // --- helpers ---
 
 func writeJSON(w http.ResponseWriter, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(v)
+        w.Header().Set("Content-Type", "application/json")
+        _ = json.NewEncoder(w).Encode(v)
 }
 
 func writeErr(w http.ResponseWriter, code int, err error) {
-	w.WriteHeader(code)
-	_ = json.NewEncoder(w).Encode(map[string]string{
-		"error": err.Error(),
-	})
+        w.WriteHeader(code)
+        _ = json.NewEncoder(w).Encode(map[string]string{
+                "error": err.Error(),
+        })
 }
 
 func parseIntDefault(s string, def int) int {
-	n, err := strconv.Atoi(s)
-	if err != nil {
-		return def
-	}
+        n, err := strconv.Atoi(s)
+        if err != nil {
+                return def
+        }
 
-	return n
+        return n
 }

@@ -48,9 +48,12 @@ function SettingsPanel() {
         ]);
 
       setConfig(nextConfig);
-      setModels(modelResponse.local);
-      setPresets(nextPresets);
-      setTools(nextTools);
+      // v1.1.2Z hardening: the API contract guarantees arrays, but a stale
+      // backend or an interrupted deploy could still surface null — never
+      // let a null list crash the whole React tree again.
+      setModels(modelResponse.local ?? []);
+      setPresets(nextPresets ?? []);
+      setTools(nextTools ?? []);
       setSysinfo(nextSysinfo);
       setSaveState("idle");
     } catch (loadError) {
