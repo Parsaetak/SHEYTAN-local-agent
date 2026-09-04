@@ -1,10 +1,11 @@
+````markdown
 # SHEYTAN™ Local-Agent
 
 > **A local-first AI software-engineering laboratory.**
 >
 > The model proposes. The tools execute. The laboratory verifies.
 
-**SHEYTAN™** is a local-first AI agent/runtime for software engineering. It combines local or OpenAI-compatible LLMs with controlled tools, isolated coding workspaces, objective verification, bounded autonomous repair, technical research, persistent engineering memory, and a modern web UI.
+SHEYTAN™ Local-Agent is a local-first desktop AI engineering environment built around Go, React/TypeScript, Wails, local LLM inference, controlled tools, isolated coding workspaces, research, memory, recall, and objective verification.
 
 **SHEYTAN™ is a trademark of Parsaetak · © 2024–2026 Parsaetak. All rights reserved.**
 
@@ -15,126 +16,187 @@ Licensed under the **Parsaetak Proprietary License v1.1**.
 # Project Identity
 
 ```text
-Application:  SHEYTAN-Local-Agent
-Version:     1.1.2
-Codename:    Zeta
-```
+Application:      SHEYTAN-Local-Agent
+Current release:  v1.1.2Z
+Codename:         Zeta
+Current branch:   main
+Development:      v1.1.3Z
+````
 
-The numeric application version and human-facing codename are separate runtime values.
+The repository currently contains the desktop application shell and a substantial runtime foundation. The current development phase is focused on making the application **actually functional end-to-end**, especially the local inference path and long-context agent workflow.
 
-The defining architectural principle is:
+The central execution invariant is:
 
 ```text
-LLM claim
-   ↓
+LLM proposal
+     ↓
 tool execution
-   ↓
+     ↓
 objective evidence
-   ↓
+     ↓
 verification
-   ↓
+     ↓
 accept / reject
 ```
 
-A language model is never treated as the final authority on whether a code change works.
+The model is never the authority on whether an engineering task succeeded.
 
 ---
 
-# What SHEYTAN Is
+# Current State
 
-SHEYTAN-Local-Agent is intended to behave as a bounded AI software engineer rather than a conventional chatbot.
+The current repository has a working application shell and established runtime infrastructure, but **desktop startup must not be confused with full application functionality**.
 
-A typical engineering task can follow this lifecycle:
+The current priority is therefore not another visual milestone.
+
+The priority is:
 
 ```text
-REQUEST
-   ↓
-UNDERSTAND
-   ↓
-INSPECT
-   ↓
-BASELINE
-   ↓
-PLAN
-   ↓
-EDIT
-   ↓
-RUN
-   ↓
-VERIFY
-   │
-   ├── PASS ──► REVIEW ──► COMPLETE
-   │
-   └── FAIL
-          ↓
-       DIAGNOSE
-          ↓
-       RESEARCH
-          ↓
-        REPAIR ↺
+START
+  ↓
+ENGINE READY
+  ↓
+MODEL READY
+  ↓
+MESSAGE SENT
+  ↓
+LLM RESPONSE
+  ↓
+TOOLS EXECUTE
+  ↓
+FILES / ATTACHMENTS
+  ↓
+LONG CONTEXT
+  ↓
+CACHE / RECALL
+  ↓
+VERIFICATION
+  ↓
+VISIBLE RESULT
 ```
 
-The system is designed so that every stage can be constrained by policies, timeouts, workspace boundaries, output limits, cancellation, and verification rules.
+A feature is considered complete only when that full path works in the real desktop application.
+
+---
+
+# Development Priorities
+
+The immediate development order is:
+
+```text
+1. Automatic llama.cpp lifecycle
+2. Reliable model discovery / selection / startup
+3. End-to-end agent inference
+4. Real attachment ingestion
+5. Context chunking
+6. Context caching
+7. Long-context retrieval / recall
+8. Tool execution reliability
+9. Error propagation and cancellation
+10. Functional integration testing
+11. Performance optimization
+12. UX refinement
+```
+
+Do not reverse this order merely because a UI task is easier.
 
 ---
 
 # Architecture
 
-The project uses Go as the systems/runtime core and a modern TypeScript frontend for the interactive UI.
-
 ```text
-                    ┌────────────────────────┐
-                    │   React / TypeScript   │
-                    │        Vite UI         │
-                    └───────────┬────────────┘
-                                │
-                         REST + WebSocket
-                                │
-                                ▼
-                    ┌────────────────────────┐
-                    │       Go HTTP API      │
-                    └───────────┬────────────┘
-                                │
-                                ▼
-                    ┌────────────────────────┐
-                    │      Go Runtime        │
-                    ├────────────────────────┤
-                    │ orchestrator           │
-                    │ LLM                    │
-                    │ tools                  │
-                    │ Coding Lab             │
-                    │ research               │
-                    │ memory / recall        │
-                    │ sandbox                │
-                    │ process control        │
-                    │ sessions               │
-                    └────────────────────────┘
+┌─────────────────────────────────────────────┐
+│              React / TypeScript             │
+│                  Vite UI                    │
+└──────────────────────┬──────────────────────┘
+                       │
+                 REST + WebSocket
+                       │
+                       ▼
+┌─────────────────────────────────────────────┐
+│                   Go API                    │
+└──────────────────────┬──────────────────────┘
+                       │
+                       ▼
+┌─────────────────────────────────────────────┐
+│                 Go Runtime                  │
+│                                             │
+│ agent / orchestrator                       │
+│ LLM / llama.cpp                             │
+│ tools                                       │
+│ context / chunking                          │
+│ cache / recall                              │
+│ memory                                      │
+│ research                                    │
+│ Coding Lab                                  │
+│ sandbox                                     │
+│ filesystem                                  │
+│ browser                                     │
+│ vision                                      │
+│ sessions                                    │
+│ process control                             │
+│ diagnostics                                │
+└──────────────────────┬──────────────────────┘
+                       │
+                       ▼
+┌─────────────────────────────────────────────┐
+│             llama.cpp server                │
+│          local model inference              │
+└─────────────────────────────────────────────┘
 ```
 
-The runtime owns system-level operations.
+Critical execution logic belongs in Go.
 
-The frontend owns presentation, interaction, session navigation, activity display, and future project/Lab visualizations.
-
-Critical execution logic remains in Go.
-
-## Desktop Shell
-
-The shipping desktop application is a single self-contained executable built on the Wails v3 shell (`internal/desktop`):
-
-```text
-sheytan-local-agent.exe
-├── React production assets (embedded from web/static)
-├── Go HTTP API + WebSocket (same process, same handler)
-└── WebView2 window (Windows) / WebKitGTK (Linux)
-```
-
-One in-process HTTP handler routes `/api/` and `/ws/` to the Go backend and everything else to the embedded asset server. No external browser, localhost listener, or frontend server is required in production.
-
-The legacy Fyne desktop UI (`internal/ui`, `fyne.io/fyne/v2`) was fully removed in the Zeta release — the React/TypeScript UI is the only application UI.
+Presentation and interaction logic belongs in React.
 
 ---
 
-# Runtime Components
+# Desktop Application
+
+The production desktop application uses the Wails v3 shell.
+
+```text
+sheytan-local-agent.exe
+├── embedded React/Vite assets
+├── Go runtime
+├── Go HTTP API
+├── WebSocket activity
+└── Wails desktop shell
+```
+
+The production application does not require a separately running frontend development server.
+
+Frontend source:
+
+```text
+src/
+```
+
+Embedded production assets:
+
+```text
+web/static/
+```
+
+Build synchronization:
+
+```text
+npm run build
+      ↓
+Vite dist/
+      ↓
+scripts/sync-web.mjs
+      ↓
+web/static/
+      ↓
+Go embed
+```
+
+Whenever frontend source changes, `web/static` must be rebuilt and synchronized.
+
+---
+
+# Repository Structure
 
 ```text
 cmd/
@@ -148,7 +210,7 @@ internal/
 ├── chunking/
 ├── config/
 ├── continuum/
-├── desktop/      (Wails v3 shell)
+├── desktop/
 ├── installer/
 ├── lab/
 ├── llm/
@@ -171,519 +233,465 @@ internal/
 ├── tools/
 ├── updater/
 └── vision/
-src/              (React/TypeScript frontend)
+
+src/
 scripts/
-web/              (embedded production assets)
+web/
 ```
 
-Primary subsystems:
+Important LLM files currently include:
 
 ```text
-LLM
-Orchestrator
-Tool Registry
-Coding Lab
-Research
-Memory
-Recall
-Sandbox
-Process Control
-HTTP API
-WebSocket Activity
-React UI
+internal/llm/client.go
+internal/llm/gguf.go
+internal/llm/llama.go
+internal/llm/models.go
+internal/llm/presets.go
+internal/llm/speed.go
+```
+
+Context infrastructure includes:
+
+```text
+internal/chunking/chunking.go
+internal/chunking/chunking_test.go
 ```
 
 ---
 
-# Coding Lab
+# Local llama.cpp Engine
 
-The Coding Lab is the execution and verification core for autonomous software changes.
+The local llama.cpp server is a core dependency of the application.
 
-A source project is treated as the original authority:
+The application must treat llama.cpp as an **application-managed runtime service**, not as an optional manually launched dependency.
+
+The required behavior is:
 
 ```text
-project/
-├── source files
-├── tests
-├── dependencies
-└── .git/
+Application start
+      ↓
+initialize config
+      ↓
+discover / resolve model
+      ↓
+ensure llama.cpp binary
+      ↓
+start llama.cpp automatically
+      ↓
+wait for actual readiness
+      ↓
+verify HTTP health
+      ↓
+mark engine ready
+      ↓
+enable agent inference
 ```
 
-The Lab operates on a disposable workspace:
+The application must not require the user to manually launch llama.cpp for normal operation.
+
+## Required engine behavior
+
+On application startup:
 
 ```text
-lab/
-└── workspaces/
-    └── <task-id>/
-        ├── source files
-        ├── tests
-        └── build/test state
+missing binary
+    ↓
+download automatically when network is available
+    ↓
+install locally
+    ↓
+start
 ```
 
-The workspace is intentionally separated from the original source tree during autonomous modification.
-
-## Lab capabilities
+or:
 
 ```text
-workspace creation
-workspace isolation
-source/workspace overlap protection
-workspace path validation
-symlink exclusion
-.git handling
-snapshots
-patch export
-promotion
-bounded command execution
-timeouts
+binary already installed
+    ↓
+start automatically
+```
+
+The system must also:
+
+```text
+detect dead engine
+restart when appropriate
+detect startup failure
+surface the actual error
+track active model
+track PID where applicable
+expose health
+expose lifecycle state
+support stop
+support restart
+```
+
+Valid engine states include:
+
+```text
+idle
+starting
+downloading
+ready
+running
+busy
+stopping
+stopped
+failed
+```
+
+Never report `running` or `ready` based solely on an optimistic frontend state.
+
+The state must come from actual engine/process/HTTP health.
+
+---
+
+# Model Lifecycle
+
+The model lifecycle should be:
+
+```text
+discover
+   ↓
+inspect
+   ↓
+select
+   ↓
+resolve path
+   ↓
+start llama.cpp
+   ↓
+load model
+   ↓
+verify health
+   ↓
+use
+```
+
+GGUF discovery must remain bounded and responsive.
+
+Model information should include, when available:
+
+```text
+id
+name
+path
+size
+format
+architecture
+quantization
+context capacity
+status
+loaded state
+```
+
+The active model shown by the UI must be the model actually used by the runtime.
+
+---
+
+# Agent Inference
+
+The primary application workflow is:
+
+```text
+User message
+    ↓
+Session state
+    ↓
+Context assembly
+    ↓
+Cached context reuse
+    ↓
+Chunk retrieval
+    ↓
+LLM request
+    ↓
+Streaming response
+    ↓
+Tool call(s)
+    ↓
+Tool result(s)
+    ↓
+Follow-up inference
+    ↓
+Final answer
+```
+
+The Agent must support:
+
+```text
+conversation
+streaming
+message history
+tool calls
+tool results
+errors
 cancellation
-combined output limits
-stdin isolation
-environment sanitization
-command policy
-task lifecycle
-session registry
-objective verification
-repair iteration limits
+retry
+regeneration
+model awareness
+runtime awareness
+attachments
+long context
+context provenance
 ```
+
+An inference request that silently fails, produces no usable choice, or leaves the UI waiting indefinitely is an error.
 
 ---
 
-# Verification Invariant
+# Attachments
 
-The most important Lab invariant is:
+Attachments are part of the Agent workflow, not a cosmetic UI feature.
 
-> **A task cannot be considered successfully completed without current passing verification.**
-
-Verification becomes stale whenever the workspace is mutated.
+The target workflow is:
 
 ```text
-RUN / EDIT
-     ↓
-verification stale
-     ↓
-VERIFY
-     ↓
-PASS ──► continue
-FAIL ──► diagnose / repair
-```
-
-Trivial successful shell commands are not accepted as proof of correctness.
-
-Examples explicitly rejected as meaningful verification include:
-
-```text
-echo
-printf
-true
-false
-exit 0
-```
-
-The verifier can discover native project checks for common project types such as:
-
-```text
-Go
-Node.js
-Python
-Rust
-```
-
-The verification model is based on meaningful project-level checks rather than arbitrary command success.
-
----
-
-# Autonomous Repair
-
-The Lab contains a bounded repair controller.
-
-The controller is designed around:
-
-```text
-baseline
+select file
    ↓
-diagnose
+validate
    ↓
-repair
+stage safely
    ↓
-verify
+inspect metadata
    ↓
-repeat only when justified
+extract usable content
+   ↓
+chunk if necessary
+   ↓
+cache processed representation
+   ↓
+attach to context
+   ↓
+send to model
 ```
 
-The repair budget is bounded:
+Required attachment capabilities:
 
 ```text
-default: 25 iterations
-absolute maximum: 100 iterations
+attach
+inspect
+stage
+remove
+reuse
+show in conversation
 ```
 
-The controller also avoids blindly retrying the same normalized command indefinitely.
+The runtime must never blindly inject arbitrary binary data into a prompt.
 
-Every repair action remains subject to the normal Lab policy and runner controls.
-
-Autonomous repair is therefore bounded rather than unconstrained.
-
----
-
-# Promotion and Recovery
-
-Changes are not written directly into the original source tree during normal Lab execution.
-
-Promotion follows this model:
+Attachments must have bounded:
 
 ```text
-Lab workspace
-     ↓
-snapshot
-     ↓
-current verification
-     ↓
-promotion
-     ↓
-source tree
+file size
+extraction size
+processing time
+chunk count
+memory use
 ```
 
-Snapshots are created before source mutation.
-
-The Lab workspace is intentionally retained after promotion so that evidence, diagnostics, and recovery information are not immediately destroyed.
-
-The Lab can also export a binary-safe patch representation.
-
----
-
-# Controlled Execution
-
-Agent-controlled commands pass through multiple layers:
+The implementation must distinguish between:
 
 ```text
-LLM
- ↓
-Tool API
- ↓
-Policy
- ↓
-Lab Runner
- ↓
-Workspace
- ↓
-Process
-```
-
-The execution stack provides defense in depth.
-
-Controls include:
-
-```text
-workspace boundary
-path validation
-command policy
-interactive-command restrictions
-network restrictions
-Git restrictions
-timeouts
-output limits
-stdin isolation
-environment sanitization
-process-tree cancellation
-```
-
-These controls reduce risk but are **not equivalent to a dedicated operating-system or hardware security boundary**.
-
----
-
-# Filesystem Security
-
-The filesystem path layer validates tool paths relative to a configured base.
-
-Important protections include:
-
-```text
-absolute-path rejection where required
-relative traversal rejection
-base-directory validation
-symlink-prefix escape detection
-safe path joining
-existing-path checks
-workspace restriction
-```
-
-Tools are expected to use the checked path layer instead of constructing unrestricted filesystem paths themselves.
-
----
-
-# Shell and Git Security
-
-Shell and Git execution are constrained by both path validation and command policy.
-
-The Git policy rejects common escape mechanisms such as:
-
-```text
--C
---git-dir
---work-tree
-absolute external paths
-parent traversal
-file:// repository targets
-```
-
-Workspace-local Git workflows such as committing are permitted where policy allows them.
-
-Git publishing is blocked by the Lab policy.
-
----
-
-# Process Control
-
-The process layer is designed to cancel entire process trees rather than only the direct child process.
-
-Unix-like systems use process groups.
-
-Windows uses:
-
-```text
-CREATE_NEW_PROCESS_GROUP
-taskkill /PID /T /F
-```
-
-This reduces the risk of timed-out or canceled commands leaving child processes alive.
-
-The Lab runner also avoids inheriting the host's complete environment.
-
-Sensitive host environment values are removed before Lab execution.
-
-Standard input is not inherited from the host terminal for Lab commands.
-
----
-
-# Network and Fetch Security
-
-Model-controlled HTTP access is bounded and validated.
-
-The fetch layer includes:
-
-```text
-request timeout
-response-size limits
-redirect limits
-redirect re-validation
-localhost blocking
-loopback blocking
-link-local blocking
-private-network blocking
-DNS/network validation
-```
-
-The purpose is to prevent a model-controlled fetch path from being used to access internal/private services.
-
----
-
-# Research Engine
-
-Research is a first-class runtime capability.
-
-Current research backends include:
-
-```text
-Auto
-GitHub
-Reddit
-DuckDuckGo
-SearXNG
-Web compatibility alias
-```
-
-The agent-facing research tool is:
-
-```text
-research
-```
-
-The `web` backend name is retained as a compatibility alias for DuckDuckGo. It is **not** a generic unrestricted web provider.
-
-Research requests and results are normalized.
-
-The service supports:
-
-```text
-bounded result counts
-bounded timeouts
-provider validation
-result normalization
-deduplication
-relevance ranking
-authority ranking
-content hashing
+original file
+staged file
+extracted text
 metadata
+chunks
+cached representation
 ```
+
+These are not interchangeable objects.
 
 ---
 
-# Research Evidence
+# Context Chunking
 
-Research is evidence, not automatic truth.
+Long-context support must be based on structured chunking rather than concatenating every available input into a single prompt.
 
-The intended authority ordering is approximately:
+The chunking pipeline should be:
 
 ```text
-official documentation
-        ↓
-maintainer / project material
-        ↓
-project source / release information
-        ↓
-high-quality technical discussion
-        ↓
-community reports
-        ↓
-unknown web content
+raw input
+   ↓
+normalize
+   ↓
+segment
+   ↓
+chunk
+   ↓
+metadata
+   ↓
+hash
+   ↓
+cache
+   ↓
+retrieve required chunks
+   ↓
+assemble bounded context
 ```
 
-This ordering is advisory.
-
-A high-ranked result does not become a confirmed fix merely because it ranks highly.
-
-The final acceptance criterion remains:
+Chunk metadata should be stable enough to support reuse:
 
 ```text
-local project state
+chunk ID
+source ID
+source type
+source path
+content hash
+sequence
+character / byte range
+token estimate
+created time
+version
+```
+
+Chunking must preserve semantic boundaries where practical.
+
+Preferred boundaries include:
+
+```text
+document sections
+paragraphs
+code blocks
+function / class boundaries
+headings
+sentences
+```
+
+Do not split structured code or documents arbitrarily when a better boundary is available.
+
+---
+
+# Context Caching
+
+Context caching is a first-class runtime requirement.
+
+The system should avoid recomputing identical context repeatedly.
+
+Cacheable stages include:
+
+```text
+file extraction
+document normalization
+chunking
+chunk metadata
+content hashing
+retrieval results
+context assembly
+```
+
+Cache keys must be deterministic and content-sensitive.
+
+Recommended key structure:
+
+```text
+source identity
 +
-local execution
+content hash
 +
-objective verification
+processing version
++
+chunking configuration
++
+relevant runtime configuration
+```
+
+A stale cache entry must never be treated as current merely because its path is unchanged.
+
+Content hash or equivalent invalidation must be used.
+
+The cache should be:
+
+```text
+bounded
+versioned
+recoverable
+observable
+invalidatable
+safe under concurrent access
 ```
 
 ---
 
-# GitHub Research
+# Long-Context Strategy
 
-The GitHub provider is intended to surface engineering evidence such as:
+The application should not attempt to place every historical message into every prompt.
 
-```text
-exact error messages
-package/module names
-symbols
-known regressions
-maintainer explanations
-issues
-pull requests
-workarounds
-```
-
-Responses are bounded and endpoint construction is validated.
-
-GitHub research remains evidence that must be checked against the local project and version context.
-
----
-
-# Reddit Research
-
-Reddit provides practical community evidence such as:
+Preferred strategy:
 
 ```text
-installation failures
-hardware-specific issues
-configuration problems
-regressions
-practical workarounds
+recent conversation
+        +
+relevant recalled context
+        +
+retrieved attachment/document chunks
+        +
+high-value memory
+        +
+current task state
+        +
+tool evidence
 ```
 
-Reddit evidence is treated as experiential rather than authoritative.
+The system should maintain a context budget.
 
-OAuth/token requirements are enforced where applicable.
-
----
-
-# Web Research
-
-The current architecture supports:
+When the budget is exceeded:
 
 ```text
-DuckDuckGo
-SearXNG
+compress
+retrieve
+prune low-value history
+retain important state
+reassemble
 ```
 
-with:
-
-```text
-timeouts
-result limits
-body limits
-normalization
-ranking
-deduplication
-```
-
-External web content must not silently become authoritative engineering knowledge.
+Do not solve context pressure by blindly increasing the prompt size.
 
 ---
 
 # Memory and Recall
 
-The memory layer separates trusted engineering knowledge from provisional observations.
+Memory and context are related but distinct.
 
-Current memory classes:
+Memory stores durable information.
 
-```text
-M1 = trusted user facts
-M2 = preferences
-M3 = project state
-M4 = decisions
-M5 = procedures / learned fixes
-M6 = conversation summaries
-M7 = observations / untrusted or provisional knowledge
-```
+Recall selects useful information for a specific task.
 
-Memory entries can carry provenance and trust information.
-
-External research provenance is quarantined by default rather than being silently promoted into trusted memory.
-
-The system distinguishes:
+The conceptual pipeline is:
 
 ```text
-what was observed
-what was reported
-what was inferred
-what was verified
+memory
+   ↓
+recall candidates
+   ↓
+relevance filtering
+   ↓
+context budget
+   ↓
+prompt assembly
 ```
 
-This distinction is essential to reliable autonomous engineering.
+Memory classes include:
+
+```text
+M1 trusted user facts
+M2 preferences
+M3 project state
+M4 decisions
+M5 learned procedures
+M6 conversation summaries
+M7 observations / provisional knowledge
+```
+
+External research must retain provenance and must not silently become trusted memory.
 
 ---
 
-# AI Context
+# Tool Architecture
 
-The project contains an operational AI constitution in:
+Tools implement the runtime tool contract and must be exposed according to actual availability.
 
-```text
-internal/aicontext/AI-CONTEXT.md
-```
-
-The AI context is responsible for communicating:
-
-```text
-runtime identity
-system information
-LLM/provider state
-capabilities
-tool availability
-research availability
-memory expectations
-verification rules
-safety constraints
-failure discipline
-answer discipline
-```
-
-The runtime can generate context using the actual registered tool set.
-
-This is important because the model should see capabilities that match the tools that actually exist at runtime.
-
----
-
-# Agent Tool Architecture
-
-Tools implement the common interface:
+Conceptually:
 
 ```go
 type Tool interface {
@@ -694,110 +702,299 @@ type Tool interface {
 }
 ```
 
-The orchestrator exposes the tools actually registered in the runtime.
-
-Tool ordering is deterministic.
-
-Configured tool restrictions are applied before capability information is exposed to the model.
-
-This prevents divergence between:
+Useful tool categories include:
 
 ```text
-advertised capabilities
+filesystem
+attachments
+shell
+git
+browser
+research
+vision
+memory
+recall
+sandbox
+process
+diagnostics
 ```
 
-and:
-
-```text
-actual capabilities
-```
+The model should never be told a tool exists unless that tool is actually registered and usable.
 
 ---
 
-# LLM Runtime
+# Coding Lab
 
-SHEYTAN supports local and OpenAI-compatible LLM endpoints.
-
-Conceptually:
+Coding Lab is the engineering execution environment.
 
 ```text
-SHEYTAN
-   ↓
-LLM Client
-   ├── local llama.cpp
-   └── OpenAI-compatible endpoint
-```
-
-The runtime supports:
-
-```text
-streaming
-tool calls
-history management
-iteration limits
-abort handling
-telemetry
-context-pressure management
-dynamic tool exposure
-```
-
-The LLM remains a replaceable component.
-
-The engineering infrastructure around it is application-owned.
-
-An LLM response without usable choices is treated as an error rather than being silently accepted.
-
----
-
-# API
-
-The Go server provides HTTP endpoints for the frontend/runtime boundary.
-
-Core API areas include:
-
-```text
-state
-sysinfo
-models
-presets
-tools
-sessions
-session details
-session updates
+project
+  ↓
+isolated workspace
+  ↓
+inspect
+  ↓
+edit
+  ↓
 run
-abort
-activity WebSocket
+  ↓
+verify
+  ↓
+review
+  ↓
+promote / discard
 ```
 
-Session operations are session-scoped.
-
-The WebSocket activity channel is also session-scoped.
-
-API configuration responses redact sensitive credentials.
-
-Configuration updates behave as patches against the current configuration rather than blindly replacing unrelated settings.
-
----
-
-# WebSocket Activity
-
-Live activity is delivered over:
+The Lab must preserve:
 
 ```text
-/ws/activity?sessionId=<session-id>
+workspace isolation
+path validation
+symlink protections
+shell policy
+Git policy
+network policy
+timeouts
+cancellation
+bounded output
+process-tree cleanup
+environment sanitization
 ```
 
-Activity connections are scoped to a session.
+A task is not successful merely because a command exits with status 0.
 
-The server enforces an origin policy rather than accepting arbitrary cross-origin WebSocket requests.
-
-The React frontend connects to the active session's activity channel.
+Objective verification is required.
 
 ---
 
-# React / TypeScript UI
+# Verification
 
-The current frontend stack is:
+Verification remains authoritative.
+
+```text
+EDIT / RUN
+     ↓
+verification stale
+     ↓
+VERIFY
+     ↓
+PASS ──► continue
+FAIL ──► diagnose / repair
+```
+
+Examples such as:
+
+```text
+echo
+printf
+true
+exit 0
+```
+
+are not meaningful proof of project correctness.
+
+Meaningful verification should prefer project-level checks such as:
+
+```text
+Go tests
+Node tests
+TypeScript checks
+builds
+linting
+Rust tests
+Python tests
+functional integration checks
+desktop smoke tests
+```
+
+---
+
+# Research
+
+Research is an evidence source.
+
+Supported architecture may include:
+
+```text
+Auto
+GitHub
+Reddit
+DuckDuckGo
+SearXNG
+Web compatibility alias
+```
+
+Research results should carry:
+
+```text
+title
+provider
+URL
+snippet
+relevance
+authority
+published information when available
+```
+
+Research is never automatically authoritative.
+
+The final engineering proof remains:
+
+```text
+local state
++
+actual execution
++
+objective verification
+```
+
+---
+
+# Sessions
+
+Sessions are persistent units of work.
+
+Required behavior:
+
+```text
+create
+rename
+switch
+delete
+restore history
+active model
+activity
+metadata
+```
+
+Session state must remain synchronized between frontend and backend.
+
+Long-running sessions must not produce unbounded in-memory history.
+
+---
+
+# Browser and Vision
+
+Browser and vision are runtime capabilities, not decorative panels.
+
+Browser state should expose:
+
+```text
+availability
+task
+navigation
+URL
+page title
+screenshots
+errors
+cancellation
+```
+
+Vision should expose:
+
+```text
+input
+processing state
+result
+errors
+```
+
+Both must preserve existing security controls.
+
+---
+
+# Security
+
+The LLM is an untrusted proposal source.
+
+Runtime policy remains authoritative.
+
+Do not weaken:
+
+```text
+workspace isolation
+filesystem boundaries
+path validation
+symlink protection
+SSRF controls
+DNS validation
+redirect validation
+shell policy
+Git policy
+sandbox policy
+process cancellation
+secret redaction
+safe archive extraction
+```
+
+Long-running operations require:
+
+```text
+timeout
+cancellation
+bounded resources
+cleanup
+```
+
+---
+
+# Performance
+
+The application targets smooth interaction on high-refresh displays, including 120 Hz environments.
+
+Performance priorities are:
+
+```text
+input latency
+scrolling
+workspace switching
+stream rendering
+WebSocket processing
+tool output
+filesystem operations
+context assembly
+```
+
+Avoid:
+
+```text
+whole-app rerenders
+unbounded DOM growth
+unbounded logs
+repeated filesystem scans
+duplicate extraction
+duplicate chunking
+duplicate network requests
+blocking UI work
+```
+
+Prefer:
+
+```text
+bounded histories
+memoization where useful
+stable selectors
+virtualized lists
+lazy loading
+debouncing
+batched updates
+event coalescing
+incremental processing
+```
+
+Do not add visual effects that materially reduce application responsiveness.
+
+Respect:
+
+```text
+prefers-reduced-motion
+```
+
+---
+
+# Frontend
+
+Frontend stack:
 
 ```text
 Node.js
@@ -809,591 +1006,2288 @@ REST
 WebSocket
 ```
 
-The package currently targets:
+Root-level frontend configuration:
 
 ```text
-Node >= 22.12.0
-npm  >= 10.0.0
+package.json
+package-lock.json
+src/
 ```
 
-The main scripts are:
+Do not create:
+
+```text
+web/package.json
+```
+
+Primary commands:
 
 ```bash
-npm run dev
+npm install
+npm run typecheck
+npm run lint
 npm run build
 npm run build:web
 npm run sync:web
 npm run preview
-npm run typecheck
-npm run lint
 npm run format
 npm run format:check
 ```
 
-The React UI currently includes the core runtime shell:
+Large workspaces should remain lazy-loaded.
 
-```text
-session navigation
-session creation
-session deletion
-active-session selection
-live activity
-connection state
-runtime metrics
-model state
-agent composer
-abort support
-```
-
-The frontend communicates with the Go runtime through the HTTP API and WebSocket activity channel.
-
-The legacy Fyne desktop UI was removed in the Zeta release; the React UI is the application UI, embedded into the Wails desktop shell and served from `web/static`. It remains active development work and should not be described as feature-complete.
+Keep React client boundaries small.
 
 ---
 
-# Frontend Design Direction
+# Backend
 
-The intended UI evolution is:
+Go is the systems/runtime core.
+
+Target runtime:
 
 ```text
-Agent
- ├── conversation / activity
- ├── runtime state
- ├── models
- └── execution status
-
-Coding Lab
- ├── task
- ├── workspace
- ├── commands
- ├── verification
- ├── repair iterations
- ├── snapshots
- └── promotion
-
-Research
- ├── query
- ├── providers
- ├── evidence
- ├── ranking
- └── source details
-
-Memory
- ├── recall
- ├── provenance
- ├── trust
- └── engineering knowledge
-
-Artifacts
- ├── files
- ├── diffs
- └── future SVG workspace
+Go 1.26
+Wails v3
 ```
 
-Lab and Research UI panels shipped in v1.1.1Z (`LabPanel.tsx`, `ResearchPanel.tsx`,
-`SettingsPanel.tsx` — all embedded in the release binary).
-
-The v1.1.2Z release adds a 120Hz-first motion system (`src/motion.css`):
-compositor-only animations (transform/opacity/filter), frame-quantized
-durations, spring easing curves, staggered panel entrances, animated
-workspace view transitions, and full `prefers-reduced-motion` support.
-
-The SVG editor/preview remains later work.
-
----
-
-# Configuration
-
-Important Version Zeta configuration areas include:
+The backend owns:
 
 ```text
-LabEnabled
-LabWorkspaceRoot
-LabCommandTimeoutSec
-LabMaxIterations
-LabKeepWorkspaces
-LabAllowNetwork
-
-ResearchEnabled
-ResearchBackend
-ResearchSearXNGURL
-ResearchMaxResults
-ResearchTimeoutSec
-ResearchCacheTTLMin
-ResearchGitHub
-ResearchReddit
-ResearchWeb
-ResearchUserAgent
-```
-
-Lab iteration policy:
-
-```text
-default = 25
-maximum = 100
-```
-
-The effective value is bounded even when configuration is malformed or absent.
-
----
-
-# Security Posture
-
-The project follows a defense-in-depth model.
-
-Important security properties include:
-
-```text
-workspace boundaries
-checked filesystem paths
-symlink avoidance
-ZIP extraction validation
-SSRF protection
-bounded HTTP responses
-bounded redirects
-command policy
-Git restrictions
-process-tree cancellation
-environment sanitization
-stdin isolation
-configuration secret redaction
-WebSocket origin checks
-verification gating
-research provenance quarantine
-```
-
-Security-sensitive changes should preserve these invariants rather than bypassing them for convenience.
-
----
-
-# Development Rules
-
-## For developers
-
-Changes should preserve the separation:
-
-```text
-UI
- ↓
-API
- ↓
-runtime
- ↓
-controlled execution
-```
-
-Do not move security-critical execution logic into the browser merely to simplify UI implementation.
-
-When changing an API contract:
-
-```text
-backend contract
-↓
-TypeScript types
-↓
-store/runtime usage
-↓
-UI consumers
-```
-
-must remain synchronized.
-
-When changing Lab behavior:
-
-```text
-policy
-runner
-task lifecycle
+process lifecycle
+llama.cpp lifecycle
+model lifecycle
+tool execution
+filesystem access
+context processing
+chunking
+cache
+sessions
+memory
+recall
+research
+sandbox
 verification
-promotion
-tests
 ```
 
-must be considered together.
-
-When changing research behavior:
-
-```text
-provider
-normalization
-ranking
-deduplication
-trust/provenance
-tests
-```
-
-must remain consistent.
+Do not move security-critical runtime behavior into the frontend.
 
 ---
 
-# Rules for Coding Agents
+# CI and Release
 
-Agents working on this repository should follow these rules.
-
-### 1. Inspect before modifying
-
-Never assume a file, endpoint, capability, or architecture exists.
-
-Check the live repository first.
-
-### 2. Preserve verified boundaries
-
-Do not weaken:
+Primary CI workflow:
 
 ```text
-workspace isolation
-path checks
-process cancellation
-command policy
-SSRF protection
-secret redaction
-verification gates
-memory quarantine
+.github/workflows/build-desktop.yml
 ```
 
-to make a feature easier.
-
-### 3. Treat external research as evidence
-
-A GitHub issue, Reddit post, web page, or model-generated claim is not automatically true.
-
-Use research to form hypotheses.
-
-Use the local project to test them.
-
-### 4. Never fake verification
-
-Do not turn:
+Windows:
 
 ```text
-echo
-true
-exit 0
+windows-latest
+CGO_ENABLED=0
 ```
 
-into a success signal.
-
-Do not report a task as fixed without current meaningful verification.
-
-### 5. Re-verify after mutation
-
-Any workspace mutation can invalidate previous verification.
-
-### 6. Prefer bounded behavior
-
-Loops, retries, commands, network access, output, and repair iterations must have explicit limits.
-
-### 7. Keep API contracts explicit
-
-JSON names are part of the API contract.
-
-Use the backend's actual field names.
-
-### 8. Keep documentation truthful
-
-Do not document planned functionality as implemented.
-
-Use these states:
+Linux:
 
 ```text
-Implemented
-In progress
-Planned
-Experimental
+ubuntu-24.04
+CGO_ENABLED=1
 ```
 
-### 9. Read AI-CONTEXT.md
-
-The operational constitution in:
+Linux Wails dependencies include:
 
 ```text
-internal/aicontext/AI-CONTEXT.md
+libgtk-4-dev
+libwebkitgtk-6.0-dev
+libsoup-3.0-dev
+pkg-config
+zip
 ```
 
-is part of the agent/runtime design and should be treated as an engineering contract.
+Do not regress to the obsolete GTK3/WebKitGTK 4.1 dependency path unless deliberately building a legacy target.
 
-### 10. Verify the actual repository state
+Primary release assets:
 
-A requested change is not considered complete merely because a patch was written locally.
+```text
+SHEYTAN-Local-Agent-Windows-x64-vX.Y.ZZ.zip
+SHEYTAN-Local-Agent-Linux-x64-vX.Y.ZZ.zip
+```
 
-The authoritative state is the committed repository state plus successful verification.
+Each package contains:
+
+```text
+SHEYTAN-Local-Agent/
+```
 
 ---
 
-# Verification Commands
+# Version Discipline
 
-After Go changes:
+When the application version changes, verify every relevant version surface:
 
-```bash
-go mod tidy
-go test ./internal/... -tags headless -count=1
-go test ./internal/lab/ -count=1
-go test ./internal/research/ -count=1
-go vet ./internal/...
-go build -o /tmp/sheytan .
+```text
+internal/config/config.go
+package.json
+.github/workflows/build-desktop.yml
+SIGNATURE
+portable launch scripts
+documentation
+release metadata
 ```
 
-The desktop shell (`internal/desktop`) compiles against Wails v3. On Windows — the CI runner — no cgo is required. On Linux, building or testing any package that imports it needs GTK4/WebKitGTK development headers (`pkg-config --exists gtk4 webkitgtk-6.0`); without them, verify with the Windows cross-build instead:
+Current development target:
 
-```bash
-GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build ./...
-GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go vet ./...
+```text
+APP_VERSION = 1.1.3
+Codename    = Zeta
+Release tag = v1.1.3Z
 ```
 
-The stress suite builds headless on any host via the dedicated entry point:
-
-```bash
-go build -o /tmp/sheytan-stress ./scripts/stress-main
-SHEYTAN_DATA_DIR=/tmp/sheytan-stress-root /tmp/sheytan-stress stress
-```
-
-After frontend changes:
-
-```bash
-npm ci
-npm run typecheck
-npm run lint
-npm run format:check
-npm run build:web
-```
-
-`npm ci` installs exactly the committed `package-lock.json` (CI uses it too);
-`format:check` is the honest CI gate — never commit a tree that needs
-`npm run format` to pass it.
-
-Full frontend/runtime synchronization:
-
-```bash
-npm run build
-```
-
-The exact commands that are appropriate for a change should be selected from the actual project structure rather than copied mechanically.
-
-A test command itself is not sufficient evidence when the test suite does not cover the changed behavior.
+Do not describe unfinished functionality as released functionality.
 
 ---
 
-# Releases
+# Definition of Done
 
-CI is `.github/workflows/build-desktop.yml`. Every push to `main` builds
-both platforms; pushing a tag publishes a GitHub Release:
+A feature is complete only when:
 
-```bash
-git tag v1.1.2Z
-git push origin v1.1.2Z
+```text
+UI exists
+   +
+API exists
+   +
+runtime implementation exists
+   +
+real operation occurs
+   +
+state updates
+   +
+errors are surfaced
+   +
+cancellation works
+   +
+relevant tests pass
+   +
+desktop build passes
+   +
+functional behavior is verified
 ```
 
-The release assets are produced by the workflow itself:
+A button is not a feature.
+
+An endpoint is not a feature.
+
+A successful compile is not a feature.
+
+A commit is not proof.
+
+A desktop window opening is not proof.
+
+---
+
+# Immediate v1.1.3Z Goal
+
+The next milestone is **live model end-to-end functionality**.
+
+Priority:
+
+```text
+Application launch
+    ↓
+Automatic llama.cpp startup
+    ↓
+Actual model readiness
+    ↓
+First inference
+    ↓
+Streaming response
+    ↓
+Tool execution
+    ↓
+Attachment ingestion
+    ↓
+Chunking
+    ↓
+Context cache
+    ↓
+Long-context recall
+    ↓
+Reliable multi-turn interaction
+    ↓
+Objective verification
+```
+
+The system should feel functional before additional visual expansion is attempted.
+
+---
+
+# Development Rule
+
+Always inspect the live repository before modifying architecture.
+
+Always verify:
+
+```text
+current commit
+relevant source
+runtime behavior
+Actions
+logs
+artifacts
+```
+
+Never assume that a pushed commit means the feature works.
+
+Never claim a feature is complete without evidence.
+
+When the user says:
+
+```text
+done, check verify and continue
+```
+
+perform:
+
+```text
+inspect
+  ↓
+verify
+  ↓
+diagnose
+  ↓
+fix
+  ↓
+retest
+  ↓
+continue
+```
+
+---
+
+# License
+
+SHEYTAN™ Local-Agent is proprietary software.
+
+See `LICENSE` for the governing terms.
+
+````
+
+### `worklog.md`
+
+```markdown
+# SHEYTAN-Local-Agent — Worklog
+
+## Current State
+
+Date: 2026-09-04
+
+Repository:
+
+```text
+https://github.com/Parsaetak/SHEYTAN-local-agent
+````
+
+Branch:
+
+```text
+main
+```
+
+Current verified main commit:
+
+```text
+0d8aff61eaa3cbdcdf723254f03883d33c403e51
+```
+
+Latest published release:
+
+```text
+v1.1.2Z
+```
+
+Published release assets:
 
 ```text
 SHEYTAN-Local-Agent-Windows-x64-v1.1.2Z.zip
 SHEYTAN-Local-Agent-Linux-x64-v1.1.2Z.zip
 ```
 
-Both zips are portable: extract, double-click `SHEYTAN-Local-Agent.exe`
-(Windows) or run `SHEYTAN-Local-Agent` (Linux). Models, sessions, logs, and
-Coding Lab workspaces live next to the executable. The Windows zip also
-ships the `sheytan-local-agent.bat` launcher, and the exe carries the brand
-icon, the Parsa Tak signature, and a DPI-aware manifest.
+The v1.1.2Z release and its packaging pipeline are established.
+
+The current development problem is different:
+
+> The desktop application starts, but the end-to-end application is still not reliably functional.
+
+The next phase is therefore a functionality milestone, not another UI milestone.
 
 ---
 
-# Repository Hygiene
+# v1.1.3Z — Live Runtime Functionality
 
-Before committing:
+## Primary Objective
+
+Make the application operate as a real local AI agent from startup to completed task.
+
+Target:
 
 ```text
-no stale module paths
-no dead imports
-no hardcoded secrets
-no unrestricted filesystem paths
-no unbounded network operations
-no accidental host-environment inheritance
-no fake verification paths
-no stale documentation claims
-no generated build artifacts unless intentionally tracked
+launch application
+      ↓
+llama.cpp starts automatically
+      ↓
+model is resolved
+      ↓
+engine becomes actually ready
+      ↓
+agent sends inference request
+      ↓
+response streams
+      ↓
+tools execute
+      ↓
+attachments are processed
+      ↓
+long context is chunked / cached
+      ↓
+relevant context is recalled
+      ↓
+agent continues reasoning
+      ↓
+final result appears
 ```
 
-Format and typecheck frontend changes.
-
-Run relevant Go tests and vet checks.
+No manual llama.cpp launch should be required during normal operation.
 
 ---
 
-# Current Status
+# 1. Automatic llama.cpp Lifecycle
 
-## Implemented
+## Requirement
+
+The application must automatically manage llama.cpp.
+
+Startup must perform:
 
 ```text
-✓ canonical Go module path
-✓ TOML dependency normalization
-✓ runtime version/codename separation
-✓ dynamic runtime tool exposure
-✓ AI operating context
-✓ persistent sessions
-✓ memory classes and provenance
-✓ memory quarantine for external research
-✓ bounded Coding Lab
-✓ workspace isolation
-✓ task/session lifecycle
-✓ command policy
-✓ path security
-✓ Git restrictions
-✓ process-tree cancellation
-✓ environment sanitization
-✓ stdin isolation
-✓ objective verification
-✓ verification invalidation
-✓ native verification discovery
-✓ snapshot support
-✓ patch export
-✓ promotion gating
-✓ bounded autonomous repair
-✓ GitHub research
-✓ Reddit research
-✓ DuckDuckGo research
-✓ SearXNG research
-✓ research ranking
-✓ research deduplication
-✓ research caching
-✓ SSRF-aware fetch path
-✓ API hardening
-✓ WebSocket origin restrictions
-✓ per-session abort
-✓ LLM empty-response rejection
-✓ llama startup deadlock fix
-✓ ZIP extraction protection
-✓ React/Vite frontend foundation
-✓ session-aware React activity WebSocket
-✓ REST API integration
-✓ Wails v3 desktop shell (single self-contained exe)
-✓ legacy Fyne UI fully removed (Zeta)
-✓ Coding Lab frontend panel
-✓ Research frontend panel
-✓ Settings frontend panel
-✓ repaired Linux CI (GTK4 + WebKitGTK-6.0 for Wails v3)
-✓ pinned Node 24 / Go 1.26 toolchains in CI
-✓ versioned legacy sources retired (v1.1.1Z)
-✓ 120Hz-first motion system with spring easing + staggered entrances (v1.1.2Z)
-✓ animated workspace view transitions (v1.1.2Z)
-✓ idle WebSocket standby: activity stream stays connected between runs (v1.1.2Z)
-✓ models API returns rich {id, name, path, sizeBytes} descriptors (v1.1.2Z)
-✓ Settings panel null-crash fixed: fresh installs no longer render a blank page (v1.1.2Z)
-✓ first-launch auto-session: Agent workspace is immediately live (v1.1.2Z)
-✓ Windows CI restored: gen-syso icon/resources + -H=windowsgui + .bat launcher (v1.1.2Z)
-✓ stress release-surface gate now runs in CI (v1.1.2Z)
-✓ stale web/static build artifacts + broken Taskfile + old e2e scripts removed (v1.1.2Z)
+application startup
+    ↓
+load configuration
+    ↓
+resolve engine path
+    ↓
+ensure llama.cpp binary
+    ↓
+resolve model
+    ↓
+start process
+    ↓
+wait for readiness
+    ↓
+health check
+    ↓
+publish actual engine state
 ```
 
-## In Progress
+Required states:
 
 ```text
-□ complete React feature parity polish with the pre-migration desktop UI
-□ richer project/task inspection
-□ end-to-end autonomous coding workflows
-□ broader verification coverage
-□ frontend integration tests
+idle
+downloading
+starting
+ready
+running
+busy
+stopping
+stopped
+failed
 ```
 
-## Later
+The UI must not invent these states.
+
+Backend/process state is authoritative.
+
+## Acceptance
+
+A clean desktop launch must result in:
 
 ```text
-□ live SVG editor
-□ advanced artifact workspace
-□ richer visual debugging
-□ additional research providers
-□ more sophisticated engineering-memory workflows
+SHEYTAN starts
+→ llama.cpp starts
+→ model becomes ready
+→ agent can send inference
+```
+
+without requiring the user to run a separate command.
+
+---
+
+# 2. Engine Failure Recovery
+
+The engine must detect:
+
+```text
+process death
+startup failure
+HTTP failure
+model load failure
+port conflict
+invalid executable
+invalid model
+```
+
+Recovery policy:
+
+```text
+detect
+  ↓
+diagnose
+  ↓
+retry/restart when safe
+  ↓
+surface actual error
+```
+
+Do not report:
+
+```text
+ready
+```
+
+after a failed launch attempt.
+
+---
+
+# 3. Model Lifecycle
+
+Required path:
+
+```text
+discover
+ ↓
+inspect
+ ↓
+select
+ ↓
+resolve
+ ↓
+load
+ ↓
+verify
+ ↓
+use
+```
+
+Model state must represent reality.
+
+Required observability:
+
+```text
+model name
+path
+size
+format
+active state
+engine state
+load state
+error
+```
+
+The frontend model selection and backend active model must never diverge.
+
+---
+
+# 4. End-to-End Agent
+
+The Agent is the highest-priority user workflow.
+
+Required:
+
+```text
+new session
+message input
+actual inference
+streaming
+conversation history
+tool calls
+tool results
+errors
+abort
+retry
+regenerate
+runtime state
+model state
+```
+
+The most important acceptance test is:
+
+```text
+open app
+→ create/use session
+→ enter message
+→ submit
+→ llama.cpp is used
+→ output streams
+→ final assistant message appears
 ```
 
 ---
 
-# Engineering Philosophy
+# 5. Tool Execution
 
-SHEYTAN is built around one principle:
+Verify that tool execution is actually connected end-to-end.
 
-> **Intelligence is not only the model.**
-
-A useful engineering agent combines:
+For every tool:
 
 ```text
-Model
-× Reasoning
-× Tools
-× Memory
-× Planning
-× Verification
-× Runtime
-× Compute
+model tool call
+    ↓
+tool registry
+    ↓
+argument validation
+    ↓
+runtime execution
+    ↓
+actual result
+    ↓
+activity event
+    ↓
+follow-up LLM turn
 ```
 
-A stronger model can improve reasoning.
+A visible tool definition without actual execution is incomplete.
 
-It cannot replace:
+Tool failures must surface as errors.
+
+---
+
+# 6. Attachments
+
+Add dedicated Agent attachment tooling.
+
+Required workflow:
 
 ```text
-safe execution
-real project state
-persistent evidence
-objective verification
-bounded control
+select file
+ ↓
+validate
+ ↓
+stage
+ ↓
+inspect
+ ↓
+extract
+ ↓
+chunk
+ ↓
+cache
+ ↓
+associate with message/session
+ ↓
+provide relevant representation to model
 ```
 
-The final system should therefore behave less like:
+Required capabilities:
 
 ```text
-"the AI says the code is fixed"
+attach
+inspect
+remove
+reuse
+show in conversation
 ```
 
-and more like:
+Do not put raw arbitrary binary data into prompts.
+
+The system must distinguish:
 
 ```text
-"the system inspected the project,
-changed the isolated workspace,
-ran the relevant checks,
-verified the result,
-preserved the evidence,
-and only then accepted the change."
+source file
+staged file
+metadata
+extracted content
+chunks
+cache entry
 ```
 
 ---
 
-# Final Objective
+# 7. Context Chunking
 
-The long-term target is a local AI software engineer capable of receiving a request such as:
-
-```text
-Fix every failing test in this repository.
-Research unfamiliar errors.
-Do not modify files outside the project.
-Keep iterating until the build and tests pass.
-```
-
-and executing a bounded, auditable engineering loop:
+The repository already contains:
 
 ```text
-REQUEST
-   ↓
-INSPECT
-   ↓
-BASELINE
-   ↓
-DIAGNOSE
-   ↓
-RESEARCH
-   ↓
-PLAN
-   ↓
-PATCH
-   ↓
-RUN
-   ↓
-VERIFY
-   │
-   ├── PASS → REVIEW → COMPLETE
-   │
-   └── FAIL → RESEARCH → REPAIR ↺
+internal/chunking/
 ```
 
-The objective is not to make the model appear certain.
+The next goal is to connect chunking to the real Agent/context pipeline.
 
-The objective is to make the system produce **evidence-backed engineering results**.
+Required:
+
+```text
+raw content
+ ↓
+normalize
+ ↓
+chunk
+ ↓
+hash
+ ↓
+store metadata
+ ↓
+retrieve relevant chunks
+ ↓
+assemble bounded prompt context
+```
+
+The chunking system must support:
+
+```text
+large text files
+documents
+conversation summaries
+attachment content
+project source
+research material
+```
+
+Prefer semantic boundaries.
+
+Do not unnecessarily split:
+
+```text
+functions
+classes
+code blocks
+document sections
+```
+
+---
+
+# 8. Context Cache
+
+Implement a real cache around processed context.
+
+At minimum cache:
+
+```text
+file extraction
+normalized content
+chunking
+chunk metadata
+content hash
+retrieval results
+```
+
+Cache identity must depend on content.
+
+Recommended:
+
+```text
+source identity
++
+content hash
++
+processing version
++
+configuration
+```
+
+Required properties:
+
+```text
+bounded
+versioned
+concurrency-safe
+invalidatable
+observable
+```
+
+Never reuse stale content merely because the source path is unchanged.
+
+---
+
+# 9. Long Context
+
+Do not construct prompts by blindly concatenating the entire session.
+
+Preferred context:
+
+```text
+recent messages
++
+relevant historical messages
++
+memory
++
+recalled chunks
++
+attachment chunks
++
+tool evidence
++
+current task state
+```
+
+When context exceeds the available budget:
+
+```text
+measure
+ ↓
+prioritize
+ ↓
+compress
+ ↓
+retrieve
+ ↓
+prune low-value material
+ ↓
+assemble
+```
+
+The current task, recent messages, tool evidence, and important state must survive context pressure.
+
+---
+
+# 10. Context Provenance
+
+Every injected external/context item should be traceable.
+
+Useful provenance:
+
+```text
+source
+source type
+source path / URL
+session
+chunk ID
+content hash
+retrieval reason
+timestamp
+```
+
+The UI should be able to present a concise context summary without exposing unnecessary internal prompt details.
+
+---
+
+# 11. Sessions
+
+Verify:
+
+```text
+create
+switch
+rename
+delete
+history
+active model
+activity
+```
+
+Long sessions must not create uncontrolled in-memory growth.
+
+History handling should be bounded and compatible with the new chunk/cache system.
+
+---
+
+# 12. Performance
+
+The long-context path must optimize:
+
+```text
+deduplication
+incremental processing
+cache hits
+bounded allocations
+bounded history
+stream rendering
+WebSocket event volume
+```
+
+Avoid:
+
+```text
+re-extracting unchanged files
+re-chunking unchanged files
+rebuilding identical context repeatedly
+serializing huge histories unnecessarily
+rerendering the whole UI for every token
+```
+
+The target remains smooth interactive behavior, including 120 Hz-capable displays.
+
+---
+
+# 13. Reliability
+
+Every long-running operation must have:
+
+```text
+context cancellation
+timeout
+bounded output
+cleanup
+error propagation
+```
+
+No process leaks.
+
+No goroutine leaks.
+
+No unbounded buffers.
+
+No fake success states.
+
+---
+
+# 14. Security
+
+Do not regress:
+
+```text
+filesystem boundaries
+workspace isolation
+symlink protection
+shell policy
+Git policy
+network restrictions
+SSRF protection
+process-tree cancellation
+secret redaction
+safe archive extraction
+```
+
+Attachments must be processed through controlled staging.
+
+Extracted content must inherit the same resource limits as other model-controlled inputs.
+
+---
+
+# 15. Testing
+
+Required tests for this phase:
+
+## Engine
+
+```text
+automatic startup
+already-running engine adoption
+startup failure
+dead-process detection
+restart
+port conflict
+invalid model
+```
+
+## Agent
+
+```text
+first inference
+streaming
+tool call
+tool result
+multi-turn conversation
+abort
+retry
+error propagation
+```
+
+## Attachments
+
+```text
+small text file
+large text file
+binary rejection/inspection
+duplicate file
+modified file
+remove attachment
+multiple attachments
+```
+
+## Chunking
+
+```text
+small input
+large input
+structured code
+document sections
+stable chunk IDs
+hash changes
+```
+
+## Cache
+
+```text
+cache hit
+cache miss
+content invalidation
+version invalidation
+concurrent access
+bounded growth
+```
+
+## Long Context
+
+```text
+history pressure
+attachment pressure
+mixed memory + documents
+retrieval
+context truncation
+context rebuild
+```
+
+---
+
+# 16. Release Gate
+
+v1.1.3Z is not complete because:
+
+```text
+the UI looks good
+```
+
+or:
+
+```text
+the executable launches
+```
+
+or:
+
+```text
+the build passes
+```
+
+The release gate is:
+
+```text
+desktop launch
++
+automatic engine startup
++
+actual model inference
++
+working agent
++
+working tools
++
+working attachments
++
+working chunking
++
+working cache
++
+working long-context recall
++
+functional tests
++
+CI
+```
+
+---
+
+# 17. Development Order
+
+Work in this order unless a verified dependency requires otherwise:
+
+```text
+1. llama.cpp lifecycle
+2. model lifecycle
+3. end-to-end inference
+4. tool loop
+5. attachments
+6. chunking integration
+7. context cache
+8. long-context recall
+9. session/history pressure
+10. performance
+11. integration tests
+12. UI polish
+```
+
+Do not spend the next phase primarily on decorative UI work while the core runtime path remains broken.
+
+---
+
+# 18. Engineering Rules
+
+Always:
+
+```text
+inspect live repository
+verify current commit
+inspect relevant files
+inspect Actions when CI matters
+inspect logs when failures exist
+test actual runtime behavior
+verify artifacts where relevant
+```
+
+Never:
+
+```text
+assume a commit works
+claim startup means functionality
+claim a button is a feature
+claim an endpoint is a feature
+claim a compile proves correctness
+```
+
+The authoritative sequence is:
+
+```text
+source
++
+runtime
++
+test
++
+verification
+```
+
+---
+
+# 19. Working Definition of Done
+
+A user-facing feature is done only when:
+
+```text
+frontend
+ ↓
+API
+ ↓
+runtime
+ ↓
+actual operation
+ ↓
+state update
+ ↓
+visible result
+ ↓
+error path
+ ↓
+cancellation
+ ↓
+test evidence
+```
+
+All of those stages must work.
+
+---
+
+# 20. Current Next Task
+
+The next implementation task is:
+
+> **Make llama.cpp startup fully automatic and prove a clean desktop launch can reach a real, healthy model endpoint without manual engine intervention.**
+
+After that:
+
+```text
+first real inference
+→ tool loop
+→ attachments
+→ chunking
+→ cache
+→ long context
+```
+
+````
+
+### `agent.md`
+
+```markdown
+# SHEYTAN-Local-Agent — Agent Context
+
+> Persistent engineering handoff for the next agent working on this repository.
+
+Repository:
+
+```text
+https://github.com/Parsaetak/SHEYTAN-local-agent
+````
+
+Current branch:
+
+```text
+main
+```
+
+Current verified main commit:
+
+```text
+0d8aff61eaa3cbdcdf723254f03883d33c403e51
+```
+
+Current published release:
+
+```text
+v1.1.2Z
+```
+
+Current development target:
+
+```text
+v1.1.3Z
+```
+
+---
+
+# 1. Mission
+
+SHEYTAN-Local-Agent is a local-first AI software-engineering environment.
+
+Core principle:
+
+> **The model proposes. The tools execute. The laboratory verifies.**
+
+The current mission is not to add more visual surface area.
+
+The current mission is to make the existing desktop application **actually functional end-to-end**.
+
+Primary target:
+
+```text
+desktop launch
+    ↓
+automatic llama.cpp startup
+    ↓
+actual model readiness
+    ↓
+real inference
+    ↓
+tool execution
+    ↓
+attachments
+    ↓
+chunking
+    ↓
+context cache
+    ↓
+long-context recall
+    ↓
+reliable multi-turn agent
+```
+
+---
+
+# 2. Important Current Reality
+
+The application can launch as a desktop application.
+
+That does **not** mean the complete runtime workflow is finished.
+
+The current development phase must therefore assume:
+
+```text
+desktop shell != functional agent
+```
+
+The next agent must prioritize runtime integration and real behavior.
+
+Do not treat UI presence as proof of functionality.
+
+---
+
+# 3. Current Architecture
+
+Backend:
+
+```text
+Go 1.26
+Wails v3
+Go HTTP API
+WebSocket activity
+```
+
+Frontend:
+
+```text
+React
+TypeScript
+Vite
+Zustand
+```
+
+Primary runtime packages:
+
+```text
+internal/agent
+internal/aicontext
+internal/api
+internal/browser
+internal/chunking
+internal/config
+internal/desktop
+internal/lab
+internal/llm
+internal/memory
+internal/multiagent
+internal/native
+internal/netcheck
+internal/proc
+internal/recall
+internal/research
+internal/runtime
+internal/sandbox
+internal/sessions
+internal/sysinfo
+internal/tools
+internal/updater
+internal/vision
+```
+
+---
+
+# 4. Desktop Shell
+
+Production architecture:
+
+```text
+React/Vite
+    ↓
+web/static
+    ↓
+Go embed
+    ↓
+Wails
+    ↓
+Go runtime
+```
+
+No separate production frontend server should be required.
+
+Do not reintroduce:
+
+```text
+Fyne
+internal/ui
+legacy desktop UI
+```
+
+---
+
+# 5. Absolute Development Rules
+
+Before modifying anything:
+
+```text
+inspect live repository
+verify exact main commit
+inspect relevant source
+inspect current Actions when relevant
+inspect logs when relevant
+verify actual runtime behavior
+```
+
+Never:
+
+```text
+assume a commit works
+assume a successful build means functionality
+assume a UI control is wired
+assume an endpoint is wired
+assume engine state is true
+claim success without evidence
+```
+
+When the user says:
+
+```text
+done, check verify and continue
+```
+
+the required loop is:
+
+```text
+inspect
+ ↓
+verify
+ ↓
+diagnose
+ ↓
+fix
+ ↓
+retest
+ ↓
+continue
+```
+
+Do not merely acknowledge.
+
+---
+
+# 6. Current Highest Priority — llama.cpp
+
+`internal/llm/llama.go` contains the application-managed `LlamaServer`.
+
+The intended architecture is:
+
+```text
+SHEYTAN startup
+    ↓
+ensure llama.cpp binary
+    ↓
+resolve model
+    ↓
+spawn llama.cpp
+    ↓
+wait for health
+    ↓
+publish actual engine state
+    ↓
+allow agent inference
+```
+
+The application must manage the engine automatically.
+
+## Non-negotiable requirement
+
+The user should not need to manually start llama.cpp.
+
+Normal behavior:
+
+```text
+launch SHEYTAN
+→ engine starts automatically
+→ model is loaded
+→ health is verified
+→ agent can use it
+```
+
+---
+
+# 7. Engine State
+
+Engine state must come from actual runtime/process state.
+
+Valid states:
+
+```text
+idle
+downloading
+starting
+ready
+running
+busy
+stopping
+stopped
+failed
+```
+
+Never allow the frontend to claim:
+
+```text
+ready
+running
+loaded
+```
+
+without backend evidence.
+
+Engine health should verify the real llama.cpp endpoint.
+
+---
+
+# 8. Engine Recovery
+
+Handle:
+
+```text
+missing binary
+download failure
+invalid executable
+invalid model
+model load failure
+port conflict
+process death
+HTTP failure
+startup timeout
+```
+
+Expected strategy:
+
+```text
+detect
+ ↓
+diagnose
+ ↓
+retry/restart where safe
+ ↓
+surface actual failure
+```
+
+Do not leave stale `running` state after process death.
+
+---
+
+# 9. Model Lifecycle
+
+Required lifecycle:
+
+```text
+discover
+ ↓
+inspect
+ ↓
+select
+ ↓
+resolve path
+ ↓
+start engine
+ ↓
+load model
+ ↓
+verify
+ ↓
+use
+```
+
+Model state must be authoritative.
+
+Expose where practical:
+
+```text
+name
+path
+size
+format
+architecture
+quantization
+context capacity
+selected
+loaded
+running
+error
+```
+
+The active model displayed in the UI must match the model actually used by the engine.
+
+---
+
+# 10. End-to-End Agent
+
+The most important acceptance test is:
+
+```text
+open desktop application
+ ↓
+session exists
+ ↓
+enter message
+ ↓
+submit
+ ↓
+llama.cpp receives inference request
+ ↓
+assistant output streams
+ ↓
+final response appears
+```
+
+The Agent must support:
+
+```text
+conversation
+streaming
+history
+tool calls
+tool results
+errors
+abort
+retry
+regenerate
+runtime visibility
+model visibility
+attachments
+context state
+```
+
+A response that never reaches a model is a runtime failure.
+
+---
+
+# 11. Tool Loop
+
+Required execution:
+
+```text
+LLM
+ ↓
+tool call
+ ↓
+registry
+ ↓
+validation
+ ↓
+tool execution
+ ↓
+result
+ ↓
+activity event
+ ↓
+follow-up LLM request
+ ↓
+final response
+```
+
+Tool definitions exposed to the model must match the real runtime registry.
+
+Do not advertise unavailable tools.
+
+Do not silently convert tool failures into successful assistant prose.
+
+---
+
+# 12. Attachments
+
+Attachment support is now a priority requirement.
+
+The repository should gain dedicated attachment functionality rather than relying on ad-hoc frontend file handling.
+
+Required flow:
+
+```text
+select
+ ↓
+validate
+ ↓
+stage
+ ↓
+inspect
+ ↓
+extract
+ ↓
+chunk
+ ↓
+cache
+ ↓
+associate with session/message
+ ↓
+retrieve relevant content
+ ↓
+send to model
+```
+
+Required operations:
+
+```text
+attach
+inspect
+remove
+reuse
+show in conversation
+```
+
+Do not inject arbitrary binary data into prompts.
+
+Use controlled staging.
+
+Bound:
+
+```text
+file size
+extraction size
+processing time
+memory
+chunk count
+```
+
+---
+
+# 13. Context Chunking
+
+`internal/chunking/` already exists.
+
+The next task is not merely to have a chunking package.
+
+The next task is to connect it to the actual Agent context pipeline.
+
+Required:
+
+```text
+source
+ ↓
+normalize
+ ↓
+chunk
+ ↓
+hash
+ ↓
+metadata
+ ↓
+store
+ ↓
+retrieve
+ ↓
+assemble context
+```
+
+Potential chunk sources:
+
+```text
+attachments
+documents
+source files
+conversation history
+research
+memory-derived context
+tool output
+```
+
+Prefer semantic boundaries:
+
+```text
+headings
+sections
+paragraphs
+functions
+classes
+code blocks
+sentences
+```
+
+Avoid destructive arbitrary splits when better boundaries exist.
+
+---
+
+# 14. Chunk Identity
+
+Chunks should have stable identifiers and provenance.
+
+Recommended metadata:
+
+```text
+chunk ID
+source ID
+source type
+path / URL
+content hash
+sequence
+range
+token estimate
+processing version
+timestamp
+```
+
+The same content processed with the same configuration should produce reusable chunk identities.
+
+---
+
+# 15. Context Cache
+
+Context caching is a first-class requirement.
+
+Cache suitable expensive transformations:
+
+```text
+file extraction
+normalization
+chunking
+chunk metadata
+content hashes
+retrieval results
+context assembly
+```
+
+Cache keys must be content-sensitive.
+
+Recommended:
+
+```text
+source identity
++
+content hash
++
+processing version
++
+relevant configuration
+```
+
+Never assume:
+
+```text
+same path == same content
+```
+
+The cache must support:
+
+```text
+hit
+miss
+invalidate
+version change
+concurrent access
+bounded growth
+inspection
+```
+
+---
+
+# 16. Long Context
+
+Never construct enormous prompts by blindly appending all history.
+
+Preferred context:
+
+```text
+recent conversation
++
+relevant recalled history
++
+memory
++
+attachment chunks
++
+project context
++
+tool evidence
++
+current task state
+```
+
+When context pressure occurs:
+
+```text
+measure budget
+ ↓
+retain high-value state
+ ↓
+retrieve relevant chunks
+ ↓
+compress older history
+ ↓
+drop low-value material
+ ↓
+assemble final context
+```
+
+The system must know why a context item was included.
+
+---
+
+# 17. Context Budget
+
+Every inference request should have an explicit context budget.
+
+Account for:
+
+```text
+system instructions
+tool schemas
+recent messages
+retrieved chunks
+memory
+attachments
+tool results
+requested output tokens
+```
+
+Do not exceed the actual model/runtime context limit.
+
+Do not rely on frontend estimates if the backend can determine the real budget.
+
+---
+
+# 18. Context Provenance
+
+The runtime should be able to identify:
+
+```text
+where context came from
+why it was included
+which chunk was used
+which version/hash was processed
+which session supplied it
+```
+
+Useful provenance:
+
+```text
+source
+source type
+path / URL
+session
+chunk ID
+content hash
+retrieval reason
+timestamp
+```
+
+The UI should expose a compact useful summary, not raw internal prompts.
+
+---
+
+# 19. Memory / Recall
+
+Memory and recall are distinct:
+
+```text
+memory = durable information
+recall = task-specific selection
+```
+
+Recall should feed the context pipeline.
+
+Conceptually:
+
+```text
+memory
+ ↓
+candidate recall
+ ↓
+relevance
+ ↓
+context budget
+ ↓
+prompt
+```
+
+Memory classes:
+
+```text
+M1 trusted facts
+M2 preferences
+M3 project state
+M4 decisions
+M5 procedures / learned fixes
+M6 summaries
+M7 provisional observations
+```
+
+External research must retain provenance and trust boundaries.
+
+---
+
+# 20. Sessions
+
+Required:
+
+```text
+create
+rename
+switch
+delete
+history
+active model
+activity
+metadata
+```
+
+The session should not duplicate massive context unnecessarily.
+
+Use:
+
+```text
+summaries
+chunks
+cache
+recall
+```
+
+to control history growth.
+
+---
+
+# 21. Performance
+
+The application should remain responsive during:
+
+```text
+LLM streaming
+engine startup
+attachment extraction
+chunking
+cache operations
+research
+tool execution
+large filesystem operations
+```
+
+Avoid:
+
+```text
+whole-app rerenders
+unbounded history
+unbounded logs
+duplicate scans
+duplicate parsing
+duplicate chunking
+duplicate extraction
+synchronous heavy frontend work
+```
+
+Prefer:
+
+```text
+lazy loading
+stable selectors
+memoization where useful
+virtualization
+debouncing
+bounded buffers
+event coalescing
+incremental processing
+```
+
+120 Hz responsiveness remains a target, but correctness comes first.
+
+---
+
+# 22. Runtime Safety
+
+Preserve all existing:
+
+```text
+path validation
+workspace boundaries
+symlink protection
+shell policy
+Git policy
+network restrictions
+SSRF controls
+DNS validation
+redirect validation
+process-tree cancellation
+timeouts
+bounded output
+secret redaction
+archive safety
+```
+
+Never weaken a safety control merely to unblock a feature.
+
+---
+
+# 23. Testing Requirements
+
+A runtime feature is incomplete until tested at the correct layer.
+
+## Engine
+
+```text
+automatic start
+health readiness
+startup timeout
+failure
+restart
+port conflict
+dead process
+invalid model
+```
+
+## Agent
+
+```text
+first inference
+streaming
+multi-turn
+tool call
+tool result
+abort
+retry
+error
+```
+
+## Attachments
+
+```text
+small text
+large text
+multiple files
+duplicate file
+modified file
+invalid input
+remove
+reuse
+```
+
+## Chunking
+
+```text
+small input
+large input
+code structure
+document structure
+stable IDs
+hash invalidation
+```
+
+## Cache
+
+```text
+hit
+miss
+invalidation
+version invalidation
+concurrency
+bounds
+```
+
+## Long Context
+
+```text
+history pressure
+attachment pressure
+memory + attachment
+retrieval
+compression
+reassembly
+```
+
+---
+
+# 24. CI
+
+Primary workflow:
+
+```text
+.github/workflows/build-desktop.yml
+```
+
+Windows:
+
+```text
+windows-latest
+CGO_ENABLED=0
+```
+
+Linux:
+
+```text
+ubuntu-24.04
+CGO_ENABLED=1
+```
+
+Linux dependencies:
+
+```text
+libgtk-4-dev
+libwebkitgtk-6.0-dev
+libsoup-3.0-dev
+pkg-config
+zip
+```
+
+Do not restore:
+
+```text
+libgtk-3-dev
+libwebkit2gtk-4.1-dev
+```
+
+except for an explicitly intentional legacy target.
+
+---
+
+# 25. Frontend Build
+
+Root-level package:
+
+```text
+package.json
+```
+
+Never create:
+
+```text
+web/package.json
+```
+
+Required checks:
+
+```bash
+npm install
+npm run typecheck
+npm run lint
+npm run build
+```
+
+After frontend changes:
+
+```text
+Vite build
+ ↓
+scripts/sync-web.mjs
+ ↓
+web/static
+```
+
+Verify the embedded application contains the new assets.
+
+---
+
+# 26. Release Discipline
+
+When changing versions, synchronize:
+
+```text
+internal/config/config.go
+package.json
+.github/workflows/build-desktop.yml
+SIGNATURE
+portable scripts
+release documentation
+```
+
+Target:
+
+```text
+APP_VERSION = 1.1.3
+Codename    = Zeta
+Tag         = v1.1.3Z
+```
+
+Do not label unfinished functionality as complete.
+
+---
+
+# 27. Regression Rules
+
+Never reintroduce:
+
+```text
+internal/ui
+Fyne UI
+old versioned stress programs
+old e2e scripts
+obsolete GTK3-only Linux workflow
+unbounded execution
+unbounded output
+secret leakage
+```
+
+Preserve the current Go + React + Wails architecture unless a demonstrated technical requirement justifies a change.
+
+---
+
+# 28. Definition of Done
+
+A feature is done only when:
+
+```text
+frontend action
+ ↓
+API
+ ↓
+backend runtime
+ ↓
+real operation
+ ↓
+actual state change
+ ↓
+visible result
+ ↓
+error path
+ ↓
+cancellation
+ ↓
+tests
+ ↓
+runtime verification
+```
+
+A button is not a feature.
+
+A compile is not a feature.
+
+An endpoint is not a feature.
+
+A desktop window is not a feature.
+
+A commit is not proof.
+
+---
+
+# 29. Required Development Sequence
+
+Use this order:
+
+```text
+1. Automatic llama.cpp startup
+2. Model lifecycle
+3. First real inference
+4. Tool loop
+5. Attachment tools
+6. Chunking integration
+7. Context cache
+8. Long-context recall
+9. Session/history optimization
+10. Functional tests
+11. Performance
+12. UI polish
+```
+
+Do not reverse this order just because visual changes are easier.
+
+---
+
+# 30. Immediate Next Task
+
+The next implementation task is:
+
+> **Make llama.cpp start automatically on desktop launch and prove that a newly launched application can reach a real healthy model endpoint without manual engine intervention.**
+
+Acceptance:
+
+```text
+start application
+ ↓
+llama.cpp starts automatically
+ ↓
+model resolves
+ ↓
+engine becomes healthy
+ ↓
+UI reflects actual ready state
+ ↓
+agent can send a real inference request
+```
+
+Once that is verified, continue directly to:
+
+```text
+first real inference
+→ tool loop
+→ attachments
+→ chunking
+→ cache
+→ long context
+```
+
+---
+
+# 31. Final Rule
+
+The application must become **functional before it becomes larger**.
+
+Prefer:
+
+```text
+real behavior
++
+verification
++
+reliability
++
+performance
+```
+
+over:
+
+```text
+more panels
++
+more settings
++
+more visual features
+```
+
+The next agent must work from evidence, not assumptions.
+
+```
+
+These replacements intentionally correct the documentation drift: **v1.1.2Z remains the published release, while v1.1.3Z is treated as the live-runtime functionality phase rather than pretending the application is already feature-complete.**
+```
