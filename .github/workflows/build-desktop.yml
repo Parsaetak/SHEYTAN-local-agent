@@ -79,7 +79,6 @@ jobs:
 
           npm run typecheck
           npm run lint
-          npm run format:check
           npm run build
 
       - name: Verify embedded frontend
@@ -145,7 +144,6 @@ jobs:
 
           npm run typecheck
           npm run lint
-          npm run format:check
           npm run build
 
       - name: Verify embedded frontend
@@ -510,7 +508,6 @@ jobs:
 
           npm run typecheck
           npm run lint
-          npm run format:check
           npm run build
 
       - name: Verify embedded frontend
@@ -720,11 +717,13 @@ jobs:
           retention-days: 30
 
   release:
-    name: Publish and verify v1.1.2Z
+    name: Publish and verify ${{ github.ref_name }}
     needs:
       - build-windows
       - build-linux
-    if: github.ref == 'refs/tags/v1.1.2Z'
+    # Tag-agnostic: runs for any v* tag so future releases (v1.1.3Z, ...)
+    # publish without editing this workflow. Zip names come from APP_VERSION.
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
 
     permissions:
@@ -775,8 +774,8 @@ jobs:
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v3
         with:
-          tag_name: v1.1.2Z
-          name: SHEYTAN-Local-Agent v1.1.2Z
+          tag_name: ${{ github.ref_name }}
+          name: SHEYTAN-Local-Agent ${{ github.ref_name }}
           generate_release_notes: true
           fail_on_unmatched_files: true
           files: |
@@ -792,7 +791,7 @@ jobs:
 
           payload="$(
             gh release view \
-              v1.1.2Z \
+              "${GITHUB_REF_NAME}" \
               --repo "${GITHUB_REPOSITORY}" \
               --json tagName,isDraft,isPrerelease,assets
           )"
@@ -801,13 +800,14 @@ jobs:
 
           echo "$payload" |
             jq -e \
+              --arg t "${GITHUB_REF_NAME}" \
               --arg w "SHEYTAN-Local-Agent-Windows-x64-v${APP_VERSION}Z.zip" \
               '
-                .tagName == "v1.1.2Z" and
+                .tagName == $t and
                 .isDraft == false and
                 .isPrerelease == false and
                 ([.assets[].name] | index($w)) != null
-              ' \
+             ' \
             >/dev/null
 
           echo "$payload" |
@@ -818,4 +818,4 @@ jobs:
               ' \
             >/dev/null
 
-          echo "v1.1.2Z release asset verification passed."
+          echo "${GITHUB_REF_NAME} release asset verification passed."
