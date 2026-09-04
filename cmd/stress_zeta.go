@@ -210,12 +210,19 @@ func stressZetaReleaseSurface() error {
         }
 
         // 3d. Validate the action versions used by the current workflow.
+        //
+        // v1.1.2Z upgraded every action off the Node.js-20 runtime that
+        // GitHub deprecated (2025-09-19 changelog) — the runner logs for the
+        // v1.1.1Z era runs carried the "Node.js 20 is deprecated" warning on
+        // checkout@v4 / setup-go@v5 / setup-node@v4. The stress gate must
+        // follow the workflow forward, not pin it to the deprecated set.
         for _, action := range []string{
-                "actions/checkout@v4",
-                "actions/setup-go@v5",
-                "actions/setup-node@v4",
-                "actions/upload-artifact@v4",
-                "softprops/action-gh-release@v2",
+                "actions/checkout@v7",
+                "actions/setup-go@v7",
+                "actions/setup-node@v7",
+                "actions/upload-artifact@v6",
+                "actions/download-artifact@v7",
+                "softprops/action-gh-release@v3",
         } {
                 if !strings.Contains(w, action) {
                         return fmt.Errorf(
@@ -227,10 +234,13 @@ func stressZetaReleaseSurface() error {
 
         // 3e. The Node toolchain is PINNED (v1.1.1Z): the new React/Vite UI
         // must never depend on whatever Node version the hosted runner
-        // happens to ship.
-        if !strings.Contains(w, `node-version: "24"`) {
+        // happens to ship. Since v1.1.2Z the pin lives once in the
+        // workflow-level env block (NODE_VERSION: "24") and every
+        // setup-node step consumes it via ${{ env.NODE_VERSION }} — the same
+        // single-source-of-truth pattern GO_VERSION already uses.
+        if !strings.Contains(w, `NODE_VERSION: "24"`) {
                 return fmt.Errorf(
-                        "CI does not pin Node 24 for the frontend build",
+                        "CI does not pin Node 24 for the frontend build (expected NODE_VERSION: \"24\" in the workflow env block)",
                 )
         }
 
@@ -288,8 +298,11 @@ func stressZetaReleaseSurface() error {
                 "Create Linux ZIP",
                 "Verify Windows ZIP",
                 "Verify Linux ZIP",
-                "Upload Windows ZIP",
-                "Upload Linux ZIP",
+                // Renamed in v1.1.2Z when download-artifact moved to the
+                // tag-agnostic release job; the artifact-upload steps are
+                // "Upload Windows package" / "Upload Linux package".
+                "Upload Windows package",
+                "Upload Linux package",
         }
 
         for _, fragment := range requiredWorkflowFragments {

@@ -49,7 +49,11 @@ var skipDirs = map[string]string{
 func sourceFiles(t *testing.T, root string) []string {
         t.Helper()
         var files []string
-        for _, top := range []string{"internal", "cmd", "web", "scripts", ".github"} {
+        // "build" is walked because build/config.yml is committed Wails
+        // source. A blanket `/build/` .gitignore pattern swallowed it for
+        // v1.1.2Z: the file existed locally, git never tracked it, and CI
+        // failed with ENOENT. Walking it here makes that failure loud.
+        for _, top := range []string{"internal", "cmd", "web", "scripts", ".github", "build"} {
                 base := filepath.Join(root, top)
                 filepath.WalkDir(base, func(path string, d fs.DirEntry, err error) error {
                         if err != nil {
