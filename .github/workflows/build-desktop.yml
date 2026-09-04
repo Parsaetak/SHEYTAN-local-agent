@@ -213,11 +213,11 @@ jobs:
             .
 
           # CI-only executable.
-          # Same exact Go source/package, but console subsystem so stdout/stderr
+          # Same exact Go source/package, default console subsystem so stdout/stderr
           # can be captured reliably by GitHub Actions on Windows.
           go build `
             -trimpath `
-            -ldflags="-s -w -H=windowsconsole" `
+            -ldflags="-s -w" `
             -o "dist/windows/sheytan-version-smoke.exe" `
             .
 
