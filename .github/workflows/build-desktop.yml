@@ -11,132 +11,232 @@ on:
       - main
   workflow_dispatch:
 
+concurrency:
+  group: sheytan-desktop-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
-  contents: write
+  contents: read
 
 env:
   GO_VERSION: "1.26"
+  NODE_VERSION: "24"
   APP_VERSION: "1.1.2"
   APP_CODENAME: "Zeta"
 
 jobs:
+  audit:
+    name: Source & frontend audit
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node 24
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          package-manager-cache: true
+
+      - name: Verify repository shape and release identity
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -f package.json
+          test -f package-lock.json
+          test -f go.mod
+          test -f go.sum
+          test -f internal/config/config.go
+          test -f src/App.tsx
+          test -f src/AgentBody.tsx
+          test -f src/styles.css
+          test ! -e web/package.json
+
+          node --version
+          npm --version
+
+          node_major="$(node -p 'process.versions.node.split(".")[0]')"
+          test "$node_major" -ge 24
+
+          node scripts/release-version.mjs
+
+          grep -F 'AppVersion  = "1.1.2"' internal/config/config.go
+          grep -F '"version": "1.1.2-zeta"' package.json
+          grep -F 'productVersion: "1.1.2-zeta"' build/config.yml
+          grep -F 'SHEYTAN-Local-Agent v1.1.2' SIGNATURE
+
+      - name: Install frontend dependencies
+        shell: bash
+        run: npm ci
+
+      - name: Frontend verification
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          npm run typecheck
+          npm run lint
+          npm run format:check
+          npm run build
+
+      - name: Verify embedded frontend
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -f web/static/index.html
+          grep -q '<div id="root"></div>' web/static/index.html
+
+          echo "Embedded frontend verification passed."
+
   build-windows:
     name: Windows x64
+    needs: audit
     runs-on: windows-latest
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - name: Setup Node 24
+        uses: actions/setup-node@v7
         with:
-          node-version: "24"
+          node-version: ${{ env.NODE_VERSION }}
           cache: npm
+          package-manager-cache: true
 
       - name: Verify Node and repository
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
+
           node --version
           npm --version
 
           $nodeMajor = [int](node --version).TrimStart("v").Split(".")[0]
 
-          if ($nodeMajor -lt 22) {
-            throw "Node.js 22 or newer is required."
+          if ($nodeMajor -lt 24) {
+            throw "Node.js 24 or newer is required."
           }
 
           if (-not (Test-Path "package.json")) {
-            throw "Root package.json was not found."
+            throw "Root package.json missing."
           }
 
           if (Test-Path "web/package.json") {
-            throw "Unexpected web/package.json found. Frontend package is expected at repository root."
+            throw "Unexpected web/package.json found."
           }
+
+      - name: Synchronize Zeta release metadata
+        shell: pwsh
+        run: node scripts/release-version.mjs
 
       - name: Install frontend dependencies
         shell: pwsh
         run: npm ci
 
-      - name: Frontend typecheck
-        shell: pwsh
-        run: npm run typecheck
-
-      - name: Frontend lint
-        shell: pwsh
-        run: npm run lint
-
-      - name: Build frontend
-        shell: pwsh
-        run: npm run build
-
-      - name: Verify generated frontend
+      - name: Frontend verification
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
+
+          npm run typecheck
+          npm run lint
+          npm run format:check
+          npm run build
+
+      - name: Verify embedded frontend
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
           if (-not (Test-Path "web/static/index.html")) {
             throw "web/static/index.html was not generated."
           }
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
+      - name: Setup Go 1.26
+        uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
 
-      - name: Verify Go
-        shell: pwsh
-        run: |
-          go version
-          go env GOOS
-          go env GOARCH
-
-      - name: Go tests
+      - name: Go verification
         shell: pwsh
         env:
           CGO_ENABLED: "0"
         run: |
+          $ErrorActionPreference = "Stop"
+
+          go version
+
           go test ./internal/... -tags headless -count=1
           go test ./... -run Test -count=1
+          go vet ./...
 
-      - name: Go vet
-        shell: pwsh
-        env:
-          CGO_ENABLED: "0"
-        run: go vet ./...
-
-      - name: Generate Windows resources (icon, version info, DPI manifest)
+      - name: Generate Windows resources
         shell: pwsh
         env:
           CGO_ENABLED: "0"
         run: |
+          $ErrorActionPreference = "Stop"
+
           go run ./scripts/gen-syso
 
           if (-not (Test-Path "rsrc_windows_amd64.syso")) {
             throw "Windows resource object was not generated."
           }
 
-      - name: Build Windows executable
+      - name: Build Windows executable and console smoke probe
         shell: pwsh
         env:
           CGO_ENABLED: "0"
           GOOS: windows
           GOARCH: amd64
         run: |
-          New-Item -ItemType Directory -Force -Path "dist/windows/app/SHEYTAN-Local-Agent" | Out-Null
+          $ErrorActionPreference = "Stop"
 
+          $appRoot = "dist/windows/app/SHEYTAN-Local-Agent"
+
+          New-Item `
+            -ItemType Directory `
+            -Force `
+            -Path $appRoot | Out-Null
+
+          # Production release executable.
+          # Keep GUI subsystem so users get a normal desktop application
+          # without an attached console window.
           go build `
             -trimpath `
             -ldflags="-s -w -H=windowsgui" `
-            -o "dist/windows/app/SHEYTAN-Local-Agent/SHEYTAN-Local-Agent.exe" `
+            -o "$appRoot/SHEYTAN-Local-Agent.exe" `
+            .
+
+          # CI-only executable.
+          # Same exact Go source/package, but console subsystem so stdout/stderr
+          # can be captured reliably by GitHub Actions on Windows.
+          go build `
+            -trimpath `
+            -ldflags="-s -w -H=windowsconsole" `
+            -o "dist/windows/sheytan-version-smoke.exe" `
             .
 
       - name: Verify Windows executable
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
+
           $exe = "dist/windows/app/SHEYTAN-Local-Agent/SHEYTAN-Local-Agent.exe"
+          $probe = "dist/windows/sheytan-version-smoke.exe"
 
           if (-not (Test-Path $exe)) {
             throw "Windows executable was not produced."
+          }
+
+          if (-not (Test-Path $probe)) {
+            throw "Windows console smoke probe was not produced."
           }
 
           $size = (Get-Item $exe).Length
@@ -147,38 +247,52 @@ jobs:
 
           Write-Host "Windows executable size: $size bytes"
 
-          $output = & $exe version 2>&1
-          $nativeExitCode = $LASTEXITCODE
-          $outputText = ($output | Out-String).Trim()
+          # IMPORTANT:
+          # Do NOT execute the GUI-subsystem production binary for stdout testing.
+          # The console probe was built from the exact same source.
+          $output = & $probe version 2>&1
+          $exitCode = $LASTEXITCODE
+          $text = ($output | Out-String).Trim()
 
-          Write-Host "=== Version command output ==="
-          Write-Host $outputText
-          Write-Host "=== Native process exit code: $nativeExitCode ==="
+          Write-Host "=== Windows console smoke probe ==="
+          Write-Host $text
+          Write-Host "=== Console probe exit code: $exitCode ==="
+
+          if ($exitCode -ne 0) {
+            throw "Windows console version probe exited with code $exitCode."
+          }
 
           $expectedVersion = "SHEYTAN-Local-Agent v$($env:APP_VERSION)"
 
-          if ($outputText -notmatch [regex]::Escape($expectedVersion)) {
-            throw "Windows executable version output does not contain expected version: $expectedVersion"
+          if ($text -notmatch [regex]::Escape($expectedVersion)) {
+            throw "Windows executable version mismatch. Expected: $expectedVersion"
           }
 
-          if ($outputText -notmatch "os:\s+windows/amd64") {
-            throw "Windows executable version output does not identify windows/amd64."
+          if ($text -notmatch "os:\s+windows/amd64") {
+            throw "Windows executable platform mismatch. Expected windows/amd64."
           }
 
-          if ($nativeExitCode -ne 0) {
-            Write-Warning "Version command reported native exit code $nativeExitCode even though the executable produced valid version output."
-            Write-Warning "Continuing because executable launch and version/output integrity checks passed."
-          }
+          Write-Host "Windows executable version/platform smoke test passed."
 
-          Write-Host "Windows executable version smoke test passed."
+          # Never ship the CI-only console probe.
+          Remove-Item $probe -Force
 
       - name: Prepare Windows portable package
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
+
           $root = "dist/windows/app/SHEYTAN-Local-Agent"
 
-          New-Item -ItemType Directory -Force -Path "$root/models" | Out-Null
-          New-Item -ItemType Directory -Force -Path "$root/workspace" | Out-Null
+          New-Item `
+            -ItemType Directory `
+            -Force `
+            -Path "$root/models" | Out-Null
+
+          New-Item `
+            -ItemType Directory `
+            -Force `
+            -Path "$root/workspace" | Out-Null
 
           @"
           SHEYTAN-Local-Agent $env:APP_VERSION ($env:APP_CODENAME)
@@ -186,29 +300,18 @@ jobs:
           Portable Windows x64 distribution.
 
           Keep the complete SHEYTAN-Local-Agent folder together.
-
-          Models, sessions, runtime data, logs, and Coding Lab workspaces
-          are intended to remain associated with this portable folder.
-
-          Double-click sheytan-local-agent.bat to launch the desktop GUI,
-          or run SHEYTAN-Local-Agent.exe directly.
           "@ | Set-Content "$root/README.txt" -Encoding utf8
 
           @"
           LOCAL MODELS
 
           Place GGUF models in this folder.
-
-          The application can discover local models and lets the user
-          select the active model directly from the Agent or Settings UI.
           "@ | Set-Content "$root/models/README.txt" -Encoding utf8
 
           @"
           CODING LAB
 
-          Coding Lab workspaces can be stored in this folder.
-
-          Keep the application folder together when moving the portable package.
+          Portable Coding Lab workspaces live under this folder.
           "@ | Set-Content "$root/workspace/README.txt" -Encoding utf8
 
           @"
@@ -216,6 +319,7 @@ jobs:
           Version: $env:APP_VERSION
           Codename: $env:APP_CODENAME
           Platform: Windows x64
+          Commit: $env:GITHUB_SHA
           "@ | Set-Content "$root/BUILD-INFO.txt" -Encoding utf8
 
           if (Test-Path "LICENSE") {
@@ -235,13 +339,21 @@ jobs:
           }
 
           if (Test-Path "sheytan-local-agent.bat") {
-            Copy-Item "sheytan-local-agent.bat" "$root/sheytan-local-agent.bat" -Force
+            Copy-Item `
+              "sheytan-local-agent.bat" `
+              "$root/sheytan-local-agent.bat" `
+              -Force
           }
 
       - name: Create Windows ZIP
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path "dist" | Out-Null
+          $ErrorActionPreference = "Stop"
+
+          New-Item `
+            -ItemType Directory `
+            -Force `
+            -Path "dist" | Out-Null
 
           $zip = "dist/SHEYTAN-Local-Agent-Windows-x64-v${env:APP_VERSION}Z.zip"
 
@@ -261,120 +373,104 @@ jobs:
       - name: Verify Windows ZIP
         shell: pwsh
         run: |
-          $zip = "dist/SHEYTAN-Local-Agent-Windows-x64-v${env:APP_VERSION}Z.zip"
-
-          if (-not (Test-Path $zip)) {
-            throw "Windows ZIP is missing."
-          }
+          $ErrorActionPreference = "Stop"
 
           Add-Type -AssemblyName System.IO.Compression.FileSystem
 
-          $archive = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path $zip))
+          $zip = Resolve-Path `
+            "dist/SHEYTAN-Local-Agent-Windows-x64-v${env:APP_VERSION}Z.zip"
+
+          $archive = [System.IO.Compression.ZipFile]::OpenRead($zip)
 
           try {
-            $entries = @($archive.Entries | ForEach-Object { $_.FullName })
+            $entries = @(
+              $archive.Entries |
+              ForEach-Object { $_.FullName }
+            )
 
-            $requiredEntries = @(
+            $required = @(
               "SHEYTAN-Local-Agent/SHEYTAN-Local-Agent.exe",
               "SHEYTAN-Local-Agent/README.txt",
               "SHEYTAN-Local-Agent/BUILD-INFO.txt",
-              "SHEYTAN-Local-Agent/sheytan-local-agent.bat",
               "SHEYTAN-Local-Agent/models/README.txt",
               "SHEYTAN-Local-Agent/workspace/README.txt"
             )
 
-            foreach ($required in $requiredEntries) {
-              if (-not ($entries -contains $required)) {
-                throw "Missing required ZIP entry: $required"
+            foreach ($item in $required) {
+              if ($entries -notcontains $item) {
+                throw "Missing ZIP entry: $item"
               }
             }
 
-            if (-not ($entries | Where-Object {
-              $_ -like "SHEYTAN-Local-Agent/models/*"
-            })) {
-              throw "ZIP is missing models directory."
-            }
-
-            if (-not ($entries | Where-Object {
-              $_ -like "SHEYTAN-Local-Agent/workspace/*"
-            })) {
-              throw "ZIP is missing workspace directory."
+            if (
+              (Test-Path "sheytan-local-agent.bat") -and
+              ($entries -notcontains "SHEYTAN-Local-Agent/sheytan-local-agent.bat")
+            ) {
+              throw "Expected launcher script is missing from Windows ZIP."
             }
           }
           finally {
             $archive.Dispose()
           }
 
-      - name: Upload Windows ZIP
-        uses: actions/upload-artifact@v4
+      - name: Record Windows SHA256
+        shell: pwsh
+        run: |
+          $hash = (
+            Get-FileHash `
+              "dist/SHEYTAN-Local-Agent-Windows-x64-v${env:APP_VERSION}Z.zip" `
+              -Algorithm SHA256
+          ).Hash.ToLower()
+
+          "$hash  SHEYTAN-Local-Agent-Windows-x64-v${env:APP_VERSION}Z.zip" |
+            Set-Content "dist/windows.sha256" -Encoding ascii
+
+          Write-Host $hash
+
+      - name: Upload Windows package
+        uses: actions/upload-artifact@v6
         with:
           name: SHEYTAN-Local-Agent-Windows-x64-v${{ env.APP_VERSION }}Z
-          path: dist/SHEYTAN-Local-Agent-Windows-x64-v${{ env.APP_VERSION }}Z.zip
+          path: |
+            dist/SHEYTAN-Local-Agent-Windows-x64-v${{ env.APP_VERSION }}Z.zip
+            dist/windows.sha256
           if-no-files-found: error
           retention-days: 30
 
-      - name: Publish Windows ZIP
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: dist/SHEYTAN-Local-Agent-Windows-x64-v${{ env.APP_VERSION }}Z.zip
-          fail_on_unmatched_files: true
-
   build-linux:
     name: Linux x64
+    needs: audit
     runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - name: Setup Node 24
+        uses: actions/setup-node@v7
         with:
-          node-version: "24"
+          node-version: ${{ env.NODE_VERSION }}
           cache: npm
+          package-manager-cache: true
 
       - name: Install Linux build dependencies
+        shell: bash
         run: |
+          set -euo pipefail
+
           sudo apt-get update
+
           sudo apt-get install -y \
             build-essential \
             pkg-config \
             libgtk-4-dev \
             libwebkitgtk-6.0-dev \
+            libsoup-3.0-dev \
             zip \
             unzip \
             file
 
-      - name: Verify Linux build dependencies
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          echo "=== Compiler ==="
-          gcc --version
-
-          echo "=== pkg-config ==="
-          pkg-config --version
-
-          echo "=== GTK4 ==="
-          pkg-config --modversion gtk4
-          pkg-config --cflags gtk4
-          pkg-config --libs gtk4
-
-          echo "=== WebKitGTK 6.0 ==="
-          pkg-config --modversion webkitgtk-6.0
-          pkg-config --cflags webkitgtk-6.0
-          pkg-config --libs webkitgtk-6.0
-
-          echo "=== Required executables ==="
-          command -v gcc
-          command -v pkg-config
-          command -v zip
-          command -v unzip
-          command -v file
-
-      - name: Verify Node and repository
+      - name: Verify Node and Linux dependencies
         shell: bash
         run: |
           set -euo pipefail
@@ -384,83 +480,82 @@ jobs:
 
           node_major="$(node -p 'process.versions.node.split(".")[0]')"
 
-          if [ "$node_major" -lt 22 ]; then
-            echo "Node.js 22 or newer is required."
-            exit 1
-          fi
+          test "$node_major" -ge 24
+
+          gcc --version
+
+          pkg-config --modversion gtk4
+          pkg-config --modversion webkitgtk-6.0
+          pkg-config --modversion libsoup-3.0
+
+          command -v zip
+          command -v unzip
+          command -v file
 
           test -f package.json
+          test ! -e web/package.json
 
-          if [ -f web/package.json ]; then
-            echo "Unexpected web/package.json found."
-            exit 1
-          fi
+      - name: Synchronize Zeta release metadata
+        shell: bash
+        run: node scripts/release-version.mjs
 
       - name: Install frontend dependencies
+        shell: bash
         run: npm ci
 
-      - name: Frontend typecheck
-        run: npm run typecheck
+      - name: Frontend verification
+        shell: bash
+        run: |
+          set -euo pipefail
 
-      - name: Frontend lint
-        run: npm run lint
+          npm run typecheck
+          npm run lint
+          npm run format:check
+          npm run build
 
-      - name: Build frontend
-        run: npm run build
-
-      - name: Verify generated frontend
+      - name: Verify embedded frontend
         shell: bash
         run: |
           set -euo pipefail
 
           test -f web/static/index.html
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
+      - name: Setup Go 1.26
+        uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
 
-      - name: Verify Go
+      - name: Go verification
         shell: bash
+        env:
+          CGO_ENABLED: "1"
         run: |
           set -euo pipefail
 
           go version
-          go env GOOS
-          go env GOARCH
-          go env CGO_ENABLED
 
-      - name: Go tests
-        env:
-          CGO_ENABLED: "1"
-        run: |
           go test ./internal/... -tags headless -count=1
           go test ./... -run Test -count=1
-
-      - name: Go vet
-        env:
-          CGO_ENABLED: "1"
-        run: go vet ./...
-
-      - name: Stress suite (chaos + release-surface contract)
-        env:
-          CGO_ENABLED: "1"
-        run: |
-          set -euo pipefail
-
-          go build -o /tmp/sheytan-stress ./scripts/stress-main
-
-          /tmp/sheytan-stress stress
-
-      - name: Verify Wails Go dependency
-        shell: bash
-        run: |
-          set -euo pipefail
+          go vet ./...
 
           go list -m github.com/wailsapp/wails/v3
 
+      - name: Stress suite
+        shell: bash
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          set -euo pipefail
+
+          go build \
+            -o /tmp/sheytan-stress \
+            ./scripts/stress-main
+
+          /tmp/sheytan-stress stress
+
       - name: Build Linux executable
+        shell: bash
         env:
           CGO_ENABLED: "1"
           GOOS: linux
@@ -495,34 +590,28 @@ jobs:
             exit 1
           fi
 
-          echo "Linux executable size: $size bytes"
-
           set +e
           output="$("$exe" version 2>&1)"
-          native_exit_code=$?
+          exit_code=$?
           set -e
 
-          echo "=== Version command output ==="
           printf '%s\n' "$output"
-          echo "=== Native process exit code: $native_exit_code ==="
+          echo "=== Linux version command exit code: $exit_code ==="
 
-          expected_version="SHEYTAN-Local-Agent v${APP_VERSION}"
-
-          if ! grep -Fq "$expected_version" <<< "$output"; then
-            echo "Linux executable version output does not contain expected version: $expected_version"
+          if [ "$exit_code" -ne 0 ]; then
+            echo "Linux version command exited with $exit_code."
             exit 1
           fi
 
-          if ! grep -Eq 'os:[[:space:]]+linux/amd64' <<< "$output"; then
-            echo "Linux executable version output does not identify linux/amd64."
-            exit 1
-          fi
+          grep -Fq \
+            "SHEYTAN-Local-Agent v${APP_VERSION}" \
+            <<< "$output"
 
-          if [ "$native_exit_code" -ne 0 ]; then
-            echo "::warning::Version command reported native exit code $native_exit_code even though executable launch and version/output integrity checks passed."
-          fi
+          grep -Eq \
+            'os:[[:space:]]+linux/amd64' \
+            <<< "$output"
 
-          echo "Linux executable version smoke test passed."
+          echo "Linux executable version/platform smoke test passed."
 
       - name: Prepare Linux portable package
         shell: bash
@@ -531,8 +620,9 @@ jobs:
 
           root="dist/linux/app/SHEYTAN-Local-Agent"
 
-          mkdir -p "$root/models"
-          mkdir -p "$root/workspace"
+          mkdir -p \
+            "$root/models" \
+            "$root/workspace"
 
           cat > "$root/README.txt" <<EOF
           SHEYTAN-Local-Agent ${APP_VERSION} (${APP_CODENAME})
@@ -540,26 +630,18 @@ jobs:
           Portable Linux x64 distribution.
 
           Keep the complete SHEYTAN-Local-Agent folder together.
-
-          Models, sessions, runtime data, logs, and Coding Lab workspaces
-          are intended to remain associated with this portable folder.
           EOF
 
           cat > "$root/models/README.txt" <<EOF
           LOCAL MODELS
 
           Place GGUF models in this folder.
-
-          The application can discover local models and lets the user
-          select the active model directly from the Agent or Settings UI.
           EOF
 
           cat > "$root/workspace/README.txt" <<EOF
           CODING LAB
 
-          Coding Lab workspaces can be stored in this folder.
-
-          Keep the application folder together when moving the portable package.
+          Portable Coding Lab workspaces live under this folder.
           EOF
 
           cat > "$root/BUILD-INFO.txt" <<EOF
@@ -567,23 +649,13 @@ jobs:
           Version: ${APP_VERSION}
           Codename: ${APP_CODENAME}
           Platform: Linux x64
+          Commit: ${GITHUB_SHA}
           EOF
 
-          if [ -f LICENSE ]; then
-            cp LICENSE "$root/LICENSE"
-          fi
-
-          if [ -f README.md ]; then
-            cp README.md "$root/README.md"
-          fi
-
-          if [ -f agent.md ]; then
-            cp agent.md "$root/AI-CONTEXT.md"
-          fi
-
-          if [ -f SIGNATURE ]; then
-            cp SIGNATURE "$root/SIGNATURE"
-          fi
+          [ -f LICENSE ] && cp LICENSE "$root/LICENSE" || true
+          [ -f README.md ] && cp README.md "$root/README.md" || true
+          [ -f agent.md ] && cp agent.md "$root/AI-CONTEXT.md" || true
+          [ -f SIGNATURE ] && cp SIGNATURE "$root/SIGNATURE" || true
 
       - name: Create Linux ZIP
         shell: bash
@@ -592,11 +664,18 @@ jobs:
 
           mkdir -p dist
 
+          zip="dist/SHEYTAN-Local-Agent-Linux-x64-v${APP_VERSION}Z.zip"
+
+          rm -f "$zip"
+
           cd dist/linux/app
 
-          zip -r \
-            "../../SHEYTAN-Local-Agent-Linux-x64-v${APP_VERSION}Z.zip" \
-            "SHEYTAN-Local-Agent"
+          zip -r -9 \
+            "../../../$zip" \
+            "SHEYTAN-Local-Agent" \
+            >/dev/null
+
+          test -f "../../../$zip"
 
       - name: Verify Linux ZIP
         shell: bash
@@ -605,42 +684,138 @@ jobs:
 
           zip="dist/SHEYTAN-Local-Agent-Linux-x64-v${APP_VERSION}Z.zip"
 
-          test -f "$zip"
+          unzip -t "$zip" >/dev/null
 
-          unzip -t "$zip"
+          unzip -Z1 "$zip" |
+            grep -Fxq "SHEYTAN-Local-Agent/SHEYTAN-Local-Agent"
 
-          unzip -Z1 "$zip" | grep -Fxq \
-            'SHEYTAN-Local-Agent/SHEYTAN-Local-Agent'
+          unzip -Z1 "$zip" |
+            grep -Fxq "SHEYTAN-Local-Agent/BUILD-INFO.txt"
 
-          unzip -Z1 "$zip" | grep -Fxq \
-            'SHEYTAN-Local-Agent/README.txt'
+          unzip -Z1 "$zip" |
+            grep -Fxq "SHEYTAN-Local-Agent/models/README.txt"
 
-          unzip -Z1 "$zip" | grep -Fxq \
-            'SHEYTAN-Local-Agent/BUILD-INFO.txt'
+          unzip -Z1 "$zip" |
+            grep -Fxq "SHEYTAN-Local-Agent/workspace/README.txt"
 
-          unzip -Z1 "$zip" | grep -Fxq \
-            'SHEYTAN-Local-Agent/models/README.txt'
+      - name: Record Linux SHA256
+        shell: bash
+        run: |
+          set -euo pipefail
 
-          unzip -Z1 "$zip" | grep -Fxq \
-            'SHEYTAN-Local-Agent/workspace/README.txt'
+          zip="SHEYTAN-Local-Agent-Linux-x64-v${APP_VERSION}Z.zip"
 
-          unzip -Z1 "$zip" | grep -Eq \
-            '^SHEYTAN-Local-Agent/models/'
+          sha256sum "dist/$zip" > dist/linux.sha256
 
-          unzip -Z1 "$zip" | grep -Eq \
-            '^SHEYTAN-Local-Agent/workspace/'
+          cat dist/linux.sha256
 
-      - name: Upload Linux ZIP
-        uses: actions/upload-artifact@v4
+      - name: Upload Linux package
+        uses: actions/upload-artifact@v6
         with:
           name: SHEYTAN-Local-Agent-Linux-x64-v${{ env.APP_VERSION }}Z
-          path: dist/SHEYTAN-Local-Agent-Linux-x64-v${{ env.APP_VERSION }}Z.zip
+          path: |
+            dist/SHEYTAN-Local-Agent-Linux-x64-v${{ env.APP_VERSION }}Z.zip
+            dist/linux.sha256
           if-no-files-found: error
           retention-days: 30
 
-      - name: Publish Linux ZIP
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
+  release:
+    name: Publish and verify v1.1.2Z
+    needs:
+      - build-windows
+      - build-linux
+    if: github.ref == 'refs/tags/v1.1.2Z'
+    runs-on: ubuntu-24.04
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download Windows package
+        uses: actions/download-artifact@v7
         with:
-          files: dist/SHEYTAN-Local-Agent-Linux-x64-v${{ env.APP_VERSION }}Z.zip
+          name: SHEYTAN-Local-Agent-Windows-x64-v${{ env.APP_VERSION }}Z
+          path: dist/windows
+
+      - name: Download Linux package
+        uses: actions/download-artifact@v7
+        with:
+          name: SHEYTAN-Local-Agent-Linux-x64-v${{ env.APP_VERSION }}Z
+          path: dist/linux
+
+      - name: Verify release payload
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          windows="dist/windows/SHEYTAN-Local-Agent-Windows-x64-v${APP_VERSION}Z.zip"
+          linux="dist/linux/SHEYTAN-Local-Agent-Linux-x64-v${APP_VERSION}Z.zip"
+
+          test -f "$windows"
+          test -f "$linux"
+
+          test -f dist/windows/windows.sha256
+          test -f dist/linux/linux.sha256
+
+          (
+            cd dist/windows
+            sha256sum -c windows.sha256
+          )
+
+          (
+            cd dist/linux
+            sha256sum -c linux.sha256
+          )
+
+          unzip -t "$windows" >/dev/null
+          unzip -t "$linux" >/dev/null
+
+          echo "Release payload verification passed."
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: v1.1.2Z
+          name: SHEYTAN-Local-Agent v1.1.2Z
+          generate_release_notes: true
           fail_on_unmatched_files: true
+          files: |
+            dist/windows/SHEYTAN-Local-Agent-Windows-x64-v${{ env.APP_VERSION }}Z.zip
+            dist/linux/SHEYTAN-Local-Agent-Linux-x64-v${{ env.APP_VERSION }}Z.zip
+
+      - name: Verify published release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          payload="$(
+            gh release view \
+              v1.1.2Z \
+              --repo "${GITHUB_REPOSITORY}" \
+              --json tagName,isDraft,isPrerelease,assets
+          )"
+
+          echo "$payload"
+
+          echo "$payload" |
+            jq -e \
+              --arg w "SHEYTAN-Local-Agent-Windows-x64-v${APP_VERSION}Z.zip" \
+              '
+                .tagName == "v1.1.2Z" and
+                .isDraft == false and
+                .isPrerelease == false and
+                ([.assets[].name] | index($w)) != null
+              ' \
+            >/dev/null
+
+          echo "$payload" |
+            jq -e \
+              --arg l "SHEYTAN-Local-Agent-Linux-x64-v${APP_VERSION}Z.zip" \
+              '
+                ([.assets[].name] | index($l)) != null
+              ' \
+            >/dev/null
+
+          echo "v1.1.2Z release asset verification passed."
