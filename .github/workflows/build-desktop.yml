@@ -747,27 +747,38 @@ jobs:
         run: |
           set -euo pipefail
 
-          windows="dist/windows/SHEYTAN-Local-Agent-Windows-x64-v${APP_VERSION}Z.zip"
-          linux="dist/linux/SHEYTAN-Local-Agent-Linux-x64-v${APP_VERSION}Z.zip"
+          # upload-artifact keeps the relative paths that were uploaded
+          # (dist/*.zip + dist/*.sha256). download-artifact places that tree
+          # under the destination path. Depending on action version the files
+          # may land as dist/windows/....zip or dist/windows/dist/....zip.
+          # Locate them robustly.
 
-          test -f "$windows"
-          test -f "$linux"
+          windows="$(find dist/windows -name "SHEYTAN-Local-Agent-Windows-x64-v${APP_VERSION}Z.zip" -print -quit)"
+          linux="$(find dist/linux -name "SHEYTAN-Local-Agent-Linux-x64-v${APP_VERSION}Z.zip" -print -quit)"
+          win_sha="$(find dist/windows -name "windows.sha256" -print -quit)"
+          lin_sha="$(find dist/linux -name "linux.sha256" -print -quit)"
 
-          test -f dist/windows/windows.sha256
-          test -f dist/linux/linux.sha256
+          test -n "$windows" && test -f "$windows"
+          test -n "$linux" && test -f "$linux"
+          test -n "$win_sha" && test -f "$win_sha"
+          test -n "$lin_sha" && test -f "$lin_sha"
 
-          (
-            cd dist/windows
-            sha256sum -c windows.sha256
-          )
+          echo "Found Windows ZIP : $windows"
+          echo "Found Linux ZIP   : $linux"
+          echo "Found Windows SHA : $win_sha"
+          echo "Found Linux SHA   : $lin_sha"
 
-          (
-            cd dist/linux
-            sha256sum -c linux.sha256
-          )
+          # The .sha256 files contain "HASH  BASENAME". Run the check from the
+          # directory that holds both the checksum file and the ZIP.
+          ( cd "$(dirname "$win_sha")" && sha256sum -c "$(basename "$win_sha")" )
+          ( cd "$(dirname "$lin_sha")" && sha256sum -c "$(basename "$lin_sha")" )
 
           unzip -t "$windows" >/dev/null
           unzip -t "$linux" >/dev/null
+
+          # Export absolute paths for the publish step.
+          echo "WINDOWS_ZIP=$windows" >> "$GITHUB_ENV"
+          echo "LINUX_ZIP=$linux" >> "$GITHUB_ENV"
 
           echo "Release payload verification passed."
 
@@ -779,8 +790,8 @@ jobs:
           generate_release_notes: true
           fail_on_unmatched_files: true
           files: |
-            dist/windows/SHEYTAN-Local-Agent-Windows-x64-v${{ env.APP_VERSION }}Z.zip
-            dist/linux/SHEYTAN-Local-Agent-Linux-x64-v${{ env.APP_VERSION }}Z.zip
+            ${{ env.WINDOWS_ZIP }}
+            ${{ env.LINUX_ZIP }}
 
       - name: Verify published release
         shell: bash
