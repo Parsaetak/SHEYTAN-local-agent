@@ -407,6 +407,10 @@ jobs:
             throw "Windows ZIP was not created."
           }
 
+          if ((Get-Item $zip).Length -le 0) {
+            throw "Windows ZIP is empty."
+          }
+
       - name: Verify Windows ZIP
         shell: pwsh
         run: |
@@ -819,39 +823,50 @@ jobs:
 
           unzip -t "$zip" >/dev/null
 
-          unzip -Z1 "$zip" |
-            grep -Fxq "SHEYTAN-Local-Agent/SHEYTAN-Local-Agent"
+          entries="$(unzip -Z1 "$zip")"
 
-          unzip -Z1 "$zip" |
-            grep -Fxq "SHEYTAN-Local-Agent/README.txt"
+          grep -Fxq \
+            "SHEYTAN-Local-Agent/SHEYTAN-Local-Agent" \
+            <<< "$entries"
 
-          unzip -Z1 "$zip" |
-            grep -Fxq "SHEYTAN-Local-Agent/BUILD-INFO.txt"
+          grep -Fxq \
+            "SHEYTAN-Local-Agent/README.txt" \
+            <<< "$entries"
 
-          unzip -Z1 "$zip" |
-            grep -Fxq "SHEYTAN-Local-Agent/models/README.txt"
+          grep -Fxq \
+            "SHEYTAN-Local-Agent/BUILD-INFO.txt" \
+            <<< "$entries"
 
-          unzip -Z1 "$zip" |
-            grep -Fxq "SHEYTAN-Local-Agent/workspace/README.txt"
+          grep -Fxq \
+            "SHEYTAN-Local-Agent/models/README.txt" \
+            <<< "$entries"
+
+          grep -Fxq \
+            "SHEYTAN-Local-Agent/workspace/README.txt" \
+            <<< "$entries"
 
           if [ -f LICENSE ]; then
-            unzip -Z1 "$zip" |
-              grep -Fxq "SHEYTAN-Local-Agent/LICENSE"
+            grep -Fxq \
+              "SHEYTAN-Local-Agent/LICENSE" \
+              <<< "$entries"
           fi
 
           if [ -f README.md ]; then
-            unzip -Z1 "$zip" |
-              grep -Fxq "SHEYTAN-Local-Agent/README.md"
+            grep -Fxq \
+              "SHEYTAN-Local-Agent/README.md" \
+              <<< "$entries"
           fi
 
           if [ -f agent.md ]; then
-            unzip -Z1 "$zip" |
-              grep -Fxq "SHEYTAN-Local-Agent/AI-CONTEXT.md"
+            grep -Fxq \
+              "SHEYTAN-Local-Agent/AI-CONTEXT.md" \
+              <<< "$entries"
           fi
 
           if [ -f SIGNATURE ]; then
-            unzip -Z1 "$zip" |
-              grep -Fxq "SHEYTAN-Local-Agent/SIGNATURE"
+            grep -Fxq \
+              "SHEYTAN-Local-Agent/SIGNATURE" \
+              <<< "$entries"
           fi
 
           echo "Linux ZIP integrity and content verification passed."
@@ -869,23 +884,36 @@ jobs:
     needs:
       - build-windows
       - build-linux
-    if: github.ref == format('refs/tags/v{0}Z', env.APP_VERSION)
+
+    # GitHub Actions does not expose the global env context here.
+    # Match the exact intended release tag directly.
+    if: github.ref == 'refs/tags/v1.1.2Z'
+
     runs-on: ubuntu-24.04
 
     permissions:
       contents: write
 
     steps:
+      - name: Verify release tag
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test "${GITHUB_REF_NAME}" = "v1.1.2Z"
+
+          echo "Release tag verified: ${GITHUB_REF_NAME}"
+
       - name: Download Windows package
         uses: actions/download-artifact@v7
         with:
-          name: SHEYTAN-Local-Agent-Windows-x64-v${{ env.APP_VERSION }}Z
+          name: SHEYTAN-Local-Agent-Windows-x64-v1.1.2Z
           path: dist/windows
 
       - name: Download Linux package
         uses: actions/download-artifact@v7
         with:
-          name: SHEYTAN-Local-Agent-Linux-x64-v${{ env.APP_VERSION }}Z
+          name: SHEYTAN-Local-Agent-Linux-x64-v1.1.2Z
           path: dist/linux
 
       - name: Verify release ZIP payloads
@@ -893,8 +921,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          windows_zip_name="SHEYTAN-Local-Agent-Windows-x64-v${APP_VERSION}Z.zip"
-          linux_zip_name="SHEYTAN-Local-Agent-Linux-x64-v${APP_VERSION}Z.zip"
+          windows_zip_name="SHEYTAN-Local-Agent-Windows-x64-v1.1.2Z.zip"
+          linux_zip_name="SHEYTAN-Local-Agent-Linux-x64-v1.1.2Z.zip"
 
           windows="$(find dist/windows -type f -name "$windows_zip_name" -print -quit)"
           linux="$(find dist/linux -type f -name "$linux_zip_name" -print -quit)"
@@ -937,11 +965,6 @@ jobs:
             "SHEYTAN-Local-Agent/workspace/README.txt" \
             <<< "$windows_entries"
 
-          if unzip -Z1 "$windows" |
-            grep -Fxq "SHEYTAN-Local-Agent/sheytan-local-agent.bat"; then
-            echo "Windows launcher script present."
-          fi
-
           grep -Fxq \
             "SHEYTAN-Local-Agent/SHEYTAN-Local-Agent" \
             <<< "$linux_entries"
@@ -961,6 +984,54 @@ jobs:
           grep -Fxq \
             "SHEYTAN-Local-Agent/workspace/README.txt" \
             <<< "$linux_entries"
+
+          if grep -Fxq \
+            "SHEYTAN-Local-Agent/LICENSE" \
+            <<< "$windows_entries"; then
+            echo "Windows LICENSE present."
+          fi
+
+          if grep -Fxq \
+            "SHEYTAN-Local-Agent/README.md" \
+            <<< "$windows_entries"; then
+            echo "Windows README.md present."
+          fi
+
+          if grep -Fxq \
+            "SHEYTAN-Local-Agent/AI-CONTEXT.md" \
+            <<< "$windows_entries"; then
+            echo "Windows AI-CONTEXT.md present."
+          fi
+
+          if grep -Fxq \
+            "SHEYTAN-Local-Agent/SIGNATURE" \
+            <<< "$windows_entries"; then
+            echo "Windows SIGNATURE present."
+          fi
+
+          if grep -Fxq \
+            "SHEYTAN-Local-Agent/LICENSE" \
+            <<< "$linux_entries"; then
+            echo "Linux LICENSE present."
+          fi
+
+          if grep -Fxq \
+            "SHEYTAN-Local-Agent/README.md" \
+            <<< "$linux_entries"; then
+            echo "Linux README.md present."
+          fi
+
+          if grep -Fxq \
+            "SHEYTAN-Local-Agent/AI-CONTEXT.md" \
+            <<< "$linux_entries"; then
+            echo "Linux AI-CONTEXT.md present."
+          fi
+
+          if grep -Fxq \
+            "SHEYTAN-Local-Agent/SIGNATURE" \
+            <<< "$linux_entries"; then
+            echo "Linux SIGNATURE present."
+          fi
 
           echo "WINDOWS_ZIP=$windows" >> "$GITHUB_ENV"
           echo "LINUX_ZIP=$linux" >> "$GITHUB_ENV"
@@ -994,8 +1065,8 @@ jobs:
 
           echo "$payload"
 
-          windows_asset="SHEYTAN-Local-Agent-Windows-x64-v${APP_VERSION}Z.zip"
-          linux_asset="SHEYTAN-Local-Agent-Linux-x64-v${APP_VERSION}Z.zip"
+          windows_asset="SHEYTAN-Local-Agent-Windows-x64-v1.1.2Z.zip"
+          linux_asset="SHEYTAN-Local-Agent-Linux-x64-v1.1.2Z.zip"
 
           echo "$payload" |
             jq -e \
