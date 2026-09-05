@@ -1,5 +1,7 @@
 package api
 
+import "time"
+
 // Close stops active agent runs and releases the resources owned by the
 // shared runtime stack.
 //
@@ -32,6 +34,23 @@ func (s *Server) Close() {
 	// The orchestrator itself needs no explicit abort: every run it
 	// executes is bound to the request context canceled above, so
 	// canceling the registered runs stops all orchestrator work.
+
+	// Stop the engine event fan-out before tearing down the engine it
+	// subscribes to.
+	if s.engineStop != nil {
+		select {
+		case <-s.engineStop:
+		default:
+			close(s.engineStop)
+		}
+	}
+
+	if s.engineDone != nil {
+		select {
+		case <-s.engineDone:
+		case <-time.After(2 * time.Second):
+		}
+	}
 
 	// Release the shared runtime resources.
 	if s.stack != nil {

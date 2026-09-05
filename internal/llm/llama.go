@@ -27,13 +27,55 @@ import (
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/vision"
 )
 
+// Engine lifecycle states (v1.1.3Z spec): the backend process state is
+// authoritative and the UI may never invent any of these.
+//
+//	idle        fresh manager, nothing attempted yet
+//	downloading engine binary is being fetched
+//	starting    subprocess spawned, model loading (health pending)
+//	ready       healthy: /health 200, model loaded, no inference in flight
+//	running     subprocess alive and serving (superset of ready/busy)
+//	busy        inference request in flight
+//	stopping    deliberate shutdown in progress
+//	stopped     terminated deliberately (or died without auto-restart armed)
+//	failed      terminal failure after bounded retries
+const (
+	StateIdle        = "idle"
+	StateDownloading = "downloading"
+	StateStarting    = "starting"
+	StateReady       = "ready"
+	StateRunning     = "running"
+	StateBusy        = "busy"
+	StateStopping    = "stopping"
+	StateStopped     = "stopped"
+	StateFailed      = "failed"
+)
+
+// aliveStates are the states in which the subprocess is alive and the
+// HTTP endpoint is expected to answer.
+var aliveStates = map[string]bool{
+	StateRunning: true,
+	StateReady:   true,
+	StateBusy:    true,
+}
+
+// EngineEvent is one state transition published to subscribers (API/WS).
+type EngineEvent struct {
+	State     string    `json:"state"`
+	Previous  string    `json:"previous"`
+	Model     string    `json:"model,omitempty"`
+	Detail    string    `json:"detail,omitempty"`
+	Timestamp time.Time `json:"timestamp"`
+}
+
 // LlamaServer manages a llama.cpp server subprocess. This is the standalone
 // inference engine that replaces LM Studio's local server.
 type LlamaServer struct {
 	cfg     *config.Config
 	cmd     *exec.Cmd
 	mu      sync.Mutex
-	state   string // "stopped" | "starting" | "running" | "error"
+	state   string
+	detail  string
 	stateCh chan string
 	logBuf  *ringBuffer
 	errRing *ringBuffer
@@ -48,7 +90,25 @@ type LlamaServer struct {
 	// engineUpdateTried prevents repeated engine self-updates during one
 	// application run.
 	engineUpdateTried bool
+
+	// restarts counts auto-restart attempts for the CURRENT alive episode;
+	// reset on each successful Start. Bounded by maxAutoRestarts.
+	restarts int
+
+	// stopOnce guards the stop path against the watchdog racing Stop.
+	stopping bool
+
+	// subs receive every state transition (never blocked; slow subscribers
+	// drop events). Registered via SubscribeEvents.
+	subsMu sync.Mutex
+	subs   map[int]chan EngineEvent
+	subSeq int
 }
+
+// maxAutoRestarts bounds the watchdog's automatic recovery attempts per
+// alive episode. Retries are bounded by design: after this many backoff
+// restarts the engine reports failed and waits for explicit user action.
+const maxAutoRestarts = 3
 
 type ringBuffer struct {
 	mu   sync.Mutex
@@ -101,9 +161,94 @@ func (r *ringBuffer) reset() {
 func NewLlamaServer(cfg *config.Config) *LlamaServer {
 	return &LlamaServer{
 		cfg:     cfg,
+		state:   StateIdle,
 		stateCh: make(chan string, 16),
 		logBuf:  newRing(500),
 		errRing: newRing(64),
+		subs:    make(map[int]chan EngineEvent),
+	}
+}
+
+// SubscribeEvents registers a channel receiving every engine state
+// transition. The returned func unsubscribes. Channels are buffered;
+// slow consumers drop transitions rather than block the engine.
+func (s *LlamaServer) SubscribeEvents() (<-chan EngineEvent, func()) {
+	s.subsMu.Lock()
+	defer s.subsMu.Unlock()
+
+	ch := make(chan EngineEvent, 32)
+	s.subSeq++
+	id := s.subSeq
+	s.subs[id] = ch
+
+	return ch, func() {
+		s.subsMu.Lock()
+		defer s.subsMu.Unlock()
+
+		if existing, ok := s.subs[id]; ok {
+			delete(s.subs, id)
+			close(existing)
+		}
+	}
+}
+
+// publishEvent fans one transition out to every subscriber.
+func (s *LlamaServer) publishEvent(ev EngineEvent) {
+	s.subsMu.Lock()
+	defer s.subsMu.Unlock()
+
+	for _, ch := range s.subs {
+		select {
+		case ch <- ev:
+		default:
+		}
+	}
+}
+
+// Detail returns the latest human-readable engine detail (failure reason,
+// recovery note). Empty when nothing noteworthy happened.
+func (s *LlamaServer) Detail() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.detail
+}
+
+// SetDetail records a human-readable state detail.
+func (s *LlamaServer) SetDetail(detail string) {
+	s.mu.Lock()
+	s.detail = detail
+	s.mu.Unlock()
+}
+
+// IsAlive reports whether the subprocess is alive and serving.
+func (s *LlamaServer) IsAlive() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return aliveStates[s.state]
+}
+
+// MarkBusy flips the healthy engine between ready and busy around an
+// inference request. It is a no-op unless the engine is alive — remote
+// providers and adopted engines never report busy through this path.
+func (s *LlamaServer) MarkBusy(busy bool) {
+	s.mu.Lock()
+
+	if !aliveStates[s.state] || s.stopping {
+		s.mu.Unlock()
+		return
+	}
+
+	switch {
+	case busy && s.state != StateBusy:
+		s.mu.Unlock()
+		s.setState(StateBusy)
+	case !busy && s.state == StateBusy:
+		s.mu.Unlock()
+		s.setState(StateReady)
+	default:
+		s.mu.Unlock()
 	}
 }
 
@@ -121,11 +266,13 @@ func (s *LlamaServer) Logs() []string {
 }
 
 // IsRunning returns true if the subprocess is alive and listening.
+// Both the coarse "running" and the fine-grained "ready"/"busy" states
+// count: callers only care whether the endpoint is expected to answer.
 func (s *LlamaServer) IsRunning() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	return s.state == "running"
+	return aliveStates[s.state]
 }
 
 // ensureBinary makes sure the llama.cpp server binary exists.
@@ -161,7 +308,7 @@ func (s *LlamaServer) ensureBinary() error {
 		return err
 	}
 
-	s.setState("downloading")
+	s.setState(StateDownloading)
 
 	url, err := llamaDownloadURL()
 	if err != nil {
@@ -224,25 +371,25 @@ func (s *LlamaServer) Start() error {
 func (s *LlamaServer) startLocked() error {
 	s.mu.Lock()
 
-	if s.state == "running" || s.state == "starting" {
+	if aliveStates[s.state] || s.state == StateStarting {
 		s.mu.Unlock()
 		return nil
 	}
+
+	s.mu.Unlock()
 
 	portInUse := PortInUse(
 		s.cfg.LlamaHost,
 		s.cfg.LlamaPort,
 	)
 
-	s.mu.Unlock()
-
 	if portInUse {
 		if s.adoptExisting() {
-			s.setState("running")
+			s.setState(StateReady)
 			return nil
 		}
 
-		s.setState("error")
+		s.setState(StateFailed)
 
 		return fmt.Errorf(
 			"port %d is already in use by another program — "+
@@ -251,10 +398,10 @@ func (s *LlamaServer) startLocked() error {
 		)
 	}
 
-	s.setState("starting")
+	s.setState(StateStarting)
 
 	if err := s.ensureBinary(); err != nil {
-		s.setState("error")
+		s.setState(StateFailed)
 		return err
 	}
 
@@ -263,7 +410,7 @@ func (s *LlamaServer) startLocked() error {
 		s.cfg.Model,
 	)
 	if err != nil {
-		s.setState("error")
+		s.setState(StateFailed)
 		return err
 	}
 
@@ -327,7 +474,13 @@ func (s *LlamaServer) startLocked() error {
 						)
 					}
 
-					s.setState("running")
+					// A successful boot starts a fresh recovery episode.
+					s.mu.Lock()
+					s.restarts = 0
+					s.stopping = false
+					s.mu.Unlock()
+
+					s.setState(StateReady)
 					return nil
 				}
 
@@ -342,7 +495,7 @@ func (s *LlamaServer) startLocked() error {
 				)
 
 				if _, died := err.(*exitFailure); !died {
-					s.setState("error")
+					s.setState(StateFailed)
 					return err
 				}
 
@@ -353,7 +506,7 @@ func (s *LlamaServer) startLocked() error {
 				needsNewerEngine(lastErr) &&
 				s.updateEngineForModel() {
 				startLevel = 0
-				s.setState("starting")
+				s.setState(StateStarting)
 				continue
 			}
 
@@ -380,11 +533,11 @@ func (s *LlamaServer) startLocked() error {
 				projectName,
 			)
 
-			s.setState("starting")
+			s.setState(StateStarting)
 			continue
 		}
 
-		s.setState("error")
+		s.setState(StateFailed)
 		return lastErr
 	}
 }
@@ -395,7 +548,7 @@ func (s *LlamaServer) VisionActive() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	return s.state == "running" && s.mmproj != ""
+	return aliveStates[s.state] && s.mmproj != ""
 }
 
 // ProjectorPath returns the active projector file.
@@ -581,25 +734,32 @@ func (s *LlamaServer) launchOnce(
 			s.cmd = nil
 		}
 
-		wasRunning :=
+		wasAlive :=
 			latest &&
 				s.loaded == modelPath &&
-				s.state == "running"
+				aliveStates[s.state]
 
-		if wasRunning {
+		if wasAlive {
 			s.loaded = ""
 		}
 
 		s.mu.Unlock()
 
-		if wasRunning {
-			s.setState("stopped")
+		if wasAlive {
+			s.setState(StateStopped)
 
 			logging.Default().Error(
 				"engine",
 				"engine exited while running: %v",
 				exit.err,
 			)
+
+			// v1.1.3Z bounded auto-recovery: the watchdog restarts
+			// the engine a bounded number of times with backoff so a
+			// crashed engine recovers transparently, while a
+			// fundamentally broken setup surfaces as `failed`
+			// instead of looping forever.
+			s.scheduleAutoRestart(modelPath)
 		}
 
 		close(exit.done)
@@ -871,7 +1031,7 @@ func (s *LlamaServer) updateEngineForModel() bool {
 		latest,
 	)
 
-	s.setState("downloading")
+	s.setState(StateDownloading)
 
 	if _, err := updater.UpdateEngine(
 		ctx,
@@ -1023,25 +1183,65 @@ func (s *LlamaServer) adoptExisting() bool {
 	return resp.StatusCode == http.StatusOK
 }
 
-// Stop terminates the subprocess.
+// Stop terminates the subprocess gracefully: SIGTERM, bounded grace
+// period, then kill. The state machine walks stopping → stopped and the
+// exit watcher is allowed to observe the death without scheduling an
+// auto-restart (stopping arms the suppression flag).
 func (s *LlamaServer) Stop() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
-	if s.cmd == nil || s.cmd.Process == nil {
-		s.state = "stopped"
+	cmd := s.cmd
+	s.stopping = true
+
+	if cmd == nil || cmd.Process == nil {
+		s.cmd = nil
+		s.loaded = ""
+		s.mu.Unlock()
+
+		s.setState(StateStopped)
 		return nil
 	}
 
-	_ = s.cmd.Process.Signal(syscall.SIGTERM)
+	s.mu.Unlock()
 
-	time.Sleep(500 * time.Millisecond)
+	s.setState(StateStopping)
 
-	_ = s.cmd.Process.Kill()
+	_ = cmd.Process.Signal(syscall.SIGTERM)
 
-	s.cmd = nil
+	// Bounded grace: poll the process exit (released by the watcher's
+	// close(exit.done)) instead of a blind sleep.
+	deadline := time.Now().Add(4 * time.Second)
+
+	for time.Now().Before(deadline) {
+		s.mu.Lock()
+		alive := s.cmd == cmd
+		s.mu.Unlock()
+
+		if !alive {
+			break
+		}
+
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	s.mu.Lock()
+	alive := s.cmd == cmd
+	s.mu.Unlock()
+
+	if alive && cmd.Process != nil {
+		_ = cmd.Process.Kill()
+	}
+
+	s.mu.Lock()
+
+	if s.cmd == cmd {
+		s.cmd = nil
+	}
+
 	s.loaded = ""
-	s.state = "stopped"
+	s.mu.Unlock()
+
+	s.setState(StateStopped)
 
 	return nil
 }
@@ -1072,7 +1272,7 @@ func (s *LlamaServer) Restart() error {
 // SwitchModel points the engine at a new GGUF and reloads it if running.
 func (s *LlamaServer) SwitchModel(name string) error {
 	s.mu.Lock()
-	running := s.state == "running"
+	running := aliveStates[s.state]
 	s.mu.Unlock()
 
 	s.cfg.Model = name
@@ -1110,15 +1310,121 @@ func (s *LlamaServer) LoadedModel() string {
 	return s.loaded
 }
 
+// setState records one state transition, notifies the legacy state
+// channel, and publishes an EngineEvent to every subscriber.
 func (s *LlamaServer) setState(st string) {
 	s.mu.Lock()
+
+	previous := s.state
+
+	if previous == st {
+		s.mu.Unlock()
+		return
+	}
+
 	s.state = st
+
+	detail := s.detail
+	model := ""
+
+	if s.loaded != "" {
+		model = filepath.Base(s.loaded)
+	}
+
 	s.mu.Unlock()
 
 	select {
 	case s.stateCh <- st:
 	default:
 	}
+
+	s.publishEvent(EngineEvent{
+		State:     st,
+		Previous:  previous,
+		Model:     model,
+		Detail:    detail,
+		Timestamp: time.Now(),
+	})
+}
+
+// scheduleAutoRestart implements the watchdog's bounded recovery: restart
+// the engine with exponential backoff (1s, 2s, 4s) up to maxAutoRestarts
+// times per alive episode. When the budget is spent the engine reports
+// failed and only an explicit user action may retry. Deliberate stops are
+// honored: the stopping flag suppresses recovery entirely.
+func (s *LlamaServer) scheduleAutoRestart(modelPath string) {
+	s.mu.Lock()
+
+	if s.stopping {
+		s.mu.Unlock()
+		return
+	}
+
+	if s.restarts >= maxAutoRestarts {
+		s.detail = fmt.Sprintf(
+			"engine exited %d times — giving up automatic recovery: %s",
+			s.restarts,
+			s.tailLines(3),
+		)
+
+		s.mu.Unlock()
+
+		s.setState(StateFailed)
+
+		logging.Default().Error(
+			"engine",
+			"auto-restart budget exhausted; engine reported as failed",
+		)
+
+		return
+	}
+
+	s.restarts++
+
+	attempt := s.restarts
+	delay := time.Duration(1<<(attempt-1)) * time.Second // 1s, 2s, 4s
+
+	s.mu.Unlock()
+
+	logging.Default().Warn(
+		"engine",
+		"engine died — automatic restart %d/%d in %v",
+		attempt,
+		maxAutoRestarts,
+		delay,
+	)
+
+	go func() {
+		time.Sleep(delay)
+
+		s.mu.Lock()
+		stopping := s.stopping
+		s.mu.Unlock()
+
+		if stopping {
+			return
+		}
+
+		if err := s.Start(); err != nil {
+			logging.Default().Error(
+				"engine",
+				"auto-restart %d/%d failed: %v",
+				attempt,
+				maxAutoRestarts,
+				err,
+			)
+
+			// The next death (or this failure's terminal state) advances
+			// the bounded ladder; nothing unbounded ever loops here.
+			return
+		}
+
+		logging.Default().Info(
+			"engine",
+			"engine auto-restarted successfully (model %s)",
+			filepath.Base(modelPath),
+		)
+	}()
 }
 
 func (s *LlamaServer) logf(

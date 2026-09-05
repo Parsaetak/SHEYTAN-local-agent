@@ -1,3 +1,5 @@
+//go:build !headless
+
 // Package desktop provides the native cross-platform desktop shell.
 package desktop
 

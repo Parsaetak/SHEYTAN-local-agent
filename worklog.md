@@ -818,3 +818,111 @@ first real inference
 
 ```
 ```
+---
+
+# v1.1.3Z Implementation Log (AAA upgrade, 2026-09-04)
+
+## What was implemented
+
+1. Automatic engine lifecycle
+   - api.Server.EnsureSetup calls Stack.PrewarmLLM: launch -> llama.cpp starts
+     automatically (respects llamaAutoStart).
+   - handleRun gates every run on Stack.EnsureLLMContext (bounded 3 min), so a
+     cold start streams engine transitions to the UI and never hangs forever.
+   - cmd/ask.go keeps using the same Stack.EnsureLLM.
+
+2. Engine state machine (internal/llm)
+   - Spec states: idle, downloading, starting, ready, running, busy, stopping,
+     stopped, failed. aliveStates = running/ready/busy.
+   - SubscribeEvents fans EngineEvent transitions to the API layer.
+   - MarkBusy wired to llm.Client inference windows.
+   - Watchdog: bounded auto-restart (3 attempts, 1s/2s/4s backoff), suppressed
+     by deliberate Stop; exhausted budget -> failed (visible, not looping).
+   - Stop(): stopping -> stopped with bounded SIGTERM grace then kill.
+
+3. Attachments (internal/attachments, new)
+   - Content-addressed staging (sha256 objects), symlink-safe writes, 0600.
+   - Validation: size cap, count cap, processing timeout, chunk cap.
+   - Text normalization + chunking with stable chunk identity (hash+offset).
+   - Retrieval: lexical scoring over chunk previews, bounded block with
+     provenance headers; results cached content-aware.
+   - Images classified for the vision pipeline; binaries become notes with
+     staged paths for the file tools. Nothing is ever executed.
+
+4. Context cache (internal/contextcache, new)
+   - Content-keyed LRU (entries + bytes bounds), version + config fingerprint
+     keys, TTL, prefix invalidation, hit/miss/eviction stats, concurrency-safe.
+
+5. Long-context plan (internal/contextplan, new)
+   - Explicit budget: numCtx minus output reserve; sections system/tools/
+     recall/attachments/history with priorities and provenance summary.
+   - Orchestrator: tool specs measured EXACTLY (serialized JSON) BEFORE
+     windowing; plan drives the history window; overflow emits a visible
+     error activity instead of a silent engine rejection.
+
+6. API surface
+   - GET /api/engine (authoritative snapshot incl. cache stats).
+   - Engine events broadcast on every activity WS (live + standby conns).
+   - /api/attachments upload (multipart, MaxBytesReader)/list/inspect/delete.
+   - /api/run: attachmentIds, regenerate, attachment block injected BEFORE the
+     fresh user turn (KV-cache friendly), legacy AttachedFiles preserved.
+
+7. Frontend
+   - Fixed the dead-composer bug: `running` now resets on done/error events
+     (previously stuck true forever after the first successful reply).
+   - Real conversation view: persisted history per session, optimistic user
+     bubble, streaming assistant bubble, attachment chips, inline runtime
+     activity, regenerate control.
+   - Engine card driven by the authoritative states with severity colors and
+     smart polling; activity stream toggleable.
+   - Composer attachments tray with staging progress and remove.
+
+8. Headless build
+   - `headless` build tag now means something: desktop.go gated `!headless`,
+     desktop/headless.go provides ServeHeadless (same stack + API), and
+     main_headless.go routes default execution. `go build/test -tags headless`
+     works on machines without GTK/WebKit.
+
+9. Configuration correctness
+   - Divergence fix: local EffectiveBaseURL derives from LlamaHost:LlamaPort;
+     llmBaseUrl is an explicit override only (legacy default value migrates).
+   - Default numCtx 8192 -> 16384 (measured: AI-context + full tool schemas
+     ~= 9.8k tokens; 8k could not fit the FIRST request of a default install).
+
+10. Tests (all green, `go test ./internal/... -tags headless`)
+    - contextcache: bounds/LRU/TTL/prefix/concurrency.
+    - attachments: staging, dedupe, oversize, empty, classify, sanitize,
+      chunk identity stability, unicode, retrieval ranking, delete.
+    - contextplan: budget math, pressure drops, floor, summary provenance.
+    - llm: real spawn -> health -> ready via a fake engine (test-binary re-exec),
+      missing binary, missing model, stop transitions, events, busy flips,
+      bounded auto-restart after real process death, model resolution.
+    - agent: first inference + streaming via fake SSE engine, tool loop with
+      tool-result follow-up, unknown tool handling, abort, error propagation,
+      think-splitting, image markers.
+    - sessions: round-trip, append persistence, stub list, delete, context
+      attachment ids, 8-writer concurrency, index self-heal, sidecar bounds.
+    - api: engine endpoint truthfulness, session lifecycle over HTTP,
+      attachment upload/inspect/delete, run input validation, config redaction.
+
+## Runtime verification performed
+
+- Stub-engine e2e (scripts outside repo): 16/16 PASS — launch, auto-start,
+  ready, session, upload, run with attachment, engine envelope (messageCount,
+  toolsOffered=14, attachmentHit=true), regenerate, cache stats, shutdown.
+- REAL engine e2e: llama.cpp b10642 (linux x64, CPU) + Qwen2.5-0.5B/1.5B Instruct
+  GGUF: automatic startup to ready (~5s), real inference streamed and persisted
+  ("The capital of France is Paris."), engine busy -> ready, regenerate path.
+- The oversized-request failure (9854 tok vs 8192 ctx) was reproduced against
+  the real engine, root-caused (unmeasured tool schemas + no hard ceiling),
+  fixed, and re-verified with the request accepted.
+
+## Remaining honest limitations
+
+- Desktop (Wails/GTK) build not compilable in this sandbox (no GTK4/WebKit dev
+  libs); CI builds it. Headless variant builds and runs the same stack.
+- Vision (mmproj) path not exercised with a real projector model.
+- Small instruct models may not emit formal tool calls even when tools are
+  advertised; loop mechanics covered by deterministic tests.
+- UI visual QA of the new conversation view was done via code/build checks,
+  not human screenshot review.

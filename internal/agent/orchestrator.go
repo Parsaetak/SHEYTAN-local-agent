@@ -18,6 +18,7 @@ import (
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/aicontext"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/chunking"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/contextplan"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/continuum"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/logging"
@@ -278,41 +279,15 @@ func (o *Orchestrator) RunDetailed(
 
 	// v1.0.2 history window: compact older messages so the prompt stays
 	// inside a bounded share of num_ctx (leading system messages survive).
-	prefix, body := splitSystemPrefix(messages)
-
-	windowed, elided := chunking.WindowMessages(
-		body,
-		o.cfg.HistoryWindowTokens(),
-	)
-
-	if elided > 0 {
-		result.Elided = elided
-
-		logging.Default().Info(
-			"agent",
-			"history window: %d messages compacted",
-			elided,
-		)
-
-		onActivity(Activity{
-			Type: "thinking",
-			Caption: fmt.Sprintf(
-				"Context window: %d older messages compacted — key facts stay recallable",
-				elided,
-			),
-			Timestamp: time.Now(),
-		})
-	}
-
-	messages = append(
-		append([]llm.Message{}, prefix...),
-		windowed...,
-	)
-
-	// Build tool specs in DETERMINISTIC (sorted) order, filtered to the
-	// user's enabled set. Map iteration is random per run, which reshuffled
-	// the tool list in the prompt and invalidated llama.cpp's prompt/KV
-	// prefix cache between turns; a stable order lets the cache survive.
+	//
+	// v1.1.3Z long-context engine: the window budget is no longer a raw
+	// config share — it is the EXPLICIT plan allocation computed from the
+	// real model context: system briefing + MEASURED tool schemas +
+	// recall/attachment blocks + reserved output tokens.
+	//
+	// Tool specs are built BEFORE windowing so their exact serialized
+	// cost is part of the plan (the old per-tool guess under-counted by
+	// kilotokens and let real llama.cpp reject oversized requests).
 	names := make([]string, 0, len(o.tools))
 
 	for name := range o.tools {
@@ -344,6 +319,92 @@ func (o *Orchestrator) RunDetailed(
 		)
 	}
 
+	toolTokens := estimateToolSpecsTokens(toolSpecs)
+
+	sysTokens, injectedTokens, injectedBlocks := classifyMessages(messages)
+
+	plan := contextplan.Assemble(contextplan.Input{
+		SystemTokens:    sysTokens,
+		ToolTokens:      toolTokens,
+		RecallTokens:    injectedTokens,
+		NumCtx:          o.cfg.LLM.NumCtx,
+		MaxOutputTokens: o.cfg.LLM.MaxTokens,
+	})
+
+	plan.Recalled = result.Recalled
+	plan.Attachments = injectedBlocks
+
+	prefix, body := splitSystemPrefix(messages)
+
+	windowed, elided := chunking.WindowMessages(
+		body,
+		plan.HistoryBudget,
+	)
+
+	plan.Elided = elided
+
+	if elided > 0 {
+		result.Elided = elided
+
+		logging.Default().Info(
+			"agent",
+			"history window: %d messages compacted (budget %d tok)",
+			elided,
+			plan.HistoryBudget,
+		)
+
+		onActivity(Activity{
+			Type: "thinking",
+			Caption: fmt.Sprintf(
+				"Context window: %d older messages compacted — key facts stay recallable",
+				elided,
+			),
+			Timestamp: time.Now(),
+		})
+	}
+
+	messages = append(
+		append([]llm.Message{}, prefix...),
+		windowed...,
+	)
+
+	// Measure the actual windowed history so the report reflects the
+	// real prompt, not the allocation.
+	plan.SetSectionTokens(
+		contextplan.SectionHistory,
+		chunking.EstimateMessagesTokens(messages),
+	)
+
+	// v1.1.3Z: publish the context provenance report once per turn so
+	// the UI can show the real budget split without exposing prompts.
+	onActivity(Activity{
+		Type:      "context",
+		Caption:   plan.Summary(),
+		Detail:    plan,
+		Timestamp: time.Now(),
+	})
+
+	// Fixed sections alone overflowing the usable window must be VISIBLE:
+	// the engine will reject the request, so say why up front.
+	if overflow := plan.TotalTokens() - plan.Budget.Usable; overflow > 0 {
+		logging.Default().Warn(
+			"agent",
+			"context overflow: fixed sections exceed usable window by ~%d tok — raise numCtx",
+			overflow,
+		)
+
+		onActivity(Activity{
+			Type: "error",
+			Caption: fmt.Sprintf(
+				"Context overflow: system + tool definitions need ~%d tokens but only %d fit (numCtx %d). Raise the context size in Settings → Model.",
+				plan.TotalTokens(),
+				plan.Budget.Usable,
+				plan.Budget.Total,
+			),
+			Timestamp: time.Now(),
+		})
+	}
+
 	maxIter := o.cfg.MaxIterations
 
 	if maxIter < 1 {
@@ -353,8 +414,10 @@ func (o *Orchestrator) RunDetailed(
 	toolsUsed := map[string]bool{}
 
 	// v1.0.7: peak prompt pressure across the turn's iterations — the
-	// number the context meter shows after the reply lands.
-	budgetTokens := o.cfg.HistoryWindowTokens()
+	// number the context meter shows after the reply lands. The budget
+	// is the plan's explicit history allocation.
+	budgetTokens := plan.HistoryBudget
+
 	peakUsage := continuum.EstimateUsage(
 		messages,
 		budgetTokens,
@@ -756,6 +819,67 @@ func (o *Orchestrator) RunDetailed(
 // [[IMG:path]] and the orchestrator moves those paths onto the tool message's
 // Images field (the client turns them into image_url parts).
 const imageMarkerPrefix = "[[IMG:"
+
+// classifyMessages measures the composed prompt into three buckets:
+//
+//   - system tokens: the leading system block (AI-context briefing and any
+//     caller-provided system prompt) — the stable prefix
+//   - injected tokens: system blocks inside the body (recall digests,
+//     staged-attachment blocks) that arrive between history
+//   - injected block count (for provenance reporting)
+//
+// The measurement is cheap (one pass, token estimates only) and honest:
+// the plan reflects what is actually in the message list, not estimates
+// from config values.
+func classifyMessages(messages []llm.Message) (sysTokens, injectedTokens, injectedBlocks int) {
+	inPrefix := true
+
+	for i := range messages {
+		m := messages[i]
+
+		if inPrefix && m.Role != "system" {
+			inPrefix = false
+		}
+
+		tokens := chunking.EstimateTokens(m.Content)
+
+		for _, tc := range m.ToolCalls {
+			tokens += chunking.EstimateTokens(tc.Function.Arguments) + 4
+		}
+
+		if inPrefix {
+			sysTokens += tokens
+			continue
+		}
+
+		if m.Role == "system" {
+			injectedTokens += tokens
+			injectedBlocks++
+		}
+	}
+
+	return sysTokens, injectedTokens, injectedBlocks
+}
+
+// historyBudgetFor was removed in v1.1.3Z: the context plan (contextplan
+// package) is the single budget authority and tool schemas are measured
+// exactly before windowing.
+
+// estimateToolSpecsTokens measures the real serialized tool schema cost.
+func estimateToolSpecsTokens(specs []llm.ToolSpec) int {
+	total := 0
+
+	for _, spec := range specs {
+		data, err := json.Marshal(spec)
+		if err != nil {
+			continue
+		}
+
+		total += chunking.EstimateTokens(string(data))
+	}
+
+	return total
+}
 
 // ExtractImageMarkers pulls every [[IMG:path]] marker out of a tool result,
 // returning the cleaned text (markers stripped, runs of blank lines

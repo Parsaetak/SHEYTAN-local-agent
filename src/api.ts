@@ -224,6 +224,8 @@ export interface Session {
 export interface RunRequest {
   sessionId: string;
   message: string;
+  attachmentIds?: string[];
+  regenerate?: boolean;
 }
 
 export interface RunResponse {
@@ -382,9 +384,96 @@ export interface ResearchConfig {
   providers: string[];
 }
 
+// v1.1.3Z: authoritative engine state (backend process state is the single
+// source of truth; the UI never invents these).
+export type EngineState =
+  | "idle"
+  | "downloading"
+  | "starting"
+  | "ready"
+  | "running"
+  | "busy"
+  | "stopping"
+  | "stopped"
+  | "failed"
+  | "remote";
+
+export interface EngineSnapshot {
+  state: EngineState;
+  detail?: string;
+  model?: string;
+  loadedPath?: string;
+  pid?: number;
+  vision: boolean;
+  provider: string;
+  logs?: string[];
+  cacheStats?: {
+    entries: number;
+    bytes: number;
+    maxBytes: number;
+    hits: number;
+    misses: number;
+    evictions: number;
+    hitRatio: number;
+  };
+  timestamp: string;
+}
+
+// v1.1.3Z: staged attachment metadata returned by the backend.
+export interface AttachmentChunk {
+  id: string;
+  attId: string;
+  index: number;
+  hash: string;
+  offset: number;
+  bytes: number;
+  tokens: number;
+  preview: string;
+}
+
+export interface Attachment {
+  id: string;
+  name: string;
+  kind: "text" | "image" | "binary";
+  size: number;
+  sha256: string;
+  createdAt: string;
+  chunks?: AttachmentChunk[];
+  note?: string;
+  sessionIds?: string[];
+}
+
+export interface UploadResponse {
+  ok: boolean;
+  attachments: Attachment[];
+  failed: { name: string; error: string }[];
+}
+
+// v1.1.3Z: full session payload with persisted conversation history.
+export interface SessionDetail extends Session {
+  messages?: ChatMessage[];
+  context?: {
+    systemPrompt?: string;
+    attachedFiles?: string[];
+    attachmentIds?: string[];
+    maxIterations?: number;
+  };
+}
+
+export interface ChatMessage {
+  role: "user" | "assistant" | "system" | "tool";
+  content: string;
+  reasoning?: string;
+  attachments?: string[];
+  images?: string[];
+  feedback?: number;
+  at?: string;
+}
+
 const DEFAULT_TIMEOUT_MS = 15_000;
 const LONG_OPERATION_TIMEOUT_MS = 5 * 60_000;
 const RESEARCH_TIMEOUT_MS = 30_000;
+const uploadTimeoutMs = 2 * 60_000;
 
 async function request<T>(
   path: string,
@@ -536,6 +625,77 @@ export const api = {
         body: JSON.stringify(payload),
       },
       LONG_OPERATION_TIMEOUT_MS,
+    );
+  },
+
+  // v1.1.3Z: authoritative engine snapshot (poll target).
+  engine(): Promise<EngineSnapshot> {
+    return request<EngineSnapshot>("/engine");
+  },
+
+  // v1.1.3Z: staged attachments.
+  attachments(): Promise<{ attachments: Attachment[]; limits?: unknown }> {
+    return request("/attachments");
+  },
+
+  uploadAttachments(
+    sessionId: string,
+    files: File[],
+  ): Promise<UploadResponse> {
+    const form = new FormData();
+
+    for (const file of files) {
+      form.append("files", file);
+    }
+
+    const controller = new AbortController();
+
+    const timeout = window.setTimeout(() => {
+      controller.abort();
+    }, uploadTimeoutMs);
+
+    return fetch(`${API_BASE}/attachments?sessionId=${encodeURIComponent(sessionId)}`, {
+      method: "POST",
+      body: form,
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        if (!response.ok) {
+          const text = await response.text();
+
+          let message = text;
+
+          try {
+            const parsed = JSON.parse(text) as { error?: string };
+
+            if (parsed.error) {
+              message = parsed.error;
+            }
+          } catch {
+            // Raw body.
+          }
+
+          throw new Error(message || `Upload failed (HTTP ${response.status})`);
+        }
+
+        return (await response.json()) as UploadResponse;
+      })
+      .finally(() => {
+        window.clearTimeout(timeout);
+      });
+  },
+
+  deleteAttachment(id: string): Promise<{ ok: boolean }> {
+    return request(`/attachments/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
+  },
+
+  sessionDetail(id: string): Promise<SessionDetail> {
+    return request<SessionDetail>(
+      `/sessions/${encodeURIComponent(id)}`,
+      undefined,
+      DEFAULT_TIMEOUT_MS,
     );
   },
 

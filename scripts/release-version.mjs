@@ -3,13 +3,13 @@
  * release-version.mjs — Single-source-of-truth release metadata gate for
  * SHEYTAN-Local-Agent (Zeta line).
  *
- * The canonical version lives in package.json ("version", e.g. "1.1.2-zeta").
+ * The canonical version lives in package.json ("version", e.g. "1.1.3-zeta").
  * Every other release surface is derived from it and must stay in sync:
  *
- *   - internal/config/config.go            ->  AppVersion  = "1.1.2"        (base version)
- *   - build/config.yml                     ->  productVersion: "1.1.2-zeta"  (full version)
- *   - SIGNATURE                            ->  SHEYTAN-Local-Agent v1.1.2     (base version)
- *   - .github/workflows/build-desktop.yml  ->  APP_VERSION: "1.1.2"           (base version)
+ *   - internal/config/config.go            ->  AppVersion  = "1.1.3"        (base version)
+ *   - build/config.yml                     ->  productVersion: "1.1.3-zeta"  (full version)
+ *   - SIGNATURE                            ->  SHEYTAN-Local-Agent v1.1.3     (base version)
+ *   - .github/workflows/build-desktop.yml  ->  APP_VERSION: "1.1.3"           (base version)
  *
  * Usage:
  *   node scripts/release-version.mjs            # sync mode (default): repair drift in place
@@ -35,7 +35,7 @@ const targets = [
   {
     label: "internal/config/config.go",
     file: "internal/config/config.go",
-    // gofmt-aligned const, e.g. `      AppVersion  = "1.1.2"`
+    // gofmt-aligned const, e.g. `      AppVersion  = "1.1.3"`
     pattern: /((?:^|\r?\n)[ \t]*AppVersion[ \t]*=[ \t]*")([^"]*)(")/,
     expected: (base) => base,
     describe: (v) => `AppVersion = "${v}"`,
@@ -50,7 +50,7 @@ const targets = [
   {
     label: "SIGNATURE",
     file: "SIGNATURE",
-    // First line only: "SHEYTAN-Local-Agent v1.1.2"
+    // First line only: "SHEYTAN-Local-Agent v1.1.3"
     pattern: /(^[ \t]*SHEYTAN-Local-Agent[ \t]+v)([^\r\n]*)/,
     multiline: true,
     // group(2) holds only the version token after the "SHEYTAN-Local-Agent v"
@@ -96,7 +96,7 @@ const suffixMatch = packageVersion.match(/^(\d+\.\d+\.\d+)(?:-(.+))?$/);
 
 if (!suffixMatch) {
   fail(
-    `package.json version "${packageVersion}" is not semver (expected e.g. "1.1.2-zeta").`,
+    `package.json version "${packageVersion}" is not semver (expected e.g. "1.1.3-zeta").`,
   );
 }
 

@@ -32,10 +32,10 @@ func (t *DataTool) LoadTest(rel string) (*dataset, error) { return t.load(rel) }
 
 // RowsTest returns the row count of a dataset (nil-safe).
 func (d *dataset) RowsTest() int {
-        if d == nil {
-                return 0
-        }
-        return len(d.Rows)
+	if d == nil {
+		return 0
+	}
+	return len(d.Rows)
 }
 
 // NumericColumnTest exposes the parse-once numeric column cache.
@@ -51,7 +51,7 @@ var fetchAllowPrivateTest = false
 // public-destination requirement. Test-only — never call from production
 // code paths.
 func SetFetchPrivateDestinationsAllowedForTest(v bool) bool {
-        prev := fetchAllowPrivateTest
-        fetchAllowPrivateTest = v
-        return prev
+	prev := fetchAllowPrivateTest
+	fetchAllowPrivateTest = v
+	return prev
 }

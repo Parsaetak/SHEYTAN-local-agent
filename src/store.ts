@@ -4,6 +4,9 @@ import {
   api,
   type ActivityEvent as APIActivityEvent,
   type AppState,
+  type Attachment,
+  type ChatMessage,
+  type EngineSnapshot,
   type LabListResponse,
   type LabTaskSessionSnapshot,
   type ModelsResponse,
@@ -43,6 +46,18 @@ type RuntimeState = {
   activity: ActivityEvent[];
   running: boolean;
 
+  // v1.1.3Z: authoritative engine state (polled + WS-pushed).
+  engine: EngineSnapshot | null;
+
+  // v1.1.3Z: real conversation history for the active session plus the
+  // streaming assistant bubble.
+  messages: ChatMessage[];
+  streaming: { content: string; reasoning: string } | null;
+
+  // v1.1.3Z: staged attachments for the composer.
+  pendingAttachments: Attachment[];
+  attachmentsUploading: boolean;
+
   lab: LabListResponse | null;
   labLoading: boolean;
   labError: string | null;
@@ -60,6 +75,10 @@ type RuntimeState = {
   refreshSessions: () => Promise<void>;
   refreshTools: () => Promise<void>;
   refreshAgentResources: () => Promise<void>;
+  refreshEngine: () => Promise<void>;
+  startEnginePolling: () => void;
+
+  loadSession: (id: string) => Promise<void>;
 
   refreshLab: () => Promise<void>;
   loadLabTask: (id: string) => Promise<void>;
@@ -70,6 +89,10 @@ type RuntimeState = {
 
   run: (message: string) => Promise<void>;
   abort: () => Promise<void>;
+  regenerate: () => Promise<void>;
+
+  uploadFiles: (files: File[]) => Promise<void>;
+  removePendingAttachment: (id: string) => Promise<void>;
 
   runLabAction: (payload: Record<string, unknown>) => Promise<unknown>;
 
@@ -87,6 +110,8 @@ type RuntimeState = {
 };
 
 const MAX_ACTIVITY_EVENTS = 500;
+
+let enginePollTimer: number | null = null;
 
 let socket: WebSocket | null = null;
 let activitySequence = 0;
@@ -241,6 +266,83 @@ function setActivityBatch(
       running,
     };
   });
+
+  // v1.1.3Z: route conversation-relevant events into the message pipeline
+  // (streaming bubbles + the run-end bookkeeping that used to leave the
+  // composer permanently disabled after one message).
+  for (const event of batch) {
+    handleConversationEvent(event);
+  }
+}
+
+// handleConversationEvent mirrors activity stream events into the real
+// conversation view and repairs the run state machine.
+function handleConversationEvent(event: ActivityEvent): void {
+  const store = useRuntimeStore.getState();
+
+  switch (event.type) {
+    case "response": {
+      const content =
+        typeof event.data.caption === "string" ? event.data.caption : "";
+
+      if (content) {
+        useRuntimeStore.setState({
+          streaming: {
+            content,
+            reasoning: store.streaming?.reasoning ?? "",
+          },
+        });
+      }
+
+      break;
+    }
+
+    case "reasoning": {
+      const reasoning =
+        typeof event.data.caption === "string" ? event.data.caption : "";
+
+      if (reasoning) {
+        useRuntimeStore.setState({
+          streaming: {
+            content: store.streaming?.content ?? "",
+            reasoning,
+          },
+        });
+      }
+
+      break;
+    }
+
+    case "done":
+    case "error": {
+      // THE v1.1.2Z dead-composer fix: a finished or failed run must
+      // always release the composer. The old code only reset `running`
+      // on error paths, so a successful reply left it disabled forever.
+      useRuntimeStore.setState({ running: false });
+
+      // Reload the persisted conversation so the final assistant message
+      // (written by the run goroutine after the done event) replaces the
+      // optimistic streaming bubble with the authoritative history.
+      const sessionId = useRuntimeStore.getState().activeSessionId;
+
+      if (event.type === "done" && sessionId) {
+        window.setTimeout(() => {
+          const current = useRuntimeStore.getState();
+
+          if (current.activeSessionId === sessionId) {
+            void current.loadSession(sessionId);
+          }
+        }, 400);
+      }
+
+      useRuntimeStore.setState({ streaming: null });
+
+      break;
+    }
+
+    default:
+      break;
+  }
 }
 
 export const useRuntimeStore = create<RuntimeState>((set, get) => ({
@@ -259,6 +361,14 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
 
   activity: [],
   running: false,
+
+  engine: null,
+
+  messages: [],
+  streaming: null,
+
+  pendingAttachments: [],
+  attachmentsUploading: false,
 
   lab: null,
   labLoading: false,
@@ -374,6 +484,50 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
     }
   },
 
+  refreshEngine: async () => {
+    try {
+      const engine = await api.engine();
+
+      set({ engine });
+    } catch {
+      // Engine endpoint unreachable — connection state already reflects
+      // backend health; leave the last known engine snapshot in place.
+    }
+  },
+
+  startEnginePolling: () => {
+    if (enginePollTimer !== null) {
+      return;
+    }
+
+    void get().refreshEngine();
+
+    enginePollTimer = window.setInterval(() => {
+      void useRuntimeStore.getState().refreshEngine();
+    }, 2500);
+  },
+
+  loadSession: async (id) => {
+    try {
+      const detail = await api.sessionDetail(id);
+
+      // Only apply if the session is still the active one.
+      if (useRuntimeStore.getState().activeSessionId !== id) {
+        return;
+      }
+
+      set({
+        messages: detail.messages ?? [],
+      });
+    } catch {
+      // Session detail unavailable (fresh session not yet persisted) —
+      // an empty conversation is the correct view.
+      if (useRuntimeStore.getState().activeSessionId === id) {
+        set({ messages: [] });
+      }
+    }
+  },
+
   refreshLab: async () => {
     set({
       labLoading: true,
@@ -463,10 +617,15 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
       activeSessionId: id,
       error: null,
       activity: [],
+      messages: [],
+      streaming: null,
+      running: false,
+      pendingAttachments: [],
     });
 
     if (id) {
       get().connectActivity();
+      void get().loadSession(id);
     }
   },
 
@@ -512,10 +671,31 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
       error: null,
     });
 
+    // v1.1.3Z: optimistic user bubble — the conversation shows the sent
+    // message immediately, before any streaming event arrives.
+    const attachmentNames = get().pendingAttachments.map((item) => item.name);
+
+    set((state) => ({
+      messages: [
+        ...state.messages,
+        {
+          role: "user" as const,
+          content: message.trim(),
+          ...(attachmentNames.length > 0 ? { attachments: attachmentNames } : {}),
+        },
+      ],
+      streaming: null,
+    }));
+
+    const attachmentIds = get().pendingAttachments.map((item) => item.id);
+
+    set({ pendingAttachments: [] });
+
     try {
       await api.run({
         sessionId,
         message: message.trim(),
+        ...(attachmentIds.length > 0 ? { attachmentIds } : {}),
       });
 
       await get().refreshSessions();
@@ -526,6 +706,110 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
       });
 
       throw error;
+    }
+  },
+
+  regenerate: async () => {
+    const sessionId = get().activeSessionId;
+
+    if (!sessionId) {
+      return;
+    }
+
+    if (get().running) {
+      return;
+    }
+
+    set({
+      running: true,
+      error: null,
+      streaming: null,
+    });
+
+    try {
+      await api.run({ sessionId, message: "", regenerate: true });
+
+      // Drop the trailing assistant bubble optimistically; the reload on
+      // done restores the authoritative history.
+      set((state) => {
+        const messages = [...state.messages];
+
+        for (;;) {
+          const last = messages[messages.length - 1];
+
+          if (
+            messages.length > 0 &&
+            last &&
+            (last.role === "assistant" || last.role === "tool")
+          ) {
+            messages.pop();
+
+            continue;
+          }
+
+          break;
+        }
+
+        return { messages };
+      });
+
+      await get().refreshSessions();
+    } catch (error) {
+      set({
+        error: error instanceof Error ? error.message : "Regenerate failed.",
+        running: false,
+      });
+
+      throw error;
+    }
+  },
+
+  uploadFiles: async (files) => {
+    const sessionId = get().activeSessionId;
+
+    if (!sessionId || files.length === 0) {
+      return;
+    }
+
+    set({ attachmentsUploading: true, error: null });
+
+    try {
+      const response = await api.uploadAttachments(sessionId, files);
+
+      set((state) => ({
+        pendingAttachments: [...state.pendingAttachments, ...response.attachments],
+        attachmentsUploading: false,
+      }));
+
+      if (response.failed.length > 0) {
+        set({
+          error: response.failed
+            .map((item) => `${item.name}: ${item.error}`)
+            .join("; "),
+        });
+      }
+    } catch (error) {
+      set({
+        attachmentsUploading: false,
+        error: error instanceof Error ? error.message : "Upload failed.",
+      });
+
+      throw error;
+    }
+  },
+
+  removePendingAttachment: async (id) => {
+    set((state) => ({
+      pendingAttachments: state.pendingAttachments.filter(
+        (item) => item.id !== id,
+      ),
+    }));
+
+    try {
+      await api.deleteAttachment(id);
+    } catch {
+      // The staged file will be cleaned with the store; removing it from
+      // the composer is the user-visible contract and must not fail.
     }
   },
 

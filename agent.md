@@ -30,7 +30,32 @@ v1.1.2Z
 Current development target:
 
 ```text
-v1.1.3Z
+v1.1.3Z (implemented; packaged for release)
+```
+
+v1.1.3Z implementation state (do not re-implement):
+
+```text
+automatic llama.cpp startup        DONE (PrewarmLLM at EnsureSetup + EnsureLLMContext gate per run)
+engine state machine               DONE (idle/downloading/starting/ready/running/busy/stopping/stopped/failed + events)
+bounded engine auto-restart        DONE (max 3, exponential backoff, stop-suppressed)
+attachments subsystem              DONE (internal/attachments: staging CAS + chunking + retrieval + limits)
+context cache                      DONE (internal/contextcache: content-keyed LRU + versioning)
+long-context plan                  DONE (internal/contextplan: measured sections, overflow warning)
+engine/WS state surface            DONE (/api/engine + engine events on activity WS + standby feed)
+attachments REST                   DONE (/api/attachments + upload/list/inspect/delete)
+run path                           DONE (ensure-engine gate, attachment retrieval injection, regenerate)
+frontend                           DONE (conversation view, running-flag fix, engine states, attachment UI)
+headless build tag                 DONE (desktop gated !headless; headless serve fallback; CI-compatible)
+tests                              DONE (agent/api/sessions/llm/contextcache/attachments/contextplan suites)
+```
+
+Key measured facts for the next agent:
+
+```text
+AI-context briefing + full tool schemas ~= 9.8k tokens (measured against real llama.cpp b10642)
+default numCtx raised 8192 -> 16384 because of that measurement
+llmBaseUrl is now an override only; the managed engine endpoint is the source of truth
 ```
 
 ---
@@ -1126,35 +1151,18 @@ Do not reverse this order just because visual changes are easier.
 
 # 30. Immediate Next Task
 
-The next implementation task is:
+The previous next task (automatic llama.cpp startup proven end-to-end) is
+DONE — verified against a real llama.cpp b10642 engine with a real Qwen2.5
+model: launch → auto-start → ready → real inference → streamed reply →
+persisted message.
 
-> **Make llama.cpp start automatically on desktop launch and prove that a newly launched application can reach a real healthy model endpoint without manual engine intervention.**
-
-Acceptance:
-
-```text
-start application
- ↓
-llama.cpp starts automatically
- ↓
-model resolves
- ↓
-engine becomes healthy
- ↓
-UI reflects actual ready state
- ↓
-agent can send a real inference request
-```
-
-Once that is verified, continue directly to:
+The next tasks, in order:
 
 ```text
-first real inference
-→ tool loop
-→ attachments
-→ chunking
-→ cache
-→ long context
+1. Manual UI pass over the new conversation view (visual QA only — logic verified)
+2. Vision pipeline verification with a real mmproj projector
+3. Tool-calling reliability tuning with larger instruct models
+4. Continuum rollover exercise under real long sessions
 ```
 
 ---

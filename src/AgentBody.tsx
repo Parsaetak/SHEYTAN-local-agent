@@ -1,24 +1,66 @@
 import {
+  type ChangeEvent,
   type FormEvent,
+  useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 
-import ActivityStream from "./ActivityStream";
-import { api, type RuntimeConfig } from "./api";
+import { api, type EngineState, type RuntimeConfig } from "./api";
 import { initializeAgent } from "./agent-init";
+import MessageStream, { AttachmentChip } from "./MessageStream";
+import ActivityStream from "./ActivityStream";
 import { useRuntimeStore } from "./store";
 
-function ActivityCount() {
-  const activityCount = useRuntimeStore((state) => state.activity.length);
+// engineBadge maps the authoritative backend engine states to a visible
+// label + severity. The UI NEVER invents a state: unknown backend states
+// render verbatim with the neutral style.
+function engineBadge(state: EngineState | undefined, provider: string): {
+  label: string;
+  severity: "good" | "warn" | "bad" | "neutral";
+  busy: boolean;
+} {
+  if (state === "remote") {
+    return { label: "Remote endpoint", severity: "good", busy: false };
+  }
 
-  return (
-    <div className="metric-card">
-      <span>Events</span>
-      <strong>{activityCount}</strong>
-    </div>
-  );
+  switch (state) {
+    case "ready":
+      return { label: "Engine ready", severity: "good", busy: false };
+
+    case "running":
+      return { label: "Engine running", severity: "good", busy: false };
+
+    case "busy":
+      return { label: "Inference running", severity: "good", busy: true };
+
+    case "starting":
+      return { label: "Engine starting…", severity: "warn", busy: true };
+
+    case "downloading":
+      return { label: "Downloading engine…", severity: "warn", busy: true };
+
+    case "stopping":
+      return { label: "Engine stopping…", severity: "warn", busy: true };
+
+    case "failed":
+      return { label: "Engine failed", severity: "bad", busy: false };
+
+    case "stopped":
+      return { label: "Engine stopped", severity: "neutral", busy: false };
+
+    case "idle":
+      return {
+        label: provider === "remote" ? "Remote provider" : "Engine idle",
+        severity: "neutral",
+        busy: false,
+      };
+
+    default:
+      return { label: state ?? "Unknown", severity: "neutral", busy: false };
+  }
 }
 
 function AgentBody() {
@@ -28,15 +70,22 @@ function AgentBody() {
   const loading = useRuntimeStore((state) => state.loading);
   const error = useRuntimeStore((state) => state.error);
   const running = useRuntimeStore((state) => state.running);
+  const engine = useRuntimeStore((state) => state.engine);
+  const pendingAttachments = useRuntimeStore((state) => state.pendingAttachments);
+  const attachmentsUploading = useRuntimeStore((state) => state.attachmentsUploading);
 
   const createSession = useRuntimeStore((state) => state.createSession);
   const deleteSession = useRuntimeStore((state) => state.deleteSession);
   const run = useRuntimeStore((state) => state.run);
   const abort = useRuntimeStore((state) => state.abort);
+  const regenerate = useRuntimeStore((state) => state.regenerate);
+  const uploadFiles = useRuntimeStore((state) => state.uploadFiles);
+  const removePendingAttachment = useRuntimeStore(
+    (state) => state.removePendingAttachment,
+  );
   const refreshModels = useRuntimeStore((state) => state.refreshModels);
-
+  const startEnginePolling = useRuntimeStore((state) => state.startEnginePolling);
   const connectActivity = useRuntimeStore((state) => state.connectActivity);
-
   const disconnectActivity = useRuntimeStore(
     (state) => state.disconnectActivity,
   );
@@ -46,6 +95,8 @@ function AgentBody() {
   const [modelBusy, setModelBusy] = useState(false);
   const [engineBusy, setEngineBusy] = useState(false);
   const [modelError, setModelError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [showActivity, setShowActivity] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -60,6 +111,7 @@ function AgentBody() {
 
         setConfig(runtimeConfig);
         connectActivity();
+        startEnginePolling();
       })
       .catch(() => {
         // Initialization records the main error in the runtime store.
@@ -69,15 +121,16 @@ function AgentBody() {
       cancelled = true;
       disconnectActivity();
     };
-  }, [connectActivity, disconnectActivity]);
+  }, [connectActivity, disconnectActivity, startEnginePolling]);
 
   const activeSession = useMemo(
     () => sessions.find((session) => session.id === activeSessionId) ?? null,
     [sessions, activeSessionId],
   );
 
-  const loadedModels = models?.loaded ?? [];
   const localModels = models?.local ?? [];
+
+  const badge = engineBadge(engine?.state, engine?.provider ?? "local");
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -112,6 +165,14 @@ function AgentBody() {
 
     try {
       await deleteSession(activeSessionId);
+    } catch {
+      // Store exposes the runtime error.
+    }
+  }
+
+  async function handleRegenerate() {
+    try {
+      await regenerate();
     } catch {
       // Store exposes the runtime error.
     }
@@ -171,6 +232,24 @@ function AgentBody() {
     }
   }
 
+  function handleFileSelection(event: ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.target.files ?? []);
+
+    event.target.value = "";
+
+    if (files.length === 0 || !activeSessionId) {
+      return;
+    }
+
+    void uploadFiles(files).catch(() => {
+      // Store exposes the upload error.
+    });
+  }
+
+  const onPickFiles = useCallback(() => {
+    fileInputRef.current?.click();
+  }, []);
+
   useEffect(() => {
     function handleNewSessionRequest() {
       void handleNewSession();
@@ -184,12 +263,15 @@ function AgentBody() {
         handleNewSessionRequest,
       );
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [createSession]);
+
+  const canAttach = Boolean(activeSessionId) && !attachmentsUploading;
 
   return (
     <>
       <section className="workspace-content">
-        <ActivityStream />
+        <MessageStream />
 
         <aside className="runtime-panel">
           <div className="panel-heading">
@@ -199,23 +281,57 @@ function AgentBody() {
             </div>
           </div>
 
-          <div className="runtime-grid">
-            <div className="metric-card">
-              <span>Sessions</span>
-              <strong>{sessions.length}</strong>
+          <div className="runtime-section">
+            <span className="eyebrow">ENGINE</span>
+
+            <div className="engine-status">
+              <span
+                className={`status-dot severity-${badge.severity} ${
+                  badge.busy ? "pulsing" : ""
+                }`}
+              />
+
+              <div>
+                <strong>{badge.label}</strong>
+
+                <span>
+                  {engine?.model
+                    ? engine.model
+                    : engine?.provider === "remote"
+                      ? "Remote endpoint"
+                      : "Local llama.cpp"}
+                </span>
+              </div>
             </div>
 
-            <div className="metric-card">
-              <span>Local models</span>
-              <strong>{localModels.length}</strong>
-            </div>
+            {engine?.detail ? (
+              <span className="runtime-hint engine-detail" title={engine.detail}>
+                {engine.detail}
+              </span>
+            ) : null}
 
-            <div className="metric-card">
-              <span>Loaded</span>
-              <strong>{loadedModels.length}</strong>
-            </div>
+            <div className="header-actions">
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => void toggleEngine()}
+                disabled={engineBusy}
+              >
+                {engineBusy
+                  ? "Working…"
+                  : models?.llamaRunning
+                    ? "Stop engine"
+                    : "Start engine"}
+              </button>
 
-            <ActivityCount />
+              <button
+                type="button"
+                className="text-button"
+                onClick={() => setShowActivity((value) => !value)}
+              >
+                {showActivity ? "Hide activity" : "Show activity"}
+              </button>
+            </div>
           </div>
 
           <div className="runtime-section">
@@ -246,8 +362,10 @@ function AgentBody() {
 
             <div className="session-detail">
               <span>ACTIVE</span>
+
               <strong>
-                {config?.model ||
+                {engine?.model ||
+                  config?.model ||
                   activeSession?.model ||
                   "No model selected"}
               </strong>
@@ -259,45 +377,6 @@ function AgentBody() {
           </div>
 
           <div className="runtime-section">
-            <span className="eyebrow">ENGINE</span>
-
-            <div className="engine-status">
-              <span
-                className={`status-dot ${
-                  models?.llamaRunning ? "ready" : ""
-                }`}
-              />
-
-              <div>
-                <strong>
-                  {models?.llamaRunning
-                    ? "Llama server active"
-                    : "Llama server idle"}
-                </strong>
-
-                <span>
-                  {models?.llamaRunning
-                    ? "Inference backend available"
-                    : "Local inference is stopped"}
-                </span>
-              </div>
-            </div>
-
-            <button
-              type="button"
-              className="secondary-button"
-              onClick={() => void toggleEngine()}
-              disabled={engineBusy}
-            >
-              {engineBusy
-                ? "Working…"
-                : models?.llamaRunning
-                  ? "Stop engine"
-                  : "Start engine"}
-            </button>
-          </div>
-
-          <div className="runtime-section">
             <span className="eyebrow">SESSION</span>
 
             <div className="session-detail">
@@ -306,15 +385,6 @@ function AgentBody() {
                 {activeSessionId ? activeSessionId.slice(0, 16) : "None"}
               </strong>
             </div>
-
-            <div className="session-detail">
-              <span>MODEL</span>
-              <strong>{activeSession?.model || config?.model || "Global"}</strong>
-            </div>
-          </div>
-
-          <div className="runtime-section">
-            <span className="eyebrow">CONTROL</span>
 
             <div className="header-actions">
               <button
@@ -335,11 +405,38 @@ function AgentBody() {
               </button>
             </div>
           </div>
+
+          {showActivity ? <ActivityStream /> : null}
         </aside>
       </section>
 
       <form className="composer" onSubmit={handleSubmit}>
+        {pendingAttachments.length > 0 || attachmentsUploading ? (
+          <div className="composer-attachments">
+            {attachmentsUploading ? (
+              <span className="runtime-hint">Staging attachments…</span>
+            ) : null}
+
+            {pendingAttachments.map((attachment) => (
+              <AttachmentChip
+                key={attachment.id}
+                attachment={attachment}
+                onRemove={(id) => void removePendingAttachment(id)}
+              />
+            ))}
+          </div>
+        ) : null}
+
         <div className="composer-shell">
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            hidden
+            onChange={handleFileSelection}
+            aria-label="Attach files"
+          />
+
           <textarea
             value={message}
             onChange={(event) => setMessage(event.target.value)}
@@ -359,29 +456,55 @@ function AgentBody() {
           />
 
           <div className="composer-footer">
-            <span>
-              {activeSessionId
-                ? "Ctrl/Cmd + Enter to run"
-                : "Create a session first"}
-            </span>
-
-            {running ? (
+            <div className="composer-footer-left">
               <button
                 type="button"
-                className="stop-button"
-                onClick={() => void abort()}
+                className="text-button"
+                onClick={onPickFiles}
+                disabled={!canAttach}
+                title="Attach files (text, code, images)"
               >
-                Stop
+                {attachmentsUploading ? "Staging…" : "＋ Attach"}
               </button>
-            ) : (
-              <button
-                type="submit"
-                className="send-button"
-                disabled={!activeSessionId || !message.trim() || loading}
-              >
-                Forge →
-              </button>
-            )}
+
+              <span>
+                {activeSessionId
+                  ? "Ctrl/Cmd + Enter to run"
+                  : "Create a session first"}
+              </span>
+            </div>
+
+            <div className="composer-footer-actions">
+              {!running && activeSessionId ? (
+                <button
+                  type="button"
+                  className="text-button"
+                  onClick={() => void handleRegenerate()}
+                  disabled={running}
+                  title="Re-run the last user message"
+                >
+                  Regenerate
+                </button>
+              ) : null}
+
+              {running ? (
+                <button
+                  type="button"
+                  className="stop-button"
+                  onClick={() => void abort()}
+                >
+                  Stop
+                </button>
+              ) : (
+                <button
+                  type="submit"
+                  className="send-button"
+                  disabled={!activeSessionId || !message.trim() || loading}
+                >
+                  Forge →
+                </button>
+              )}
+            </div>
           </div>
         </div>
       </form>

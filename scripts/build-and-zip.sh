@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
-# Build + package SHEYTAN-Local-Agent v1.1.2 (Zeta) — Windows native desktop app
+# Build + package SHEYTAN-Local-Agent v1.1.3 (Zeta) — Windows native desktop app
 # on the Wails v3 shell with the Node/Vite (React) frontend.
 #
 # DUAL OUTPUT:
-#   1. /home/z/my-project/download/sheytan-local-agent-1.1.2.zip
+#   1. /home/z/my-project/download/sheytan-local-agent-1.1.3.zip
 #      The ready-to-run portable app: exe (icon + Parsa Tak-signed version
 #      info + DPI manifest), optional bundled llama.cpp engine, docs, worklog.
 #
-#   2. /home/z/my-project/download/sheytan-local-agent-1.1.2-github.zip
+#   2. /home/z/my-project/download/sheytan-local-agent-1.1.3-github.zip
 #      The GitHub-ready SOURCE tree: every line of code, no .exe, no engine
 #      binaries, no generated .syso — plus .gitignore and a CI workflow so
 #      `git init && push` produces a building repository whose Actions
 #      rebuild the exe automatically.
 #
-# v1.1.2Z (Zeta) — the AAA-completion release:
+# v1.1.3Z (Zeta) — the AAA-completion release:
 #   - The Linux CI job now installs the packages Wails v3 actually links
 #     (libgtk-4-dev + libwebkitgtk-6.0-dev + libsoup-3.0-dev). The v1.1.0
 #     workflow installed the Wails v2 era GTK3/WebKit2 packages, so every
@@ -35,7 +35,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-VERSION="1.1.2"
+VERSION="1.1.3"
 APP_NAME="sheytan-local-agent"
 STAGE_DIR="dist-stage/$APP_NAME"
 GH_STAGE_DIR="dist-stage/$APP_NAME-github"

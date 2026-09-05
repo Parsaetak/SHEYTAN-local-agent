@@ -92,12 +92,30 @@ type Client struct {
 	cfg  *config.Config
 	http *http.Client
 
+	// v1.1.3Z: engine busy hook. Runtime wiring sets it to LlamaServer
+	// MarkBusy so real inference traffic flips the authoritative engine
+	// state ready↔busy for the UI. Nil = no reporting (tests).
+	busyHook func(busy bool)
+
 	// v1.0.6: encoded-image cache. The agent loop rebuilds the request
 	// every iteration; without the cache a 1 MB screenshot would be
 	// base64-encoded dozens of times per turn. Keyed by path, invalidated
 	// by mtime, hard-capped at 8 entries (one turn's worth).
 	imgCacheMu sync.Mutex
 	imgCache   map[string]imageCacheEntry
+}
+
+// SetBusyHook wires the engine busy reporter (safe to call once at wiring
+// time; the hook itself must be concurrency-safe).
+func (c *Client) SetBusyHook(fn func(busy bool)) {
+	c.busyHook = fn
+}
+
+// markBusy reports an inference window to the wired hook, if any.
+func (c *Client) markBusy(busy bool) {
+	if c.busyHook != nil {
+		c.busyHook(busy)
+	}
 }
 
 type imageCacheEntry struct {
@@ -547,6 +565,8 @@ func (c *Client) StreamChatDetailed(ctx context.Context, req *ChatRequest, onEve
 	}
 	var lastErr error
 	var perf PerfStats
+	c.markBusy(true)
+	defer c.markBusy(false)
 	for attempt := 0; attempt < 4; attempt++ {
 		if attempt > 0 {
 			logging.Default().Warn("llm", "stream retry %d after %v", attempt, lastErr)

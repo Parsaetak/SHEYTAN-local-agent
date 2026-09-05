@@ -1,17 +1,22 @@
 // Package runtime wires the full SHEYTAN agent stack: LLM client,
-// orchestrator with every built-in tool, memory, multi-agent layer,
-// research, and the llama.cpp subprocess manager. Both the desktop GUI
-// and the headless `ask` CLI build on this so they stay feature-identical.
+// orchestrator with every built-in tool, attachments, context cache,
+// memory, multi-agent layer, research, and the llama.cpp subprocess
+// manager. Both the desktop GUI and the headless `ask` CLI build on this
+// so they stay feature-identical.
 package runtime
 
 import (
+	"context"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"time"
 
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/agent"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/aicontext"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/attachments"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/contextcache"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/lab"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/logging"
@@ -45,6 +50,12 @@ type Stack struct {
 	// ResearchTool is the agent-facing research tool backed by Research.
 	ResearchTool *research.Tool
 
+	// Attachments is the staged-file store backing real file uploads.
+	Attachments *attachments.Manager
+
+	// Cache is the process-wide content-aware context cache.
+	Cache *contextcache.Cache
+
 	// Linux (v1.0.6) is the built-in Linux-like shell used by BOTH the agent
 	// (the `linux` tool) and the Terminal view — one shared instance so the
 	// user sees (and can replay) exactly what the agent did.
@@ -57,6 +68,24 @@ type Stack struct {
 func NewStack(cfg *config.Config) *Stack {
 	client := llm.NewClient(cfg)
 	orch := agent.New(cfg, client)
+
+	// v1.1.3Z: content-aware context cache shared by attachments, chunking
+	// pipelines and retrieval.
+	cache := contextcache.New()
+
+	// v1.1.3Z: real attachment staging under the app's private data dir.
+	attMgr, attErr := attachments.NewManager(
+		filepath.Join(cfg.DataDir, "attachments"),
+		attachments.Options{Cache: cache},
+	)
+
+	if attErr != nil {
+		logging.Default().Warn(
+			"runtime",
+			"attachment store unavailable: %v",
+			attErr,
+		)
+	}
 
 	// v1.0.1: materialize AI-CONTEXT.md in the app folder.
 	if path, err := aicontext.EnsureFile(
@@ -414,6 +443,11 @@ func NewStack(cfg *config.Config) *Stack {
 		cfg.EffectiveMultiAgentDepth(),
 	)
 
+	// v1.1.3Z: inference traffic reports engine busy state to the
+	// authoritative state machine (no-op unless the local engine is
+	// alive, so remote providers are unaffected).
+	client.SetBusyHook(llamaSrv.MarkBusy)
+
 	return &Stack{
 		Cfg:          cfg,
 		Client:       client,
@@ -427,6 +461,8 @@ func NewStack(cfg *config.Config) *Stack {
 		Lab:          labTool,
 		Research:     researchService,
 		ResearchTool: researchTool,
+		Attachments:  attMgr,
+		Cache:        cache,
 		Linux:        linuxSim,
 	}
 }
@@ -496,11 +532,14 @@ func (s *Stack) BrowserTool() *tools.BrowserTool {
 	return nil
 }
 
-// EnsureLLM makes sure an LLM backend is reachable:
+// EnsureLLM makes sure an LLM backend is reachable and ready:
 //
 //   - provider "local": boots the bundled llama.cpp server unless one is
-//     already running
+//     already alive, and blocks until the model is actually serving
 //   - provider "remote": nothing to boot — the endpoint is used as-is
+//
+// This is the ONE canonical engine gate: every inference path (desktop,
+// serve, ask) funnels through it.
 func (s *Stack) EnsureLLM() error {
 	if s.Cfg.IsRemote() {
 		logging.Default().Info(
@@ -518,6 +557,73 @@ func (s *Stack) EnsureLLM() error {
 	}
 
 	return nil
+}
+
+// PrewarmLLM boots the local engine in the background so a freshly
+// launched application reaches a healthy model WITHOUT any user action
+// (v1.1.3Z acceptance: launch → engine starts automatically → ready).
+// Failures are logged and reflected in the engine state — never fatal,
+// because the user may only be browsing settings; a later explicit start
+// or the first message retries through EnsureLLM.
+func (s *Stack) PrewarmLLM() {
+	if s.Cfg.IsRemote() {
+		logging.Default().Info(
+			"runtime",
+			"remote provider active: %s (model %s) — local engine not started",
+			s.Cfg.RemoteBaseURL,
+			s.Cfg.EffectiveModel(),
+		)
+
+		return
+	}
+
+	go func() {
+		if err := s.Llama.Start(); err != nil {
+			logging.Default().Warn(
+				"engine",
+				"automatic startup failed (the agent will retry on first use): %v",
+				err,
+			)
+
+			return
+		}
+
+		logging.Default().Info(
+			"engine",
+			"local engine ready automatically (model %s)",
+			s.Cfg.EffectiveModel(),
+		)
+	}()
+}
+
+// EnsureLLMContext is EnsureLLM with a deadline: the run path uses it so a
+// cold start can never hang a request forever — the engine either becomes
+// ready within the timeout or the request fails with a clear, visible
+// error while the startup keeps progressing in the background.
+func (s *Stack) EnsureLLMContext(ctx context.Context) error {
+	if s.Cfg.IsRemote() {
+		return nil
+	}
+
+	if s.Llama.IsRunning() {
+		return nil
+	}
+
+	errCh := make(chan error, 1)
+
+	go func() {
+		errCh <- s.Llama.Start()
+	}()
+
+	select {
+	case err := <-errCh:
+		return err
+	case <-ctx.Done():
+		return fmt.Errorf(
+			"engine startup still in progress: %w",
+			ctx.Err(),
+		)
+	}
 }
 
 // Close tears down every owned subprocess/handle.

@@ -1,18 +1,18 @@
 @echo off
-REM SHEYTAN(TM)-Local-Agent v1.1.2 (Zeta) launcher
+REM SHEYTAN(TM)-Local-Agent v1.1.3 (Zeta) launcher
 REM
 REM Double-click to launch the native desktop GUI.
 REM (c) 2024-2026 Parsaetak. All rights reserved.
 REM SHEYTAN is a trademark of Parsaetak (https://github.com/Parsaetak).
 REM Everything (models, sessions, logs, charts) lives in this folder - portable.
 REM
-REM v1.1.2Z (Zeta): the AAA-completion release. The Node/React UI now ships
+REM v1.1.3Z (Zeta): the AAA-completion release. The Node/React UI now ships
 REM a 120Hz-first motion system (compositor-only animations, spring easing,
 REM staggered entrances, reduced-motion support). CI pins Node 24 + Go 1.26,
 REM restores the gen-syso icon/version-info pipeline and the
 REM -H=windowsgui subsystem flag, runs the stress gate in CI, and ships this
 REM .bat launcher inside the portable ZIP. CI-produced releases:
-REM SHEYTAN-Local-Agent-Windows-x64-v1.1.2Z.zip and the Linux x64 twin.
+REM SHEYTAN-Local-Agent-Windows-x64-v1.1.3Z.zip and the Linux x64 twin.
 
 setlocal
 

@@ -36,10 +36,12 @@ import (
 )
 
 // Context carries per-session user settings: the system prompt override,
-// the files staged to every turn, and the max-iterations override.
+// the files staged to every turn, the staged attachment ids, and the
+// max-iterations override.
 type Context struct {
 	SystemPrompt  string   `json:"systemPrompt,omitempty"`
 	AttachedFiles []string `json:"attachedFiles,omitempty"`
+	AttachmentIDs []string `json:"attachmentIds,omitempty"`
 	MaxIterations int      `json:"maxIterations,omitempty"`
 }
 
@@ -556,24 +558,41 @@ func (s *Store) AppendActivity(id string, entry ActivityEntry) error {
 	return nil
 }
 
-// rotateActivitiesLocked trims the sidecar back under the byte cap when
-// it outgrows it (keep the newest half — one read, one atomic rewrite,
-// amortized over hundreds of appends).
+// rotateActivitiesLocked trims the sidecar back under BOTH bounds (entry
+// count and byte cap) when it outgrows either — keep the newest half — one
+// read, one atomic rewrite, amortized over hundreds of appends.
 func (s *Store) rotateActivitiesLocked(id string) {
 	path := s.activityPath(id)
+
 	fi, err := os.Stat(path)
-	if err != nil || fi.Size() <= maxActivityKB*1024 {
+	if err != nil {
 		return
 	}
+
+	// The byte-cap check is free; the count check reads the (bounded) file.
+	if fi.Size() <= maxActivityKB*1024 {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return
+		}
+
+		lines := strings.Count(string(data), "\n")
+		if lines <= maxActivities {
+			return // within both bounds — nothing to do
+		}
+	}
+
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return
 	}
+
 	lines := strings.Split(string(data), "\n")
 	keep := lines
 	if len(lines) > maxActivities {
 		keep = lines[len(lines)-maxActivities:]
 	}
+
 	out := strings.Join(keep, "\n")
 	_ = writeAtomic(path, []byte(strings.TrimPrefix(out, "\n")))
 }

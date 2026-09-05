@@ -45,9 +45,39 @@ The model is never the authority on whether an engineering task succeeded.
 
 # Current State
 
-The current repository has a working application shell and established runtime infrastructure, but **desktop startup must not be confused with full application functionality**.
+Status after the v1.1.3Z AAA upgrade (2026-09-04). The application is no
+longer a shell around missing runtime: the full acceptance chain is
+implemented and was executed against a REAL llama.cpp engine (b10642) with
+a real Qwen2.5 model.
 
-The current priority is therefore not another visual milestone.
+Evidence-based status (VERIFIED / PARTIALLY VERIFIED / NOT VERIFIED):
+
+```text
+automatic llama.cpp startup (launch -> healthy)   VERIFIED  (real engine + stub, e2e)
+model resolve / load / health / ready states       VERIFIED  (real engine, e2e + unit)
+first real inference + streaming + persistence     VERIFIED  (real Qwen2.5, e2e)
+engine states (idle/starting/ready/busy/failed...) VERIFIED  (unit + e2e)
+bounded auto-restart after engine death            VERIFIED  (unit, crash test)
+tool loop (call -> registry -> exec -> follow-up)  VERIFIED  (deterministic tests)
+tool schemas advertised to engine                  VERIFIED  (e2e envelope)
+attachments (upload/stage/chunk/retrieve)          VERIFIED  (unit + e2e)
+context cache (hit/miss/version/bounds/concurrent) VERIFIED  (unit)
+long-context plan + windowing + overflow warning   VERIFIED  (unit + real-engine finding)
+sessions (CRUD, concurrency, sidecar bounds)       VERIFIED  (unit + e2e)
+regenerate                                         VERIFIED  (e2e)
+frontend build (typecheck/lint/vite/embed)         VERIFIED  (npm run build)
+conversation history view + composer running fix   VERIFIED  (code + typecheck; manual UI NOT VERIFIED)
+desktop (Wails/GTK) build                          NOT VERIFIED in sandbox (no GTK dev libs; CI builds it)
+vision pipeline with real mmproj                   NOT VERIFIED (no mmproj model tested)
+```
+
+Key product finding from real-engine testing: with the FULL tool registry,
+the AI-context briefing + tool schemas cost ~9.8k tokens, so the previous
+default 8k context window could not fit even the FIRST request. The default
+numCtx is now 16384 and the context plan reports overflow visibly instead of
+letting the engine fail silently.
+
+The remaining priority is keeping that full path verified while polishing UX.
 
 The priority is:
 
