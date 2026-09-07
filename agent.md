@@ -10,6 +10,8 @@ Current release: `v1.1.4Z` (functional-maturity release; see `worklog.md` for th
 
 **Read `worklog.md` before working.** It records the audit findings and the fixes this release shipped, including which subsystems were previously unwired and why.
 
+**Read `ARCHITECTURE.md` for the implementation truth table and the validated future direction.** Its Part II records the planned architecture (small local models, tiered model routing, the Context Engine, context budgeting, multi-agent, artifact-based communication, document editing). None of that is implemented — never present it as current capability. Its Part III defines the documentation truth standard every change must follow.
+
 ---
 
 # 1. Mission
@@ -85,6 +87,7 @@ internal/tools       17 agent tools
 internal/memory      M1–M7 trust-classed store
 internal/recall      BM25 recall + feedback steering
 internal/research    multi-provider search
+internal/multiagent  planner→executor→critic pipeline (CLI `ask --multi` ONLY — sequential, single model, no HTTP/UI surface)
 internal/updater     engine download/update (zip-slip hardened)
 internal/logging     log catcher + redaction
 internal/sysinfo     hardware probe (CIM-first on Windows)
@@ -196,8 +199,39 @@ A button is not a feature. An endpoint is not a feature. A compile is not a feat
    unit-tested; it has not yet been observed in a real multi-hour thread)
 4. Optional: LLM-enhanced continuum distillation (Enhance path — the
    deterministic Distill is what runs today)
+5. Context Engine foundations (PLANNED work — see ARCHITECTURE.md Part II):
+   start with the hierarchical chunk model and a structural index over
+   the repository, extending internal/chunking and internal/contextplan
+   rather than replacing them
+6. Model tier discovery + capability-based routing (PLANNED — see
+   ARCHITECTURE.md §II.2): map installed models to tiers by measured
+   properties before any routing decisions exist
 ```
 
-# 14. Final rule
+# 14. Architectural direction (PLANNED — read `ARCHITECTURE.md` Part II)
+
+The validated direction for SHEYTAN's future AI runtime, in one paragraph:
+small fast local models are the foundation (`many efficient agents +
+orchestration + tools + external memory + verification`, never one
+giant model); a tier ladder (Tier 0 smallest → Tier 4 optional
+high-end multimodal) routes work by capability with model-agnostic,
+hardware-adaptive rules; the Context Engine treats model context as
+working memory backed by external project memory (structural index →
+semantic index → hierarchical retrieval → budgeted context builder);
+context budgeting enforces the smallest sufficient working set;
+specialized agents (planner, coder, researcher, tester, debugger,
+documentation, reviewer, verifier) communicate through structured
+artifacts (`analysis.json`, `patch.diff`, `findings.md`,
+`test-results.json`); document editing flows through section-aware
+retrieval, structured patches and objective validation gates where the
+model is never the authority on correctness.
+
+Every clause above is **future architecture**. The current runtime is a
+sequential single-agent loop with one model per session (plus the
+CLI-only sequential multiagent pipeline). Full details, current-state
+notes and the candidate model examples (verified 2026-09, labeled
+non-integrated) are in `ARCHITECTURE.md`.
+
+# 15. Final rule
 
 Prefer real behavior + verification + reliability over more panels, more settings, more visual features. The next agent must work from evidence, not assumptions.

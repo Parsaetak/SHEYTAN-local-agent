@@ -22,6 +22,87 @@ v1.1.4Z is a **functional-maturity and remediation release**: a full-repository 
 
 ---
 
+# v1.1.4Z Windows CI repair (2026-09-07, post-release)
+
+The `Windows x64` job of the `Build Desktop` workflow failed at the
+`Verify release metadata` step with:
+
+```text
+A positional parameter cannot be found that accepts argument '1.1.4\'.
+```
+
+## Root cause
+
+The step reused **Bash-style `\"` escaping inside PowerShell strings**:
+
+```powershell
+-Pattern "AppVersion  = \"$env:APP_VERSION\""   # invalid in PowerShell
+```
+
+PowerShell terminates the string at the quote after the backslash, the
+`-Pattern` argument splits into extra positional tokens, and parameter
+binding fails on the fragment `1.1.4\`. The release metadata itself was
+never wrong — `node scripts/release-version.mjs` succeeded and all four
+surfaces were in sync. Reproduced locally with pwsh 7.4.6 executing the
+verbatim step script: identical error, exit 1.
+
+## Second (latent) defect fixed in the same step
+
+`Select-String ... | Out-Null` **exits 0 when nothing matches**. Even with
+correct quoting, a mismatched release surface would have passed the gate
+silently (verified by test: wrong version, exit 0). The repaired step uses
+`-Quiet` and throws on a false result, so a metadata mismatch now fails
+the job loudly.
+
+## Fix
+
+`Windows x64` job, `Verify release metadata` step: rewritten with
+PowerShell-native single-quoted literals plus explicit concatenation
+(no escaping needed), `-SimpleMatch` retained, all four release surfaces
+checked in a data-driven loop, expectations derived from
+`$env:APP_VERSION` (version-agnostic, no hard-coded version). The bash
+`grep -F` equivalents in the audit and Linux jobs were already correct
+and untouched.
+
+## Verification performed (this repair)
+
+- The exact step script (extracted verbatim from the workflow YAML)
+  executed with pwsh 7.4.6 against the real repository files:
+  10/10 checks — correct metadata passes; wrong `APP_VERSION` fails;
+  corrupted `SIGNATURE` fails; version bump to 1.1.5 through the release
+  machinery passes and restores cleanly; no `\"` artifacts remain
+  anywhere in the workflow.
+- `node scripts/release-version.mjs` and `--check`: all four surfaces
+  consistent, no drift, byte-preserving sync intact.
+- Full suite re-run after the change: `go build`/`go vet` headless,
+  `go test -tags headless ./internal/...` (21 packages),
+  `-race` on agent/llm/api, full headless tree, `npm ci`/typecheck/lint
+  (0 warnings)/build, stress suite 30/0, releasegate — all green.
+- `zeta_release_surface` stress contract still pins the workflow shape;
+  no contract fragment was touched.
+
+## Repository consistency cleanups shipped with the repair
+
+- `web/static`: the committed tree carried a stale duplicate generation of
+  hashed assets and a `manifest.json` pointing at the old generation while
+  `index.html` referenced the new one. A clean `npm run build` +
+  `scripts/sync-web.mjs` removes the 8 stale files and corrects the
+  manifest; the runtime entry (`index.html` + referenced assets) is
+  byte-identical.
+- Documentation audit (new `ARCHITECTURE.md`, updates to `README.md`,
+  `agent.md`, this file, `FIX-README.md`): every capability statement is
+  now labeled with the truth standard (IMPLEMENTED / TESTED / PARTIALLY
+  IMPLEMENTED / PLANNED), the small-models/multi-agent/Context-Engine
+  direction is recorded as future architecture, `internal/multiagent` is
+  documented (it was implemented and CLI-wired but absent from the
+  package map), and two overstated claims were corrected
+  ("semantic chunking" → paragraph-boundary chunking; "checksum-verified
+  publication" → integrity-checked publication via ZIP CRC + entry
+  contracts — the SHA256 steps left the workflow during earlier
+  refactors).
+
+---
+
 # v1.1.4Z Remediation Log (2026-09-07)
 
 ## Audit scope and method

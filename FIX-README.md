@@ -1,5 +1,11 @@
 # SHEYTAN-Local-Agent v1.1.2Z — CI Failure Diagnosis & Complete Fix
 
+> **Historical record (2026-09, v1.1.2Z era), retained for reference.**
+> It describes the workflow as it existed then; the SHA256 recording
+> steps it mentions were later removed during workflow refactors, and the
+> current pipeline is documented in `README.md` and `worklog.md`.
+> `ARCHITECTURE.md` holds the implementation truth table.
+
 This package fixes the failed `Build Desktop` runs for **v1.1.2Z** (tag run
 33833819590), the first fix attempt **v1.1.2Z-fix** (runs 33834866456 and
 33885579070), and a latent Linux-job failure that would have surfaced next.

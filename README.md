@@ -26,7 +26,7 @@ A single Windows-first desktop application that:
 1. **Manages its own inference engine** — a llama.cpp server is downloaded, launched, health-checked, supervised (bounded auto-restart) and updated automatically. No manual engine babysitting.
 2. **Runs a real agent loop** — plan → tool calls → observations → verification → final answer, with streaming, cancellation, retries, per-run time budgets and loop prevention.
 3. **Executes engineering work in an isolated Coding Lab** — workspace copies, shell/network/dangerous-command policy, objective verification gates, repair loops, snapshot-before-promote.
-4. **Treats long context as an engineering problem** — measured context budgets, structured chunking, a content-keyed cache, provenance-tagged retrieval, recall of past exchanges, and automatic chapter rollover for sessions that outgrow their window.
+4. **Treats long context as an engineering problem** — measured context budgets, structure-aware (paragraph-boundary) chunking, a content-keyed cache, provenance-tagged retrieval, recall of past exchanges, and automatic chapter rollover for sessions that outgrow their window.
 
 The model is never the authority on whether an engineering task succeeded — objective verification is.
 
@@ -69,7 +69,7 @@ Critical execution logic belongs to Go. Presentation and interaction logic belon
 | **Agent loop** | Streaming responses with think-tag splitting and native `reasoning_content`; tool calls with argument validation; tool-result follow-up turns; iteration cap (default 25); per-run time budget (default 60 min); abort with partial-result preservation; regenerate; timeout-vs-abort distinguished in the UI |
 | **Tools** | 17 registered tools: `shell`, `files`, `codeExec` (Job-Object sandboxed), `webSearch`, `git`, `browser`, `dataAnalysis`, `json`, `archive`, `fetch`, `diff`, `screenshot`, `linux`, `coding_lab`, `research`, `memory` (+ sandbox override). Tool schemas are measured exactly before windowing |
 | **Coding Lab** | Isolated workspace copies (symlinks skipped, `.git` excluded), lexical command policy (dangerous/network/interactive/escape denylists + expansion-token hardening), 2 MiB bounded output, sanitized environment (secrets scrubbed, `HOME` pinned to the workspace), objective verification (trivial `echo`-style checks rejected), bounded repair loop with repeat-command detection, patch export, snapshot-before-promote |
-| **Attachments** | Content-addressed staging (sha256, symlink-safe, no exec bits), size/count/processing/chunk caps, text normalization + semantic chunking, cached retrieval with provenance headers, image classification into the vision pipeline |
+| **Attachments** | Content-addressed staging (sha256, symlink-safe, no exec bits), size/count/processing/chunk caps, text normalization + paragraph-boundary chunking, cached retrieval with provenance headers, image classification into the vision pipeline |
 | **Context** | Measured context plan (system / tools / recall / attachments / history sections with priorities); history windowing to the budget; content-keyed LRU cache (entries + bytes + TTL bounds); overflow surfaces as a visible error instead of an engine rejection |
 | **Long context** | Continuum chapter rollover: when a session crosses the pressure threshold, facts/decisions/threads are distilled into a framework and the conversation continues in a fresh chapter session (the UI follows automatically) |
 | **Memory & recall** | Trust-classed memory (M1–M7, external material quarantined), BM25 recall with recency boost and 👍/👎 feedback steering (persistent sidecar) |
@@ -210,7 +210,44 @@ After any frontend change, `npm run build` must be run so `web/static` (the embe
 
 - **19+ Go test packages** — engine lifecycle (real process spawn/kill via a fake llama.cpp re-exec), agent loop (fake SSE engine: streaming, tool calls, abort, error propagation), API surface (HTTP-level session/attachment/config/feedback contracts), attachments, chunking, context cache, context plan, continuum, lab (policy, repair loop, verification), memory, recall, research (SSRF/alias contracts), sessions (concurrency, sidecar bounds), termshell, tools, vision, releasegate, plus v1.1.4Z regression tests for the config source race, sampling wire format, GGUF parser, stream stall watchdog, zip-slip and escape tokens.
 - **Stress suite** — 30 scenarios (hostile prompts, garbage tool args, shell injection, memory/session contracts, release-surface pinning) run in CI and as a release gate.
-- **CI** (`.github/workflows/build-desktop.yml`) — audit job (version sync + frontend verify), Windows job (tests + GUI exe + console probe + package + zip verification), Linux job (tests + stress suite + package), release job (version-agnostic tag gate, checksum-verified publication).
+- **CI** (`.github/workflows/build-desktop.yml`) — audit job (version sync + frontend verify), Windows job (tests + GUI exe + console probe + package + zip verification), Linux job (tests + stress suite + package), release job (version-agnostic tag gate, integrity-checked publication: ZIP CRC test plus entry-contract verification on both platform ZIPs).
+
+# Development direction (planned — NOT implemented today)
+
+SHEYTAN's validated future direction is documented in full in
+`ARCHITECTURE.md` (Part II). Nothing in that direction is implemented
+yet; the list below is design intent, not shipped capability:
+
+- **Small, fast, local models as the foundation** — the system is
+  designed for `many efficient agents + orchestration + tools + external
+  memory + verification`, not one enormous model. Model size is not the
+  sole source of system intelligence.
+- **Model tiers and hardware-adaptive routing** — a tier ladder
+  (Tier 0 smallest → Tier 4 optional high-end multimodal) with
+  model-agnostic, capability-based routing by task complexity, modality,
+  latency, hardware and budget. Candidate model families (e.g.
+  Gemma-class, GLM-class) are examples only, not integrations.
+- **The Context Engine** — repository structural index → semantic index
+  → hierarchical retrieval → budgeted context builder, so model context
+  is treated as *working memory* while external structured storage
+  provides *project memory*. The implemented seeds today are the context
+  plan, context cache, attachment chunking, recall and continuum.
+- **Context budgeting** — "use the smallest sufficient working set",
+  extending the existing measured budget (`internal/contextplan`) to
+  finer-grained sections.
+- **Multi-agent architecture** — specialized low-cost agents (planner,
+  coder, researcher, tester, debugger, documentation, reviewer,
+  verifier) with per-agent model assignment. Today the runtime is a
+  sequential single-agent loop (plus a CLI-only sequential
+  planner→executor→critic pipeline); parallelism remains a deliberate
+  non-goal until implemented.
+- **Artifact-based agent communication** — agents exchange
+  `analysis.json` / `patch.diff` / `findings.md` / `test-results.json`
+  style artifacts instead of forwarding whole conversation histories.
+- **Document editing architecture** — section-aware retrieval →
+  structured patch → validation gates (structure, references, forbidden
+  deletions, version metadata) with the model never the authority on
+  correctness.
 
 # Version
 

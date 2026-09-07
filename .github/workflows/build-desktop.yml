@@ -150,29 +150,47 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
 
-          Select-String `
-            -Path "internal/config/config.go" `
-            -Pattern "AppVersion  = \"$env:APP_VERSION\"" `
-            -SimpleMatch `
-            -ErrorAction Stop | Out-Null
+          # v1.1.4Z CI repair: the original step reused Bash-style
+          # backslash-quote escaping inside PowerShell strings. PowerShell
+          # terminates the string at the quote after the backslash, splits
+          # the -Pattern argument into extra positional tokens and fails
+          # with "A positional parameter cannot be found that accepts
+          # argument". Single-quoted literals plus explicit concatenation
+          # need no escaping, and the -Quiet boolean makes a missing match
+          # FAIL the step (a bare Select-String pipeline exits 0 when
+          # nothing matches, which would silently weaken this gate).
+          $checks = @(
+            @{
+              Label   = "internal/config/config.go AppVersion"
+              Path    = "internal/config/config.go"
+              Pattern = 'AppVersion  = "' + $env:APP_VERSION + '"'
+            },
+            @{
+              Label   = "package.json version"
+              Path    = "package.json"
+              Pattern = '"version": "' + $env:APP_VERSION + '-zeta"'
+            },
+            @{
+              Label   = "build/config.yml productVersion"
+              Path    = "build/config.yml"
+              Pattern = 'productVersion: "' + $env:APP_VERSION + '-zeta"'
+            },
+            @{
+              Label   = "SIGNATURE first line"
+              Path    = "SIGNATURE"
+              Pattern = 'SHEYTAN-Local-Agent v' + $env:APP_VERSION
+            }
+          )
 
-          Select-String `
-            -Path "package.json" `
-            -Pattern "\"version\": \"$env:APP_VERSION-zeta\"" `
-            -SimpleMatch `
-            -ErrorAction Stop | Out-Null
+          foreach ($check in $checks) {
+            $found = Select-String -Path $check.Path -Pattern $check.Pattern -SimpleMatch -Quiet
 
-          Select-String `
-            -Path "build/config.yml" `
-            -Pattern "productVersion: \"$env:APP_VERSION-zeta\"" `
-            -SimpleMatch `
-            -ErrorAction Stop | Out-Null
+            if (-not $found) {
+              throw "Release metadata mismatch in $($check.Label): expected $($check.Pattern)"
+            }
 
-          Select-String `
-            -Path "SIGNATURE" `
-            -Pattern "SHEYTAN-Local-Agent v$env:APP_VERSION" `
-            -SimpleMatch `
-            -ErrorAction Stop | Out-Null
+            Write-Host "Verified $($check.Label): $($check.Pattern)"
+          }
 
       - name: Install frontend dependencies
         shell: pwsh
