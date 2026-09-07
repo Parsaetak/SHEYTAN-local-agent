@@ -1,10 +1,9 @@
 package installer
 
-import (
-	"os/exec"
-)
+import "os/exec"
 
-// lookPathImpl wraps exec.LookPath so we can mock it in tests if needed.
-func lookPathImpl(name string) (string, error) {
+// lookPath resolves an executable on PATH (thin wrapper kept as the single
+// seam where discovery happens).
+func lookPath(name string) (string, error) {
 	return exec.LookPath(name)
 }

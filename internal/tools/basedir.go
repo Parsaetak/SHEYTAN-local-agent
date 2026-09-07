@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 )
@@ -386,4 +387,33 @@ func UnsafeAbsolutePath(p string) bool {
 
 	resolved, err := ResolvePathChecked(p)
 	return err != nil || resolved == ""
+}
+
+// pruneScreenshots keeps only the newest `keep` shot-*/screen-* PNGs in
+// dir (v1.1.4Z: screenshots previously accumulated without bound). Names
+// are timestamp-prefixed, so lexicographic descending order is recency
+// order.
+func pruneScreenshots(dir string, keep int) {
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) <= keep {
+		return
+	}
+
+	var names []string
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".png") {
+			continue
+		}
+		names = append(names, e.Name())
+	}
+
+	if len(names) <= keep {
+		return
+	}
+
+	sort.Sort(sort.Reverse(sort.StringSlice(names)))
+
+	for _, name := range names[keep:] {
+		_ = os.Remove(filepath.Join(dir, name))
+	}
 }

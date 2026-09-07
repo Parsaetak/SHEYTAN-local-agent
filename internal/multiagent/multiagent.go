@@ -114,8 +114,11 @@ func (m *MultiAgent) Run(
 	prompt string,
 	onActivity func(agent.Activity),
 ) (string, error) {
-	if m.maxIter < 1 {
-		m.maxIter = 3
+	// v1.1.4Z: local default instead of mutating the shared struct —
+	// concurrent Run calls previously raced this write.
+	maxIter := m.maxIter
+	if maxIter < 1 {
+		maxIter = 3
 	}
 
 	// 1) PLANNER
@@ -532,6 +535,13 @@ func buildExecutionPrompt(
 // extractJSON finds the first { ... } block in s.
 //
 // LLMs sometimes wrap JSON in markdown fences or add prose around it.
+// ExtractJSON extracts the first brace-balanced JSON object from a model
+// reply (fences and prose tolerated). Exported (v1.1.4Z) so the release
+// stress suite tests the REAL parser instead of a hand-copied duplicate.
+func ExtractJSON(s string) string {
+	return extractJSON(s)
+}
+
 func extractJSON(s string) string {
 	s = strings.TrimSpace(s)
 

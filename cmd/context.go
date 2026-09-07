@@ -15,7 +15,7 @@ import (
 //	sheytan context              print the effective instructions + live env
 //	sheytan context --path       print only the file path
 //	sheytan context --reset      regenerate the canonical file (drops edits)
-func AICtx(cfg *config.Config) int {
+func AICtx(cfg *config.Config, args []string) int {
 	fs := flag.NewFlagSet(
 		"context",
 		flag.ContinueOnError,
@@ -34,7 +34,7 @@ func AICtx(cfg *config.Config) int {
 		"print only the file path",
 	)
 
-	if err := fs.Parse(os.Args[2:]); err != nil {
+	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 

@@ -50,9 +50,9 @@ func (s *Server) engineSnapshot() engineSnapshot {
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 	}
 
-	if s.cfg.IsRemote() {
+	if s.src.Load().IsRemote() {
 		snap.Provider = "remote"
-		snap.Model = s.cfg.EffectiveModel()
+		snap.Model = s.src.Load().EffectiveModel()
 
 		if snap.State == llm.StateIdle {
 			// A remote provider needs no local engine: report a distinct
@@ -65,7 +65,7 @@ func (s *Server) engineSnapshot() engineSnapshot {
 	}
 
 	snap.Provider = "local"
-	snap.Model = s.cfg.DisplayModel()
+	snap.Model = s.src.Load().DisplayModel()
 	snap.LoadedPath = s.llama.LoadedModel()
 	snap.Vision = s.llama.VisionActive()
 	snap.Logs = tailStrings(s.llama.Logs(), 24)

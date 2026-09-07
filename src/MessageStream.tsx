@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 
 import type { Attachment, ChatMessage } from "./api";
 import { useRuntimeStore } from "./store";
@@ -52,10 +52,37 @@ function AttachmentChip({
 
 const MessageBubble = memo(function MessageBubble({
   message,
+  query,
 }: {
   message: ChatMessage;
+  query: string | null;
 }) {
   const isUser = message.role === "user";
+
+  // v1.1.4Z: recall feedback. 👍/👎 on an assistant reply steers the
+  // recall engine's future relevance scoring (the backend steering has
+  // existed since v1.0.6 — this is its first user-facing write path).
+  const sendFeedback = useRuntimeStore((state) => state.sendFeedback);
+  const [feedback, setFeedback] = useState<"liked" | "disliked" | null>(
+    null,
+  );
+  const [feedbackError, setFeedbackError] = useState(false);
+
+  const handleFeedback = (liked: boolean) => {
+    if (!query || feedback) {
+      return;
+    }
+
+    const next = liked ? "liked" : "disliked";
+
+    setFeedback(next);
+
+    sendFeedback(query, liked).catch(() => {
+      // Optimistic verdict failed — revert so the user can retry.
+      setFeedback(null);
+      setFeedbackError(true);
+    });
+  };
 
   return (
     <article className={`message-row ${isUser ? "from-user" : "from-agent"}`}>
@@ -83,6 +110,36 @@ const MessageBubble = memo(function MessageBubble({
                 </span>
               </span>
             ))}
+          </div>
+        ) : null}
+
+        {!isUser && message.content && query ? (
+          <div className="message-feedback" role="group" aria-label="Rate this reply for recall relevance">
+            <button
+              type="button"
+              className={`feedback-button like ${feedback === "liked" ? "active" : ""}`}
+              disabled={feedback !== null}
+              onClick={() => handleFeedback(true)}
+              aria-label="Helpful — prioritize similar past exchanges in recall"
+              title="Helpful — recall will prioritize this exchange"
+            >
+              ◆
+            </button>
+
+            <button
+              type="button"
+              className={`feedback-button dislike ${feedback === "disliked" ? "active" : ""}`}
+              disabled={feedback !== null}
+              onClick={() => handleFeedback(false)}
+              aria-label="Not helpful — deprioritize similar past exchanges"
+              title="Not helpful — recall will deprioritize this exchange"
+            >
+              ◇
+            </button>
+
+            {feedbackError ? (
+              <span className="feedback-error">couldn't save rating</span>
+            ) : null}
           </div>
         ) : null}
       </div>
@@ -152,6 +209,29 @@ function MessageStream() {
     [messages],
   );
 
+  // The user message immediately preceding each assistant reply is the
+  // exchange's recall query — the backend derives the same capsule id.
+  const messageQueries = useMemo(() => {
+    const queries: (string | null)[] = [];
+    let lastUser: string | null = null;
+
+    for (const message of messages) {
+      if (message.role === "user") {
+        lastUser = message.content;
+        queries.push(null);
+      } else {
+        queries.push(lastUser);
+      }
+    }
+
+    return queries;
+  }, [messages]);
+
+  const queryWindow =
+    messages.length > MAX_RENDERED_MESSAGES
+      ? messageQueries.slice(-MAX_RENDERED_MESSAGES)
+      : messageQueries;
+
   // Only the last ~40 activity entries are mirrored inline; the full
   // activity feed stays bounded in the store.
   const inlineActivity = useMemo(() => {
@@ -188,6 +268,7 @@ function MessageStream() {
               <MessageBubble
                 key={`${index}-${message.role}-${message.at ?? ""}`}
                 message={message}
+                query={queryWindow[index] ?? null}
               />
             ))}
 

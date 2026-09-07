@@ -779,23 +779,6 @@ function SettingsPanel() {
             <label className="inline-toggle">
               <input
                 type="checkbox"
-                checked={config.verboseAgent}
-                onChange={(event) => {
-                  const value = event.target.checked;
-
-                  setConfig((current) =>
-                    current ? { ...current, verboseAgent: value } : current,
-                  );
-
-                  void save({ verboseAgent: value });
-                }}
-              />
-              <span>Verbose agent events</span>
-            </label>
-
-            <label className="inline-toggle">
-              <input
-                type="checkbox"
                 checked={config.recallEnabled}
                 onChange={(event) => {
                   const value = event.target.checked;

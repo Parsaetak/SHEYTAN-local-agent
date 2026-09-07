@@ -16,12 +16,14 @@ package termshell
 
 import (
 	"fmt"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/humanize"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -37,7 +39,13 @@ type ProcEntry struct {
 }
 
 // Engine is one shell session (its own cwd, history and environment).
+//
+// v1.1.4Z: Exec is serialized by a mutex. The engine instance is shared
+// between the agent's `linux` tool and any future Terminal view; the agent
+// executes tools from concurrent session runs, and cwd/history/env were
+// unsynchronized shared state.
 type Engine struct {
+	mu      sync.Mutex
 	root    string
 	cwd     string
 	history []string
@@ -108,6 +116,10 @@ func (e *Engine) Exec(line string) string {
 	if line == "" {
 		return ""
 	}
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
 	e.pushHistory(line)
 
 	stages := splitPipeline(line)
@@ -812,19 +824,6 @@ func dirSizeOf(path string) int64 {
 	return total
 }
 
-func humanBytes(n int64) string {
-	const unit = 1024
-	if n < unit {
-		return fmt.Sprintf("%d B", n)
-	}
-	div, exp := int64(unit), 0
-	for m := n / unit; m >= unit; m /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.1f %cB", float64(n)/float64(div), "KMGTPE"[exp])
-}
-
 func cmdDu(e *Engine, args []string, stdin string) string {
 	human := true
 	var targets []string
@@ -847,7 +846,7 @@ func cmdDu(e *Engine, args []string, stdin string) string {
 		}
 		total := dirSizeOf(abs)
 		if human {
-			fmt.Fprintf(&b, "%s\t%s\n", humanBytes(total), e.display(abs))
+			fmt.Fprintf(&b, "%s\t%s\n", humanize.Bytes(total), e.display(abs))
 		} else {
 			fmt.Fprintf(&b, "%d\t%s\n", total, e.display(abs))
 		}
@@ -866,7 +865,7 @@ func cmdDf(e *Engine, args []string, stdin string) string {
 		pct = int(used * 100 / total)
 	}
 	return fmt.Sprintf("Filesystem      Size  Used Avail Use%% Mounted on\nsheytan-fs  %8s %6s %5s  %2d%%  /",
-		humanBytes(int64(total)), humanBytes(int64(used)), humanBytes(int64(free)), pct)
+		humanize.Bytes(int64(total)), humanize.Bytes(int64(used)), humanize.Bytes(int64(free)), pct)
 }
 
 func cmdTree(e *Engine, args []string, stdin string) string {
@@ -999,7 +998,7 @@ func cmdNeofetch(e *Engine, args []string, stdin string) string {
 		"Kernel: sheytan-linux 1.0.6",
 		"Shell: sheytan-sh",
 		"Uptime: " + time.Since(e.started).Round(time.Second).String(),
-		"Workspace: " + humanBytes(dirSizeOf(e.root)),
+		"Workspace: " + humanize.Bytes(dirSizeOf(e.root)),
 	}
 	var b strings.Builder
 	for i := 0; i < len(art) || i < len(info); i++ {

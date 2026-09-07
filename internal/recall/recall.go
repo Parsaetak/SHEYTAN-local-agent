@@ -109,8 +109,17 @@ func New(dataDir string) *Engine {
 // Dir returns the recall directory (UI/metadata use).
 func (e *Engine) Dir() string { return e.dir }
 
+// maxCapsules bounds the in-memory + on-disk index (v1.1.4Z: the index was
+// append-only forever — recall scoring is O(corpus) and old exchanges lose
+// value over time). Retention keeps the newest capsules.
+const maxCapsules = 5000
+
 // loadLocked reads the whole index into memory exactly once (append-only
 // format: subsequent writes only append + mirror in memory).
+//
+// v1.1.4Z: when the index exceeds maxCapsules it is compacted to the newest
+// maxCapsules lines — unbounded growth made both startup loads and every
+// search slower forever.
 func (e *Engine) loadLocked() {
 	if e.loaded {
 		return
@@ -129,6 +138,39 @@ func (e *Engine) loadLocked() {
 			e.capsules = append(e.capsules, c)
 		}
 	}
+
+	if len(e.capsules) > maxCapsules {
+		e.capsules = e.capsules[len(e.capsules)-maxCapsules:]
+		e.rewriteIndexLocked()
+	}
+}
+
+// rewriteIndexLocked rewrites index.jsonl from the in-memory capsules
+// (atomic tmp+rename).
+func (e *Engine) rewriteIndexLocked() {
+	tmp := e.path + ".tmp"
+	f, err := os.Create(tmp)
+	if err != nil {
+		return
+	}
+
+	enc := json.NewEncoder(f)
+	enc.SetEscapeHTML(false)
+
+	for _, c := range e.capsules {
+		if err := enc.Encode(c); err != nil {
+			f.Close()
+			_ = os.Remove(tmp)
+			return
+		}
+	}
+
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return
+	}
+
+	_ = os.Rename(tmp, e.path)
 }
 
 // loadFeedbackLocked reads the feedback sidecar exactly once (later verdicts

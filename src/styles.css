@@ -2578,3 +2578,54 @@ textarea:focus-visible {
 
   color: var(--text-muted);
 }
+
+/* --- v1.1.4Z: recall feedback (message ratings) --- */
+
+.message-feedback {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  opacity: 0.55;
+  transition: opacity 120ms ease;
+}
+
+.message-row:hover .message-feedback,
+.message-feedback:focus-within {
+  opacity: 1;
+}
+
+.feedback-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--border, #333);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+
+.feedback-button:disabled {
+  cursor: default;
+}
+
+.feedback-button.like.active {
+  color: #4caf88;
+  border-color: #4caf88;
+}
+
+.feedback-button.dislike.active {
+  color: #c2705e;
+  border-color: #c2705e;
+}
+
+.feedback-error {
+  font-size: 11px;
+  opacity: 0.8;
+}

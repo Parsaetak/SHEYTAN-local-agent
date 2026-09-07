@@ -146,13 +146,24 @@ func probeCPU() CPUInfo {
 			}
 		}
 	case "windows":
-		if out, err := proc.Command("wmic", "cpu", "get", "name").Output(); err == nil {
+		// v1.1.4Z: wmic is removed on Windows 11 24H2+. Query CIM via
+		// PowerShell first, fall back to wmic on older builds where the
+		// CIM class is unavailable. Both are cached for the process
+		// lifetime (Probe is a sync.Once), so the extra cost is paid once.
+		if v := cimScalar("Win32_Processor", "Name"); v != "" {
+			c.Name = v
+		} else if out, err := proc.Command("wmic", "cpu", "get", "name").Output(); err == nil {
 			lines := strings.Split(strings.TrimSpace(string(out)), "\n")
 			if len(lines) > 1 {
 				c.Name = strings.TrimSpace(lines[1])
 			}
 		}
-		if out, err := proc.Command("wmic", "cpu", "get", "NumberOfCores").Output(); err == nil {
+
+		if v := cimScalar("Win32_Processor", "NumberOfCores"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil {
+				c.PhysicalCores = n
+			}
+		} else if out, err := proc.Command("wmic", "cpu", "get", "NumberOfCores").Output(); err == nil {
 			lines := strings.Split(strings.TrimSpace(string(out)), "\n")
 			if len(lines) > 1 {
 				if n, err := strconv.Atoi(strings.TrimSpace(lines[1])); err == nil {
@@ -160,8 +171,29 @@ func probeCPU() CPUInfo {
 				}
 			}
 		}
+
+		if v := cimScalar("Win32_Processor", "NumberOfLogicalProcessors"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil {
+				c.LogicalCores = n
+			}
+		}
 	}
 	return c
+}
+
+// cimScalar reads one property of the first instance of a CIM/WMI class
+// through PowerShell (returns "" on any failure).
+func cimScalar(class, property string) string {
+	out, err := proc.Command(
+		"powershell", "-NoProfile", "-Command",
+		fmt.Sprintf("(Get-CimInstance -ClassName %s).%s", class, property),
+	).Output()
+	if err != nil {
+		return ""
+	}
+	v := strings.TrimSpace(string(out))
+	v = strings.Trim(v, "\"")
+	return v
 }
 
 func probeRAM() RAMInfo {
@@ -195,12 +227,23 @@ func probeRAM() RAMInfo {
 			}
 		}
 	case "windows":
-		if out, err := proc.Command("wmic", "OS", "get", "TotalVisibleMemorySize").Output(); err == nil {
+		// v1.1.4Z: CIM first (wmic is gone on Windows 11 24H2+).
+		if v := cimScalar("Win32_OperatingSystem", "TotalVisibleMemorySize"); v != "" {
+			if n, err := strconv.ParseUint(v, 10, 64); err == nil {
+				r.TotalBytes = n * 1024
+			}
+		} else if out, err := proc.Command("wmic", "OS", "get", "TotalVisibleMemorySize").Output(); err == nil {
 			lines := strings.Split(strings.TrimSpace(string(out)), "\n")
 			if len(lines) > 1 {
 				if n, err := strconv.ParseUint(strings.TrimSpace(lines[1]), 10, 64); err == nil {
 					r.TotalBytes = n * 1024
 				}
+			}
+		}
+
+		if v := cimScalar("Win32_OperatingSystem", "FreePhysicalMemory"); v != "" {
+			if n, err := strconv.ParseUint(v, 10, 64); err == nil {
+				r.FreeBytes = n * 1024
 			}
 		}
 	}

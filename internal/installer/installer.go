@@ -174,10 +174,6 @@ func (m *Manager) detect() *State {
 	return s
 }
 
-func lookPath(name string) (string, error) {
-	return lookPathImpl(name)
-}
-
 // LoadState reads the persisted state file.
 func (m *Manager) LoadState() (*State, error) {
 	path := m.cfg.StatePath()

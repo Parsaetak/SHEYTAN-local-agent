@@ -146,8 +146,8 @@ func TestFirstInferenceStreamsAndCompletes(t *testing.T) {
 	})
 
 	cfg := remoteConfig(t, server.URL)
-	client := llm.NewClient(cfg)
-	orch := New(cfg, client)
+	client := llm.NewClient(config.NewSource(cfg))
+	orch := New(config.NewSource(cfg), client)
 
 	var events []Activity
 
@@ -208,8 +208,8 @@ func TestToolLoopExecutesToolAndFollowsUp(t *testing.T) {
 	})
 
 	cfg := remoteConfig(t, server.URL)
-	client := llm.NewClient(cfg)
-	orch := New(cfg, client)
+	client := llm.NewClient(config.NewSource(cfg))
+	orch := New(config.NewSource(cfg), client)
 
 	tool := &fakeTool{name: "echo"}
 	orch.Register(tool)
@@ -249,8 +249,8 @@ func TestUnknownToolSurfacesErrorNotProse(t *testing.T) {
 	})
 
 	cfg := remoteConfig(t, server.URL)
-	client := llm.NewClient(cfg)
-	orch := New(cfg, client)
+	client := llm.NewClient(config.NewSource(cfg))
+	orch := New(config.NewSource(cfg), client)
 
 	_, err := orch.RunDetailed(context.Background(), []llm.Message{
 		{Role: "user", Content: "call the missing tool"},
@@ -271,8 +271,8 @@ func TestAbortCancelsRun(t *testing.T) {
 	})
 
 	cfg := remoteConfig(t, server.URL)
-	client := llm.NewClient(cfg)
-	orch := New(cfg, client)
+	client := llm.NewClient(config.NewSource(cfg))
+	orch := New(config.NewSource(cfg), client)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -312,8 +312,8 @@ func TestLLMErrorPropagatesToCaller(t *testing.T) {
 	defer server.Close()
 
 	cfg := remoteConfig(t, server.URL)
-	client := llm.NewClient(cfg)
-	orch := New(cfg, client)
+	client := llm.NewClient(config.NewSource(cfg))
+	orch := New(config.NewSource(cfg), client)
 
 	_, err := orch.RunDetailed(context.Background(), []llm.Message{
 		{Role: "user", Content: "trigger the failure"},

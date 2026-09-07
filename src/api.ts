@@ -1,4 +1,4 @@
-import { API_BASE, WS_BASE, activityWebSocketURL } from "./config";
+import { API_BASE } from "./config";
 
 export interface AppState {
   appName: string;
@@ -77,6 +77,11 @@ export interface Model {
   path?: string;
   sizeBytes?: number;
   loaded?: boolean;
+  // v1.1.4Z: GGUF header metadata (populated from the model card parser).
+  architecture?: string;
+  quantization?: string;
+  contextLength?: number;
+  parameterInfo?: string;
 }
 
 export interface ModelsResponse {
@@ -138,8 +143,8 @@ export interface RuntimeConfig {
 
   maxIterations: number;
   parallelTools: boolean;
-  verboseAgent: boolean;
 
+  runTimeoutMinutes?: number;
   sandboxEnabled: boolean;
   sandboxMemory: string;
   sandboxCPU: number;
@@ -150,7 +155,6 @@ export interface RuntimeConfig {
   browserHeadless: boolean;
   browserSlowMoMs: number;
 
-  proMode: boolean;
   updateSchedule: string;
   lastUpdateCheck: string;
 
@@ -249,8 +253,6 @@ export type ActivityEvent = {
   data?: unknown;
   [key: string]: unknown;
 };
-
-export type ConnectionState = "connected" | "connecting" | "disconnected";
 
 export interface LabWorkspace {
   id: string;
@@ -699,6 +701,21 @@ export const api = {
     );
   },
 
+  // v1.1.4Z: recall feedback — 👍/👎 on a past exchange steers future
+  // recall scoring (the backend sidecar existed since v1.0.6 with no
+  // writer).
+  feedback(payload: {
+    sessionId: string;
+    query: string;
+    liked: boolean;
+    clear?: boolean;
+  }): Promise<void> {
+    return request<void>("/feedback", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+
   abort(sessionId: string): Promise<AbortResponse> {
     return request<AbortResponse>("/abort", {
       method: "POST",
@@ -768,109 +785,3 @@ export const api = {
   },
 };
 
-export function getState(): Promise<AppState> {
-  return api.state();
-}
-
-export function getSystemInfo(): Promise<SysInfo> {
-  return api.sysinfo();
-}
-
-export function getPresets(): Promise<Preset[]> {
-  return api.presets();
-}
-
-export function getModels(): Promise<ModelsResponse> {
-  return api.models();
-}
-
-export function getTools(): Promise<ToolInfo[]> {
-  return api.tools();
-}
-
-export function getSessions(): Promise<Session[]> {
-  return api.sessions();
-}
-
-export function createSession(): Promise<Session> {
-  return api.createSession();
-}
-
-export function deleteSession(id: string): Promise<void> {
-  return api.deleteSession(id);
-}
-
-export function runAgent(payload: RunRequest): Promise<RunResponse> {
-  return api.run(payload);
-}
-
-export function abortAgent(sessionId: string): Promise<AbortResponse> {
-  return api.abort(sessionId);
-}
-
-export function connectActivity(
-  onEvent: (event: ActivityEvent) => void,
-  onStateChange?: (state: ConnectionState) => void,
-  sessionId?: string | null,
-): () => void {
-  let socket: WebSocket | undefined;
-  let stopped = false;
-  let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
-
-  const connect = () => {
-    if (stopped) {
-      return;
-    }
-
-    onStateChange?.("connecting");
-
-    socket = new WebSocket(activityWebSocketURL(sessionId));
-
-    socket.addEventListener("open", () => {
-      onStateChange?.("connected");
-    });
-
-    socket.addEventListener("message", (message) => {
-      try {
-        const event = JSON.parse(message.data) as ActivityEvent;
-        onEvent(event);
-      } catch {
-        onEvent({
-          type: "message",
-          message: String(message.data),
-        });
-      }
-    });
-
-    socket.addEventListener("close", () => {
-      socket = undefined;
-
-      if (stopped) {
-        onStateChange?.("disconnected");
-        return;
-      }
-
-      onStateChange?.("disconnected");
-      reconnectTimer = setTimeout(connect, 1500);
-    });
-
-    socket.addEventListener("error", () => {
-      onStateChange?.("disconnected");
-    });
-  };
-
-  connect();
-
-  return () => {
-    stopped = true;
-
-    if (reconnectTimer !== undefined) {
-      clearTimeout(reconnectTimer);
-    }
-
-    socket?.close();
-    socket = undefined;
-  };
-}
-
-export { API_BASE, WS_BASE };

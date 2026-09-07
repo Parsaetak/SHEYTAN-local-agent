@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/humanize"
 	"io"
 	"os"
 	"path/filepath"
@@ -129,7 +130,7 @@ func (t ArchiveTool) zip_(sources []string, dest string) (string, error) {
 	if err := f.Close(); err != nil {
 		return "", err
 	}
-	msg := fmt.Sprintf("zipped %d file(s) -> %s (%s)", added, dest, humanBytes(total))
+	msg := fmt.Sprintf("zipped %d file(s) -> %s (%s)", added, dest, humanize.Bytes(total))
 	if skipped > 0 {
 		msg += fmt.Sprintf(" (%d source path(s) not found, skipped)", skipped)
 	}
@@ -323,7 +324,7 @@ func (t ArchiveTool) tar_(sources []string, dest string) (string, error) {
 	if err := f.Close(); err != nil {
 		return "", err
 	}
-	msg := fmt.Sprintf("tarred %d file(s) -> %s (%s)", added, dest, humanBytes(total))
+	msg := fmt.Sprintf("tarred %d file(s) -> %s (%s)", added, dest, humanize.Bytes(total))
 	if skipped > 0 {
 		msg += fmt.Sprintf(" (%d source path(s) skipped)", skipped)
 	}
@@ -417,9 +418,9 @@ func (t ArchiveTool) list(path string) (string, error) {
 				break
 			}
 			total += zf.UncompressedSize64
-			fmt.Fprintf(&b, "  %-40s %10s\n", zf.Name, humanBytes(int64(zf.UncompressedSize64)))
+			fmt.Fprintf(&b, "  %-40s %10s\n", zf.Name, humanize.Bytes(int64(zf.UncompressedSize64)))
 		}
-		fmt.Fprintf(&b, "total uncompressed: %s\n", humanBytes(int64(total)))
+		fmt.Fprintf(&b, "total uncompressed: %s\n", humanize.Bytes(int64(total)))
 		return b.String(), nil
 	}
 	f, err := os.Open(abs)
@@ -450,26 +451,13 @@ func (t ArchiveTool) list(path string) (string, error) {
 		n++
 		total += hdr.Size
 		if n <= 50 {
-			fmt.Fprintf(&b, "  %-40s %10s\n", hdr.Name, humanBytes(hdr.Size))
+			fmt.Fprintf(&b, "  %-40s %10s\n", hdr.Name, humanize.Bytes(hdr.Size))
 		}
 	}
 	if n > 50 {
 		fmt.Fprintf(&b, "… %d more\n", n-50)
 	}
-	return fmt.Sprintf("%d entr(ies), total %s:\n%s", n, humanBytes(total), b.String()), nil
-}
-
-func humanBytes(n int64) string {
-	switch {
-	case n >= 1<<30:
-		return fmt.Sprintf("%.1f GB", float64(n)/(1<<30))
-	case n >= 1<<20:
-		return fmt.Sprintf("%.1f MB", float64(n)/(1<<20))
-	case n >= 1<<10:
-		return fmt.Sprintf("%.1f KB", float64(n)/(1<<10))
-	default:
-		return fmt.Sprintf("%d B", n)
-	}
+	return fmt.Sprintf("%d entr(ies), total %s:\n%s", n, humanize.Bytes(total), b.String()), nil
 }
 
 // reportFileCreated routes through the shared artifact hook (nil in CLI

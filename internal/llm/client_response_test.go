@@ -40,7 +40,7 @@ func TestChatRejectsEmptyChoices(t *testing.T) {
 	cfg.LLMBaseURL = server.URL
 	cfg.Provider = config.ProviderLocal
 
-	client := NewClient(cfg)
+	client := NewClient(config.NewSource(cfg))
 
 	_, err := client.Chat(
 		context.Background(),
@@ -105,7 +105,7 @@ func TestChatAcceptsNonEmptyChoices(t *testing.T) {
 	cfg.LLMBaseURL = server.URL
 	cfg.Provider = config.ProviderLocal
 
-	client := NewClient(cfg)
+	client := NewClient(config.NewSource(cfg))
 
 	response, err := client.Chat(
 		context.Background(),

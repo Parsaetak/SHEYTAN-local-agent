@@ -76,6 +76,9 @@ func (Screenshot) Run(ctx context.Context, args json.RawMessage) (string, error)
 	if err := os.WriteFile(dst, png, 0o644); err != nil {
 		return "", err
 	}
+
+	// v1.1.4Z: bound the screenshot directory (see pruneScreenshots).
+	pruneScreenshots(shots, 50)
 	if OnFileCreated != nil {
 		OnFileCreated(dst)
 	}

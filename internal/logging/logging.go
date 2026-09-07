@@ -113,7 +113,26 @@ func New(dir string) (*Manager, error) {
 	if err := m.openSinks(); err != nil {
 		return nil, err
 	}
+
+	// v1.1.4Z: crash reports accumulated without bound — every panic added
+	// one forever. Keep the most recent 20.
+	m.pruneCrashes(20)
+
 	return m, nil
+}
+
+// pruneCrashes keeps only the newest n crash-*.log files.
+func (m *Manager) pruneCrashes(keep int) {
+	crashes, err := filepath.Glob(filepath.Join(m.dir, "crashes", "crash-*.log"))
+	if err != nil || len(crashes) <= keep {
+		return
+	}
+
+	sort.Slice(crashes, func(i, j int) bool { return crashes[i] > crashes[j] })
+
+	for _, p := range crashes[keep:] {
+		_ = os.Remove(p)
+	}
 }
 
 func (m *Manager) openSinks() error {
@@ -427,14 +446,16 @@ func (m *Manager) Diagnostics(zipPath string, configPath string, extraFiles map[
 		}
 	}
 
-	// 4. structured logs
+	// 4. structured logs — REDACTED (v1.1.4Z: tool/LLM arguments can contain
+	// secrets the user or the model typed; shipping them raw in a diagnostics
+	// zip was a real leak vector).
 	for _, p := range []string{
 		filepath.Join(m.dir, "tools.jsonl"),
 		filepath.Join(m.dir, "llm.jsonl"),
 	} {
 		if data, err := os.ReadFile(p); err == nil && len(data) > 0 {
 			if w, err := zw.Create(filepath.Base(p)); err == nil {
-				_, _ = w.Write(data)
+				_, _ = w.Write([]byte(redact(string(data))))
 			}
 		}
 	}
@@ -470,21 +491,103 @@ func (m *Manager) Diagnostics(zipPath string, configPath string, extraFiles map[
 }
 
 // redact strips anything that looks like an API key or token.
+//
+// v1.1.4Z: handles the three shapes that actually occur in this app —
+// plain "key: value" lines, JSON members ("key":"value"), and env-style
+// "key=value" — instead of only the first.
 func redact(s string) string {
 	lines := strings.Split(s, "\n")
 	for i, l := range lines {
-		low := strings.ToLower(l)
-		if strings.Contains(low, "apikey") || strings.Contains(low, "api_key") ||
-			strings.Contains(low, "token") || strings.Contains(low, "authorization") ||
-			strings.Contains(low, "password") || strings.Contains(low, "secret") {
+		if !lineLooksSecret(l) {
+			lines[i] = l
+			continue
+		}
+
+		switch {
+		case redactJSONLine(&lines[i], l):
+		default:
 			if idx := strings.Index(l, ":"); idx > 0 {
 				lines[i] = l[:idx+1] + " \"[REDACTED]\""
-				continue
+			} else if idx := strings.Index(l, "="); idx > 0 {
+				lines[i] = l[:idx+1] + "[REDACTED]"
 			}
 		}
-		lines[i] = l
 	}
 	return strings.Join(lines, "\n")
+}
+
+func lineLooksSecret(l string) bool {
+	low := strings.ToLower(l)
+	return strings.Contains(low, "apikey") || strings.Contains(low, "api_key") ||
+		strings.Contains(low, "token") || strings.Contains(low, "authorization") ||
+		strings.Contains(low, "password") || strings.Contains(low, "secret")
+}
+
+// redactJSONLine rewrites every secret-looking JSON member value in the
+// line; reports whether it changed anything.
+func redactJSONLine(dst *string, l string) bool {
+	if !strings.Contains(l, "{\")") && !strings.Contains(l, "{\"") {
+		return false
+	}
+
+	// Cheap scanner over "key":"value" pairs on a single JSONL line.
+	changed := false
+	var out strings.Builder
+	i := 0
+	for i < len(l) {
+		// find next key string
+		rest := l[i:]
+		q1 := strings.IndexByte(rest, '"')
+		if q1 < 0 {
+			out.WriteString(rest)
+			break
+		}
+		q2 := strings.IndexByte(rest[q1+1:], '"')
+		if q2 < 0 {
+			out.WriteString(rest)
+			break
+		}
+		key := rest[q1+1 : q1+1+q2]
+		afterKey := rest[q1+1+q2+1:]
+
+		if strings.HasPrefix(afterKey, ":") {
+			// value must be a JSON string
+			v1 := strings.IndexByte(afterKey[1:], '"')
+			if v1 == 0 {
+				v2 := strings.IndexByte(afterKey[2:], '"')
+				if v2 >= 0 {
+					value := afterKey[2 : 2+v2]
+					if isSecretKey(strings.ToLower(key)) && value != "" {
+						out.WriteString(rest[:q1+1+q2+1])
+						out.WriteString(":\"[REDACTED]\"")
+						i += q1 + 1 + q2 + 1 + 2 + v2 + 1
+						changed = true
+						continue
+					}
+					out.WriteString(rest[:q1+1+q2+1])
+					out.WriteString(":")
+					out.WriteString(value)
+					i += q1 + 1 + q2 + 1 + 2 + v2 + 1
+					continue
+				}
+			}
+		}
+		// not a string member — copy the key token and advance past it
+		out.WriteString(rest[:q1+1+q2+1])
+		i += q1 + 1 + q2 + 1
+	}
+
+	if changed {
+		*dst = out.String()
+	}
+	return changed
+}
+
+func isSecretKey(key string) bool {
+	return strings.Contains(key, "apikey") || strings.Contains(key, "api_key") ||
+		strings.Contains(key, "token") || strings.Contains(key, "authorization") ||
+		strings.Contains(key, "password") || strings.Contains(key, "secret") ||
+		key == "key" // bare generic key field, exactly
 }
 
 func clip(s string, n int) string {

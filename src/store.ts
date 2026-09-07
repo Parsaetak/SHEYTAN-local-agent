@@ -77,6 +77,13 @@ type RuntimeState = {
   refreshAgentResources: () => Promise<void>;
   refreshEngine: () => Promise<void>;
   startEnginePolling: () => void;
+  // v1.1.4Z: the engine poll previously ran for the app's LIFETIME once
+  // started (no stop function existed) — even on other views.
+  stopEnginePolling: () => void;
+
+  // v1.1.4Z: recall feedback (thumbs up/down on past exchanges) — the
+  // backend steering existed since v1.0.6 with no write path.
+  sendFeedback: (query: string, liked: boolean) => Promise<void>;
 
   loadSession: (id: string) => Promise<void>;
 
@@ -102,7 +109,7 @@ type RuntimeState = {
     backend?: string;
     maxResults?: number;
     timeoutSec?: number;
-  }) => Promise<ResearchResponse>;
+  }) => Promise<ResearchResponse | undefined>;
 
   connectActivity: () => void;
   disconnectActivity: () => void;
@@ -116,6 +123,23 @@ let enginePollTimer: number | null = null;
 let socket: WebSocket | null = null;
 let activitySequence = 0;
 let activitySessionId: string | null = null;
+
+// v1.1.4Z: automatic WebSocket reconnection. The old store gave up on the
+// first close — a mid-run disconnect left `running` stuck true forever (the
+// dead-composer bug's last live variant: no `done` event could ever arrive).
+let reconnectTimer: number | null = null;
+let reconnectAttempts = 0;
+
+const RECONNECT_BASE_DELAY_MS = 1500;
+const RECONNECT_MAX_DELAY_MS = 15000;
+const RECONNECT_MAX_ATTEMPTS = 20;
+
+function clearReconnectTimer(): void {
+  if (reconnectTimer !== null) {
+    window.clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+}
 
 let activityFlushFrame: number | null = null;
 let pendingActivity: ActivityEvent[] = [];
@@ -308,6 +332,23 @@ function handleConversationEvent(event: ActivityEvent): void {
             reasoning,
           },
         });
+      }
+
+      break;
+    }
+
+    case "session": {
+      // v1.1.4Z: Continuum chapter rollover — the backend distilled the
+      // conversation into a fresh chapter session and tells the UI here.
+      // Follow the thread into the new chapter automatically.
+      const nextSessionId =
+        typeof event.data.sessionId === "string" ? event.data.sessionId : "";
+      const currentId = useRuntimeStore.getState().activeSessionId;
+
+      if (nextSessionId && nextSessionId !== currentId) {
+        useRuntimeStore.setState({ running: false, streaming: null });
+        void useRuntimeStore.getState().selectSession(nextSessionId);
+        void useRuntimeStore.getState().refreshSessions();
       }
 
       break;
@@ -507,6 +548,13 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
     }, 2500);
   },
 
+  stopEnginePolling: () => {
+    if (enginePollTimer !== null) {
+      window.clearInterval(enginePollTimer);
+      enginePollTimer = null;
+    }
+  },
+
   loadSession: async (id) => {
     try {
       const detail = await api.sessionDetail(id);
@@ -598,10 +646,25 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
   createSession: async () => {
     const session = await api.createSession();
 
+    // v1.1.4Z: createSession previously only prepended the session and
+    // switched the id — the socket stayed bound to the OLD session (the
+    // stale-guard then silently discarded every event for the new one)
+    // and messages/streaming/running were never reset. First message on
+    // a fresh session never streamed and the composer stuck "running".
+    get().disconnectActivity();
+
     set((state) => ({
       sessions: [session, ...state.sessions],
       activeSessionId: session.id,
+      error: null,
+      activity: [],
+      messages: [],
+      streaming: null,
+      running: false,
+      pendingAttachments: [],
     }));
+
+    get().connectActivity();
 
     return session;
   },
@@ -647,11 +710,20 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
       return {
         sessions,
         activeSessionId,
+        // v1.1.4Z: the deleted session's conversation previously stayed
+        // on screen (and kept streaming state) until the next manual switch.
+        messages: state.activeSessionId === id ? [] : state.messages,
+        activity: state.activeSessionId === id ? [] : state.activity,
+        streaming: null,
+        running: false,
       };
     });
 
-    if (get().activeSessionId) {
+    const nextId = get().activeSessionId;
+
+    if (nextId) {
       get().connectActivity();
+      void get().loadSession(nextId);
     }
   },
 
@@ -813,6 +885,20 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
     }
   },
 
+  sendFeedback: async (query, liked) => {
+    const sessionId = get().activeSessionId;
+
+    if (!sessionId || !query.trim()) {
+      return;
+    }
+
+    await api.feedback({
+      sessionId,
+      query,
+      liked,
+    });
+  },
+
   abort: async () => {
     const sessionId = get().activeSessionId;
 
@@ -864,7 +950,10 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
         labError: message,
       });
 
-      throw error;
+      // v1.1.4Z: no rethrow — the labError state IS the user-facing
+      // failure surface. The previous `throw` escaped every fire-and-forget
+      // call site (LabPanel's `void onAction(...)`) as an unhandled
+      // promise rejection.
     }
   },
 
@@ -922,7 +1011,9 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
         researchError: message,
       });
 
-      throw error;
+      // v1.1.4Z: no rethrow (see runLabAction — the panel calls this
+      // fire-and-forget; the rethrow was an unhandled rejection).
+      return undefined;
     }
   },
 
@@ -949,6 +1040,9 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
       socket = null;
     }
 
+    clearReconnectTimer();
+    reconnectAttempts = 0;
+
     activitySessionId = sessionId;
 
     set({
@@ -963,6 +1057,9 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
       if (socket !== ws || activitySessionId !== get().activeSessionId) {
         return;
       }
+
+      // v1.1.4Z: a successful (re)connection resets the backoff ladder.
+      reconnectAttempts = 0;
 
       set({
         connection: "connected",
@@ -1003,6 +1100,33 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
       set({
         connection: "disconnected",
       });
+
+      // v1.1.4Z: auto-reconnect while the session is still active. Without
+      // this, ANY mid-run drop (backend restart, transient network blip)
+      // permanently killed event delivery — `running` could never clear.
+      if (reconnectAttempts >= RECONNECT_MAX_ATTEMPTS) {
+        return;
+      }
+
+      const delay = Math.min(
+        RECONNECT_BASE_DELAY_MS * 2 ** reconnectAttempts,
+        RECONNECT_MAX_DELAY_MS,
+      );
+
+      reconnectAttempts += 1;
+
+      reconnectTimer = window.setTimeout(() => {
+        reconnectTimer = null;
+
+        const current = useRuntimeStore.getState();
+
+        if (
+          current.activeSessionId &&
+          current.activeSessionId === activitySessionId
+        ) {
+          current.connectActivity();
+        }
+      }, delay);
     };
   },
 
@@ -1010,6 +1134,9 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
     activitySessionId = null;
 
     resetPendingActivity();
+
+    clearReconnectTimer();
+    reconnectAttempts = 0;
 
     if (socket) {
       socket.close();

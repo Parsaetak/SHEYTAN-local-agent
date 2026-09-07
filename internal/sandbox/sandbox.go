@@ -323,13 +323,15 @@ func (s *CodeExecSandbox) Execute(
 
 	cmd.Dir = dir
 
-	// Sandbox-local TEMP so Python's tempfile & co. litter inside the
-	// workdir instead of the system temp.
-	cmd.Env = append(
-		os.Environ(),
-		"TMP="+dir,
-		"TEMP="+dir,
-	)
+	// v1.1.4Z: sandboxed code runs with a SANITIZED environment. The
+	// previous full os.Environ() handed every host secret (API keys,
+	// tokens) to model-generated python/node. TEMP/TMP stay sandbox-local
+	// so Python's tempfile & co. litter inside the workdir.
+	cmd.Env = proc.SanitizedEnvironment(map[string]string{
+		"TMP":    dir,
+		"TEMP":   dir,
+		"TMPDIR": dir,
+	})
 
 	var buf bytes.Buffer
 	cmd.Stdout = &buf

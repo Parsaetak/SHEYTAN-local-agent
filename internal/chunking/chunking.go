@@ -20,6 +20,7 @@ package chunking
 import (
 	"bytes"
 	"fmt"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/humanize"
 	"os"
 	"path/filepath"
 	"strings"
@@ -214,7 +215,7 @@ func WindowHeadTail(text string, budgetBytes int) string {
 	elided := len(text) - len(head) - len(tail)
 	elidedLines := strings.Count(text, "\n") - strings.Count(head, "\n") - strings.Count(tail, "\n")
 	return head +
-		fmt.Sprintf("\n… [elided %s (%d lines) — middle of the file omitted to fit the context budget] …\n\n", humanBytes(elided), elidedLines) +
+		fmt.Sprintf("\n… [elided %s (%d lines) — middle of the file omitted to fit the context budget] …\n\n", humanize.Bytes(int64(elided)), elidedLines) +
 		tail
 }
 
@@ -228,17 +229,6 @@ func lastLineBoundary(s string, limit int) int {
 		return i + 1
 	}
 	return limit
-}
-
-func humanBytes(n int) string {
-	switch {
-	case n >= 1<<20:
-		return fmt.Sprintf("%.1f MB", float64(n)/(1<<20))
-	case n >= 1<<10:
-		return fmt.Sprintf("%.1f KB", float64(n)/(1<<10))
-	default:
-		return fmt.Sprintf("%d B", n)
-	}
 }
 
 // FormatFileAttachment renders one attachment as a prompt-ready block.
@@ -258,12 +248,12 @@ func FormatFileAttachment(path string, budgetBytes int) string {
 	}
 	if fi.Size() > 64<<20 {
 		return fmt.Sprintf("[attachment: %s — %s, too large to attach; read it with the files tool at %s]\n",
-			name, humanBytes(int(fi.Size())), path)
+			name, humanize.Bytes(fi.Size()), path)
 	}
 	if !IsTextFile(path) {
 		ext := strings.ToLower(filepath.Ext(name))
 		return fmt.Sprintf("[attachment: %s — %s binary%s — not inlined as text; if its content matters, read it with the files tool at %s]\n",
-			name, humanBytes(int(fi.Size())), extSuffix(ext), path)
+			name, humanize.Bytes(fi.Size()), extSuffix(ext), path)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -274,7 +264,7 @@ func FormatFileAttachment(path string, budgetBytes int) string {
 		ext = "text"
 	}
 	windowed := WindowHeadTail(string(data), budgetBytes)
-	return fmt.Sprintf("----- attached file: %s (%s) -----\n```%s\n%s\n```\n", name, humanBytes(len(data)), ext, strings.TrimRight(windowed, "\n"))
+	return fmt.Sprintf("----- attached file: %s (%s) -----\n```%s\n%s\n```\n", name, humanize.Bytes(int64(len(data))), ext, strings.TrimRight(windowed, "\n"))
 }
 
 func extSuffix(ext string) string {

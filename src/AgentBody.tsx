@@ -71,6 +71,13 @@ function AgentBody() {
   const error = useRuntimeStore((state) => state.error);
   const running = useRuntimeStore((state) => state.running);
   const engine = useRuntimeStore((state) => state.engine);
+
+  // v1.1.4Z: the toggle and the badge previously read DIFFERENT sources
+  // (models.llamaRunning vs engine.state) and could disagree transiently.
+  const engineAlive =
+    engine?.state === "ready" ||
+    engine?.state === "running" ||
+    engine?.state === "busy";
   const pendingAttachments = useRuntimeStore((state) => state.pendingAttachments);
   const attachmentsUploading = useRuntimeStore((state) => state.attachmentsUploading);
 
@@ -85,6 +92,7 @@ function AgentBody() {
   );
   const refreshModels = useRuntimeStore((state) => state.refreshModels);
   const startEnginePolling = useRuntimeStore((state) => state.startEnginePolling);
+  const stopEnginePolling = useRuntimeStore((state) => state.stopEnginePolling);
   const connectActivity = useRuntimeStore((state) => state.connectActivity);
   const disconnectActivity = useRuntimeStore(
     (state) => state.disconnectActivity,
@@ -120,8 +128,11 @@ function AgentBody() {
     return () => {
       cancelled = true;
       disconnectActivity();
+      // v1.1.4Z: stop the /api/engine poll on unmount — it previously ran
+      // for the whole app lifetime once this view had been opened once.
+      stopEnginePolling();
     };
-  }, [connectActivity, disconnectActivity, startEnginePolling]);
+  }, [connectActivity, disconnectActivity, startEnginePolling, stopEnginePolling]);
 
   const activeSession = useMemo(
     () => sessions.find((session) => session.id === activeSessionId) ?? null,
@@ -193,7 +204,7 @@ function AgentBody() {
 
       setConfig(nextConfig);
 
-      if (models?.llamaRunning) {
+      if (engineAlive) {
         await api.llama("stop");
       }
 
@@ -219,7 +230,7 @@ function AgentBody() {
     setModelError(null);
 
     try {
-      await api.llama(models?.llamaRunning ? "stop" : "start");
+      await api.llama(engineAlive ? "stop" : "start");
       await refreshModels();
     } catch (engineError) {
       setModelError(
@@ -319,7 +330,7 @@ function AgentBody() {
               >
                 {engineBusy
                   ? "Working…"
-                  : models?.llamaRunning
+                  : engineAlive
                     ? "Stop engine"
                     : "Start engine"}
               </button>
@@ -356,6 +367,8 @@ function AgentBody() {
               {localModels.map((model) => (
                 <option key={model.id} value={model.id}>
                   {model.name}
+                  {model.quantization ? ` · ${model.quantization}` : ""}
+                  {model.parameterInfo ? ` · ${model.parameterInfo}` : ""}
                 </option>
               ))}
             </select>

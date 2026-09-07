@@ -27,8 +27,8 @@ import (
 )
 
 // ttl is how long a probe result is trusted. Kept short (15s) so a
-// reconnect is picked up quickly; the UI watcher also re-probes on its own
-// cadence and calls Force() when it wants an immediate answer.
+// reconnect is picked up quickly; every consumer re-probes on its own
+// cadence after the cache expires.
 const ttl = 15 * time.Second
 
 // probeTimeout bounds a single connectivity check.
@@ -142,15 +142,34 @@ func State() string {
 	return "offline"
 }
 
-// probeAll runs every strategy until one reports online.
+// probeAll runs every strategy in PARALLEL and reports online as soon as
+// any one succeeds.
+//
+// v1.1.4Z: the sequential version took up to 7×2.5 s ≈ 17.5 s on a fully
+// offline machine (every target timing out one after another) — a long
+// stall on the llama-start gate for exactly the users who can least afford
+// it. The parallel version resolves in ~one probeTimeout either way.
 func probeAll() bool {
-	if dialAny() {
-		return true
+	type result struct{ ok bool }
+
+	done := make(chan result, 3)
+
+	probes := []func() bool{dialAny, httpAny, dnsAny}
+
+	for _, probe := range probes {
+		probe := probe
+		go func() {
+			done <- result{ok: probe()}
+		}()
 	}
-	if httpAny() {
-		return true
+
+	for range probes {
+		if r := <-done; r.ok {
+			return true
+		}
 	}
-	return dnsAny()
+
+	return false
 }
 
 // dialAny tries each target once, in order, with a short timeout.

@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
@@ -89,12 +90,21 @@ type ToolCall struct {
 // bundled llama.cpp server (provider=local) or any remote OpenAI-compatible
 // endpoint (provider=remote) using cfg.EffectiveBaseURL/APIKey.
 type Client struct {
-	cfg  *config.Config
+	// src is the live config source: sampling values are read per request
+	// so Settings patches apply to the very next call (v1.1.4Z: previously
+	// a shared mutable pointer — a data race against the config patcher).
+	src  *config.Source
 	http *http.Client
+
+	// streamHTTP serves streaming requests. It carries NO overall timeout
+	// (a 10-minute cap silently truncated long generations); the request
+	// context plus the stream stall watchdog provide the bounds instead.
+	streamHTTP *http.Client
 
 	// v1.1.3Z: engine busy hook. Runtime wiring sets it to LlamaServer
 	// MarkBusy so real inference traffic flips the authoritative engine
 	// state ready↔busy for the UI. Nil = no reporting (tests).
+	busyMu   sync.RWMutex
 	busyHook func(busy bool)
 
 	// v1.0.6: encoded-image cache. The agent loop rebuilds the request
@@ -105,16 +115,23 @@ type Client struct {
 	imgCache   map[string]imageCacheEntry
 }
 
-// SetBusyHook wires the engine busy reporter (safe to call once at wiring
-// time; the hook itself must be concurrency-safe).
+// SetBusyHook wires the engine busy reporter. Safe under concurrency
+// (v1.1.4Z: previously an unsynchronized write raced the streaming read
+// path — benign only because wiring happened at boot, now guaranteed).
 func (c *Client) SetBusyHook(fn func(busy bool)) {
+	c.busyMu.Lock()
 	c.busyHook = fn
+	c.busyMu.Unlock()
 }
 
 // markBusy reports an inference window to the wired hook, if any.
 func (c *Client) markBusy(busy bool) {
-	if c.busyHook != nil {
-		c.busyHook(busy)
+	c.busyMu.RLock()
+	fn := c.busyHook
+	c.busyMu.RUnlock()
+
+	if fn != nil {
+		fn(busy)
 	}
 }
 
@@ -136,26 +153,39 @@ func newTunedTransport() *http.Transport {
 	}
 }
 
-func NewClient(cfg *config.Config) *Client {
+func NewClient(src *config.Source) *Client {
+	// v1.1.4Z: two clients. `http` keeps the 10-minute overall timeout for
+	// non-streaming calls. `streamHTTP` has no overall timeout — long
+	// generations are legal — but the transport bounds the response HEADER
+	// wait and the SSE read loop is guarded by the stall watchdog in
+	// streamOnce (5 minutes without a single byte = abort).
+	streamTransport := newTunedTransport()
+	streamTransport.ResponseHeaderTimeout = 2 * time.Minute
+
 	return &Client{
-		cfg:  cfg,
-		http: &http.Client{Timeout: 10 * time.Minute, Transport: newTunedTransport()},
+		src:        src,
+		http:       &http.Client{Timeout: 10 * time.Minute, Transport: newTunedTransport()},
+		streamHTTP: &http.Client{Transport: streamTransport},
 	}
 }
 
 // ChatRequest is the body sent to /v1/chat/completions.
 type ChatRequest struct {
-	Model       string     `json:"model"`
-	Messages    []Message  `json:"-"` // marshaled via MarshalJSON (wire form)
-	Temperature float64    `json:"temperature,omitempty"`
-	TopP        float64    `json:"top_p,omitempty"`
-	TopK        int        `json:"top_k,omitempty"`
-	MaxTokens   int        `json:"max_tokens,omitempty"`
-	Stop        []string   `json:"stop,omitempty"`
-	Seed        int        `json:"seed,omitempty"`
-	Stream      bool       `json:"stream,omitempty"`
-	Tools       []ToolSpec `json:"tools,omitempty"`
-	NumCtx      int        `json:"n_ctx,omitempty"`
+	Model            string     `json:"model"`
+	Messages         []Message  `json:"-"` // marshaled via MarshalJSON (wire form)
+	Temperature      float64    `json:"temperature,omitempty"`
+	TopP             float64    `json:"top_p,omitempty"`
+	TopK             int        `json:"top_k,omitempty"`
+	MinP             float64    `json:"min_p,omitempty"` // llama.cpp sampler
+	MaxTokens        int        `json:"max_tokens,omitempty"`
+	Stop             []string   `json:"stop,omitempty"`
+	Seed             int        `json:"seed,omitempty"`
+	PresencePenalty  float64    `json:"presence_penalty,omitempty"`  // OpenAI standard
+	FrequencyPenalty float64    `json:"frequency_penalty,omitempty"` // OpenAI standard
+	RepeatLastN      int        `json:"repeat_last_n,omitempty"`     // llama.cpp sampler
+	Stream           bool       `json:"stream,omitempty"`
+	Tools            []ToolSpec `json:"tools,omitempty"`
+	NumCtx           int        `json:"n_ctx,omitempty"`
 	// CachePrompt asks llama.cpp to reuse the KV cache across turns
 	// (v1.0.4). Together with --cache-reuse on the server this collapses
 	// the repeated agent prefix (AI context + tool schemas) to a near-zero
@@ -200,31 +230,39 @@ func (r *ChatRequest) MarshalJSON() ([]byte, error) {
 		msgs = plainWireMessages(r.Messages)
 	}
 	return json.Marshal(struct {
-		Model       string      `json:"model"`
-		Messages    interface{} `json:"messages"`
-		Temperature float64     `json:"temperature,omitempty"`
-		TopP        float64     `json:"top_p,omitempty"`
-		TopK        int         `json:"top_k,omitempty"`
-		MaxTokens   int         `json:"max_tokens,omitempty"`
-		Stop        []string    `json:"stop,omitempty"`
-		Seed        int         `json:"seed,omitempty"`
-		Stream      bool        `json:"stream,omitempty"`
-		Tools       []ToolSpec  `json:"tools,omitempty"`
-		NumCtx      int         `json:"n_ctx,omitempty"`
-		CachePrompt bool        `json:"cache_prompt"`
+		Model            string      `json:"model"`
+		Messages         interface{} `json:"messages"`
+		Temperature      float64     `json:"temperature,omitempty"`
+		TopP             float64     `json:"top_p,omitempty"`
+		TopK             int         `json:"top_k,omitempty"`
+		MinP             float64     `json:"min_p,omitempty"`
+		MaxTokens        int         `json:"max_tokens,omitempty"`
+		Stop             []string    `json:"stop,omitempty"`
+		Seed             int         `json:"seed,omitempty"`
+		PresencePenalty  float64     `json:"presence_penalty,omitempty"`
+		FrequencyPenalty float64     `json:"frequency_penalty,omitempty"`
+		RepeatLastN      int         `json:"repeat_last_n,omitempty"`
+		Stream           bool        `json:"stream,omitempty"`
+		Tools            []ToolSpec  `json:"tools,omitempty"`
+		NumCtx           int         `json:"n_ctx,omitempty"`
+		CachePrompt      bool        `json:"cache_prompt"`
 	}{
-		Model:       r.Model,
-		Messages:    msgs,
-		Temperature: r.Temperature,
-		TopP:        r.TopP,
-		TopK:        r.TopK,
-		MaxTokens:   r.MaxTokens,
-		Stop:        r.Stop,
-		Seed:        r.Seed,
-		Stream:      r.Stream,
-		Tools:       r.Tools,
-		NumCtx:      r.NumCtx,
-		CachePrompt: r.CachePrompt,
+		Model:            r.Model,
+		Messages:         msgs,
+		Temperature:      r.Temperature,
+		TopP:             r.TopP,
+		TopK:             r.TopK,
+		MinP:             r.MinP,
+		MaxTokens:        r.MaxTokens,
+		Stop:             r.Stop,
+		Seed:             r.Seed,
+		PresencePenalty:  r.PresencePenalty,
+		FrequencyPenalty: r.FrequencyPenalty,
+		RepeatLastN:      r.RepeatLastN,
+		Stream:           r.Stream,
+		Tools:            r.Tools,
+		NumCtx:           r.NumCtx,
+		CachePrompt:      r.CachePrompt,
 	})
 }
 
@@ -284,8 +322,8 @@ type ChatResponse struct {
 }
 
 // baseURL/apiKey resolve the active provider endpoints.
-func (c *Client) baseURL() string { return c.cfg.EffectiveBaseURL() }
-func (c *Client) apiKey() string  { return c.cfg.EffectiveAPIKey() }
+func (c *Client) baseURL() string { return c.src.Load().EffectiveBaseURL() }
+func (c *Client) apiKey() string  { return c.src.Load().EffectiveAPIKey() }
 
 // promptStats returns message count + total chars for logging.
 func promptStats(msgs []Message) (int, int) {
@@ -317,7 +355,8 @@ func isLocalBaseURL(base string) bool {
 // offlineBlocked reports whether the active provider is a REMOTE endpoint
 // that cannot be reached while offline.
 func (c *Client) offlineBlocked() bool {
-	return c.cfg.IsRemote() && !isLocalBaseURL(c.baseURL()) && netcheck.IsOffline()
+	cfg := c.src.Load()
+	return cfg.IsRemote() && !isLocalBaseURL(c.baseURL()) && netcheck.IsOffline()
 }
 
 // Chat sends a non-streaming chat request with retry on transient errors.
@@ -409,6 +448,12 @@ func (c *Client) Chat(ctx context.Context, req *ChatRequest) (*ChatResponse, err
 		}
 		c.logCall(req, start, contentLen, toolCalls, finish, nil)
 		return &out, nil
+	}
+	// v1.1.4Z: retry exhaustion was previously invisible in llm.jsonl —
+	// only individual transport errors were logged, never the final
+	// give-up. This is the record that actually explains a dead turn.
+	if lastErr != nil {
+		c.logCall(req, time.Now(), 0, 0, "", lastErr)
 	}
 	return nil, lastErr
 }
@@ -592,6 +637,10 @@ func (c *Client) StreamChatDetailed(ctx context.Context, req *ChatRequest, onEve
 			return perf, lastErr
 		}
 	}
+	// v1.1.4Z: record the final give-up (mirrors the Chat path).
+	if lastErr != nil {
+		c.logCall(req, time.Now(), 0, 0, "", lastErr)
+	}
 	return perf, lastErr
 }
 
@@ -658,8 +707,20 @@ var (
 	sseDoneToken  = []byte("[DONE]")
 )
 
+// streamStallTimeout is how long a stream may deliver ZERO bytes before the
+// watchdog aborts it. Slow-but-alive streams never trip this; only truly
+// stalled connections do. (var: tests shrink the window.)
+var streamStallTimeout = 5 * time.Minute
+
 func (c *Client) streamOnce(ctx context.Context, req *ChatRequest, body []byte, onEvent func(StreamEvent) error) error {
-	httpReq, err := http.NewRequestWithContext(ctx, "POST",
+	// v1.1.4Z: the request runs on a child context the stall watchdog can
+	// cancel. A blocked SSE body read cannot be interrupted by any reader
+	// wrapper — canceling the request context is the only reliable way to
+	// unwind a hung connection.
+	reqCtx, reqCancel := context.WithCancel(ctx)
+	defer reqCancel()
+
+	httpReq, err := http.NewRequestWithContext(reqCtx, "POST",
 		c.baseURL()+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return err
@@ -669,7 +730,9 @@ func (c *Client) streamOnce(ctx context.Context, req *ChatRequest, body []byte, 
 	httpReq.Header.Set("Accept", "text/event-stream")
 
 	start := time.Now()
-	resp, err := c.http.Do(httpReq)
+	// v1.1.4Z: streaming uses the timeout-free client — the overall
+	// bound is the caller's context plus the stall watchdog below.
+	resp, err := c.streamHTTP.Do(httpReq)
 	if err != nil {
 		err = fmt.Errorf("LLM stream: %w", err)
 		c.logCall(req, start, 0, 0, "", err)
@@ -710,6 +773,44 @@ func (c *Client) streamOnce(ctx context.Context, req *ChatRequest, body []byte, 
 	// allocated two strings per SSE line (scanner.Text() + TrimPrefix) even
 	// for comment/keep-alive lines, which on a fast stream meant thousands
 	// of short-lived allocations per reply (GC pressure = dropped frames).
+	//
+	// v1.1.4Z stall watchdog: a stalled engine (deadlocked generation,
+	// half-dead TCP connection) previously hung the stream until the
+	// 10-minute client timeout — which in turn silently TRUNCATED every
+	// longer generation. The watchdog aborts only when NO bytes arrive
+	// for streamStallTimeout; active generations never trigger it.
+	var lastData int64 // unix nano of the last received byte
+	atomic.StoreInt64(&lastData, time.Now().UnixNano())
+
+	// The watchdog cancels the REQUEST context: a blocked SSE body read
+	// cannot be interrupted by any reader wrapper — reqCancel is the only
+	// reliable way to unwind a hung connection. The tick adapts to the
+	// stall window (3 checks per window, clamped to 200ms..15s).
+	tick := streamStallTimeout / 3
+	if tick < 200*time.Millisecond {
+		tick = 200 * time.Millisecond
+	}
+	if tick > 15*time.Second {
+		tick = 15 * time.Second
+	}
+
+	go func() {
+		ticker := time.NewTicker(tick)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-reqCtx.Done():
+				return
+			case <-ticker.C:
+				last := atomic.LoadInt64(&lastData)
+				if time.Since(time.Unix(0, last)) > streamStallTimeout {
+					reqCancel()
+					return
+				}
+			}
+		}
+	}()
+
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
 	asm := newAssembler()
@@ -730,6 +831,8 @@ func (c *Client) streamOnce(ctx context.Context, req *ChatRequest, body []byte, 
 	}()
 
 	for scanner.Scan() {
+		atomic.StoreInt64(&lastData, time.Now().UnixNano())
+
 		line := scanner.Bytes()
 		if !bytes.HasPrefix(line, sseDataPrefix) {
 			continue
@@ -799,6 +902,14 @@ func (c *Client) streamOnce(ctx context.Context, req *ChatRequest, body []byte, 
 		}
 	}
 	if err := scanner.Err(); err != nil {
+		// Distinguish a watchdog abort from a transport failure so the
+		// visible error says what actually happened.
+		if reqCtx.Err() != nil && ctx.Err() == nil {
+			err = fmt.Errorf(
+				"LLM stream stalled: no data for %v — the engine was generating nothing (aborted)",
+				streamStallTimeout,
+			)
+		}
 		streamErr = err
 		return err
 	}
@@ -810,7 +921,7 @@ func (c *Client) logCall(req *ChatRequest, start time.Time, completionChars, too
 	msgs, chars := promptStats(req.Messages)
 	rec := logging.LLMCallRecord{
 		TS:              start,
-		Provider:        c.cfg.ProviderKind(),
+		Provider:        c.src.Load().ProviderKind(),
 		Model:           req.Model,
 		PromptMsgs:      msgs,
 		PromptChars:     chars,
@@ -882,7 +993,7 @@ func (c *Client) wireMessages(msgs []Message) []wireMessage {
 			break
 		}
 	}
-	remote := c.cfg.IsRemote()
+	remote := c.src.Load().IsRemote()
 	out := make([]wireMessage, 0, len(msgs))
 	for i, m := range msgs {
 		wm := wireMessage{
@@ -953,28 +1064,38 @@ func (c *Client) ImageCacheLenForTest() int {
 }
 
 // BuildChatRequest converts raw messages + sampling options to a ChatRequest.
-// Provider-aware: llama-only knobs (top_k, n_ctx) are sent to local
-// llama.cpp but omitted for remote endpoints, which may reject them.
+// Provider-aware: llama-only knobs (top_k, min_p, n_ctx, repeat_last_n) are
+// sent to local llama.cpp but omitted for remote endpoints, which may reject
+// them. Presence/frequency penalty are OpenAI-standard and sent to both.
 // Reasoning/attachment display fields are stripped from the wire copy;
 // v1.0.6: images are projected into OpenAI content parts.
+//
+// v1.1.4Z: the previously-ignored sampling settings (minP, repeatLastN,
+// presence/frequency penalty) now actually reach the engine — they were
+// editable in Settings but silently dropped from every request before.
 func (c *Client) BuildChatRequest(model string, messages []Message, tools []ToolSpec) *ChatRequest {
+	cfg := c.src.Load()
 	clean := StripReasoning(messages)
 	req := &ChatRequest{
-		Model:       model,
-		Messages:    clean,
-		wire:        c.wireMessages(clean),
-		Tools:       tools,
-		Temperature: c.cfg.LLM.Temperature,
-		TopP:        c.cfg.LLM.TopP,
-		MaxTokens:   c.cfg.LLM.MaxTokens,
-		Seed:        c.cfg.LLM.Seed,
+		Model:            model,
+		Messages:         clean,
+		wire:             c.wireMessages(clean),
+		Tools:            tools,
+		Temperature:      cfg.LLM.Temperature,
+		TopP:             cfg.LLM.TopP,
+		MaxTokens:        cfg.LLM.MaxTokens,
+		Seed:             cfg.LLM.Seed,
+		PresencePenalty:  cfg.LLM.PresencePenalty,
+		FrequencyPenalty: cfg.LLM.FrequencyPenalty,
 	}
-	if !c.cfg.IsRemote() {
-		req.TopK = c.cfg.LLM.TopK
-		req.NumCtx = c.cfg.LLM.NumCtx
+	if !cfg.IsRemote() {
+		req.TopK = cfg.LLM.TopK
+		req.NumCtx = cfg.LLM.NumCtx
+		req.MinP = cfg.LLM.MinP
+		req.RepeatLastN = cfg.LLM.RepeatLastN
 	}
-	if c.cfg.LLM.Stop != "" {
-		req.Stop = strings.Split(c.cfg.LLM.Stop, ",")
+	if cfg.LLM.Stop != "" {
+		req.Stop = strings.Split(cfg.LLM.Stop, ",")
 	}
 	return req
 }

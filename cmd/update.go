@@ -47,8 +47,10 @@ func Update(cfg *config.Config, args []string) int {
 		return 0
 	}
 
+	src := config.NewSource(cfg)
+
 	if *force {
-		msg, updated, err := updater.CheckAndApplyForced(context.Background(), cfg, llm.NewLlamaServer(cfg))
+		msg, updated, err := updater.CheckAndApplyForced(context.Background(), cfg, llm.NewLlamaServer(src))
 		_ = config.Save(cfg.ConfigPath(), cfg)
 		fmt.Println(msg)
 		if err != nil {
@@ -60,7 +62,7 @@ func Update(cfg *config.Config, args []string) int {
 		}
 		return 0
 	}
-	msg, updated, err := updater.CheckAndApply(context.Background(), cfg, llm.NewLlamaServer(cfg))
+	msg, updated, err := updater.CheckAndApply(context.Background(), cfg, llm.NewLlamaServer(src))
 	_ = config.Save(cfg.ConfigPath(), cfg)
 	fmt.Println(msg)
 	if err != nil {

@@ -508,7 +508,12 @@ func checkAndApply(ctx context.Context, cfg *config.Config, eng Engine, force bo
 // (if due) then a re-evaluation every 6 hours so daily/weekly/monthly
 // cadences fire even in long-running sessions. `notify` (optional) receives
 // human-readable status lines; `save` persists the config.
-func RunScheduled(ctx context.Context, cfg *config.Config, eng Engine, notify func(string), save func()) {
+//
+// v1.1.4Z: takes the live config Source. CheckAndApply mutates cfg
+// (LastUpdateCheck) in place, so each pass runs on a PRIVATE copy that is
+// published back through the source — a published immutable value is never
+// mutated. Wired by api.Server.EnsureSetup (previously zero callers).
+func RunScheduled(ctx context.Context, src *config.Source, eng Engine, notify func(string), save func()) {
 	if notify == nil {
 		notify = func(string) {}
 	}
@@ -516,7 +521,13 @@ func RunScheduled(ctx context.Context, cfg *config.Config, eng Engine, notify fu
 		save = func() {}
 	}
 	pass := func() {
-		msg, updated, err := CheckAndApply(ctx, cfg, eng)
+		cur := src.Load()
+		mutable := *cur
+
+		msg, updated, err := CheckAndApply(ctx, &mutable, eng)
+
+		src.Store(&mutable)
+
 		if err != nil {
 			logging.Default().Warn("updater", "%s", msg)
 		} else if updated {
@@ -541,6 +552,11 @@ func RunScheduled(ctx context.Context, cfg *config.Config, eng Engine, notify fu
 // downloadEngine fetches the release zip for `tag` and extracts only the
 // server binary (plus adjacent runtime DLLs) into binDir, staging first so
 // a bad download can never destroy a working engine.
+//
+// v1.1.4Z: the transfer is capped (engineUpdateCapBytes) — the previous
+// io.Copy accepted an arbitrarily large body.
+const engineUpdateCapBytes = 2 << 30 // 2 GiB; Vulkan bundles are ~300 MB
+
 func downloadEngine(ctx context.Context, url, tag, binDir string) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
@@ -562,9 +578,15 @@ func downloadEngine(ctx context.Context, url, tag, binDir string) error {
 	}
 	tmpPath := tmp.Name()
 	defer os.Remove(tmpPath)
-	if _, err := io.Copy(tmp, resp.Body); err != nil {
+
+	written, err := io.Copy(tmp, io.LimitReader(resp.Body, engineUpdateCapBytes+1))
+	if err != nil {
 		tmp.Close()
 		return err
+	}
+	if written > engineUpdateCapBytes {
+		tmp.Close()
+		return fmt.Errorf("engine download exceeds %d bytes", engineUpdateCapBytes)
 	}
 	tmp.Close()
 
@@ -630,6 +652,13 @@ func copyAll(srcDir, dstDir string) error {
 }
 
 // extractZip extracts a zip archive into dir.
+//
+// v1.1.4Z: every member path is sanitized (no absolute paths, volume
+// names, or .. traversal) and per-entry sizes are bounded. The previous
+// version joined filepath.Join(dir, f.Name) with NO validation — a
+// hostile archive could write outside the staging directory.
+const engineUpdateEntryCapBytes = 2 << 30 // single-member cap
+
 func extractZip(zipPath, dir string) error {
 	zr, err := zip.OpenReader(zipPath)
 	if err != nil {
@@ -640,12 +669,22 @@ func extractZip(zipPath, dir string) error {
 		return err
 	}
 	for _, f := range zr.File {
-		out := filepath.Join(dir, f.Name)
+		out, err := safeZipPath(dir, f.Name)
+		if err != nil {
+			return err
+		}
 		if f.FileInfo().IsDir() {
-			_ = os.MkdirAll(out, 0o755)
+			if err := os.MkdirAll(out, 0o755); err != nil {
+				return err
+			}
 			continue
 		}
-		_ = os.MkdirAll(filepath.Dir(out), 0o755)
+		if f.UncompressedSize64 > engineUpdateEntryCapBytes {
+			return fmt.Errorf("zip member %q exceeds %d bytes", f.Name, engineUpdateEntryCapBytes)
+		}
+		if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
+			return err
+		}
 		rc, err := f.Open()
 		if err != nil {
 			return err
@@ -655,14 +694,63 @@ func extractZip(zipPath, dir string) error {
 			_ = rc.Close()
 			return err
 		}
-		_, err = io.Copy(fo, rc)
-		_ = rc.Close()
-		_ = fo.Close()
-		if err != nil {
-			return err
+		_, copyErr := io.Copy(fo, io.LimitReader(rc, engineUpdateEntryCapBytes+1))
+		closeErr := fo.Close()
+		rcErr := rc.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+		if rcErr != nil {
+			return rcErr
 		}
 	}
 	return nil
+}
+
+// safeZipPath validates one archive member and returns the absolute
+// extraction target (mirrors llm.safeArchivePath semantics).
+func safeZipPath(dir, name string) (string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", fmt.Errorf("zip contains an empty path")
+	}
+
+	normalized := strings.ReplaceAll(name, "\\", "/")
+	clean := filepath.Clean(filepath.FromSlash(normalized))
+
+	// A windows drive prefix survives FromSlash normalization as "C:/x";
+	// catch it before IsAbs/VolumeName miss the slash form.
+	if len(clean) >= 2 && clean[1] == ':' {
+		return "", fmt.Errorf("zip path %q contains a volume", name)
+	}
+
+	if clean == "." || clean == string(filepath.Separator) || clean == "" {
+		return "", fmt.Errorf("zip contains invalid path %q", name)
+	}
+
+	if filepath.IsAbs(clean) || filepath.VolumeName(clean) != "" {
+		return "", fmt.Errorf("zip path %q is absolute or contains a volume", name)
+	}
+
+	base, err := filepath.Abs(dir)
+	if err != nil {
+		return "", err
+	}
+
+	target := filepath.Join(base, clean)
+	rel, err := filepath.Rel(base, target)
+	if err != nil {
+		return "", err
+	}
+
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("zip path %q escapes extraction directory", name)
+	}
+
+	return target, nil
 }
 
 func humanWhen(t time.Time) string {

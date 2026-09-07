@@ -17,7 +17,7 @@ import (
 
 const (
 	AppName     = "SHEYTAN-Local-Agent"
-	AppVersion  = "1.1.3"
+	AppVersion  = "1.1.4"
 	AppCodename = "Zeta"
 )
 
@@ -87,9 +87,15 @@ type Config struct {
 	// Agent loop.
 	MaxIterations int  `json:"maxIterations" yaml:"maxIterations"`
 	ParallelTools bool `json:"parallelTools" yaml:"parallelTools"`
-	VerboseAgent  bool `json:"verboseAgent" yaml:"verboseAgent"`
 
-	// Legacy/general sandbox controls.
+	// RunTimeoutMinutes bounds one agent turn end-to-end (v1.1.4Z). Zero
+	// disables the budget; the default of 60 prevents a pathological
+	// turn (maxIterations x retrying LLM calls) from running for hours.
+	RunTimeoutMinutes int `json:"runTimeoutMinutes" yaml:"runTimeoutMinutes"`
+
+	// Sandbox governor controls (v1.1.4Z: now actually wired - previously
+	// stored but ignored by the runtime). Memory accepts "512m"/"512"/
+	// "1g" strings; CPU is a percent reserved for spawned code.
 	SandboxEnabled bool   `json:"sandboxEnabled" yaml:"sandboxEnabled"`
 	SandboxMemory  string `json:"sandboxMemory" yaml:"sandboxMemory"`
 	SandboxCPU     int    `json:"sandboxCPU" yaml:"sandboxCPU"`
@@ -103,7 +109,6 @@ type Config struct {
 	BrowserSlowMo         int    `json:"browserSlowMoMs" yaml:"browserSlowMoMs"`
 
 	// Experience and maintenance.
-	ProMode         bool   `json:"proMode" yaml:"proMode"`
 	UpdateSchedule  string `json:"updateSchedule" yaml:"updateSchedule"`
 	LastUpdateCheck string `json:"lastUpdateCheck" yaml:"lastUpdateCheck"`
 
@@ -250,11 +255,16 @@ func Default() *Config {
 
 		MaxIterations: 25,
 		ParallelTools: true,
-		VerboseAgent:  true,
 
-		SandboxEnabled: false,
+		RunTimeoutMinutes: 60,
+
+		// v1.1.4Z: sandbox on by default (it was silently ALWAYS
+		// active while the config claimed "disabled" - the field
+		// was never read). Resource governance for model-spawned
+		// code should fail closed.
+		SandboxEnabled: true,
 		SandboxMemory:  "512m",
-		SandboxCPU:     1,
+		SandboxCPU:     25,
 
 		LLM: LLMOptions{
 			Temperature: 0.7,
@@ -275,7 +285,6 @@ func Default() *Config {
 		},
 
 		Provider:        ProviderLocal,
-		ProMode:         false,
 		UpdateSchedule:  "daily",
 		BrowserHeadless: true,
 		BrowserSlowMo:   0,
@@ -461,6 +470,11 @@ func copyDir(src, dst string) error {
 }
 
 // Save writes configuration as pretty JSON.
+//
+// v1.1.4Z: the write is atomic (temp file + rename). The previous plain
+// WriteFile could leave a truncated config.json behind if the process died
+// mid-write — every other persistent store in the app already used the
+// tmp+rename pattern, config was the odd one out.
 func Save(path string, cfg *Config) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
@@ -471,7 +485,17 @@ func Save(path string, cfg *Config) error {
 		return err
 	}
 
-	return os.WriteFile(path, data, 0o644)
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		return err
+	}
+
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+
+	return nil
 }
 
 // applyEnv overlays supported SHEYTAN_* variables.
@@ -777,6 +801,71 @@ func (c *Config) ConfigPath() string {
 // StatePath returns the installed-component state file.
 func (c *Config) StatePath() string {
 	return filepath.Join(c.DataDir, "installed.json")
+}
+
+// EffectiveRunTimeout returns the per-turn budget (0 = unbounded).
+// Clamped to 1..1440 minutes; values in range pass through.
+func (c *Config) EffectiveRunTimeout() time.Duration {
+	if c.RunTimeoutMinutes == 0 {
+		return 0
+	}
+	if c.RunTimeoutMinutes < 1 {
+		c.RunTimeoutMinutes = 1
+	}
+	if c.RunTimeoutMinutes > 1440 {
+		c.RunTimeoutMinutes = 1440
+	}
+	return time.Duration(c.RunTimeoutMinutes) * time.Minute
+}
+
+// EffectiveSandboxMemoryMB parses SandboxMemory ("512m", "512", "1g", "2G")
+// into megabytes, clamped to 64..16384. Invalid input falls back to 512.
+func (c *Config) EffectiveSandboxMemoryMB() int {
+	s := strings.ToLower(strings.TrimSpace(c.SandboxMemory))
+	if s == "" {
+		return 512
+	}
+
+	mult := 1
+	switch {
+	case strings.HasSuffix(s, "g"):
+		mult = 1024
+		s = strings.TrimSuffix(s, "g")
+	case strings.HasSuffix(s, "m"):
+		s = strings.TrimSuffix(s, "m")
+	case strings.HasSuffix(s, "k"):
+		s = strings.TrimSuffix(s, "k")
+	}
+
+	n, err := strconv.Atoi(strings.TrimSpace(s))
+	if err != nil || n <= 0 {
+		return 512
+	}
+
+	mb := n * mult
+	if mb < 64 {
+		return 64
+	}
+	if mb > 16384 {
+		return 16384
+	}
+	return mb
+}
+
+// EffectiveSandboxCPUPercent clamps SandboxCPU to 5..100 (percent reserved
+// for sandboxed code). Non-positive values fall back to 25 - the value the
+// governor always used before the setting was wired.
+func (c *Config) EffectiveSandboxCPUPercent() int {
+	if c.SandboxCPU <= 0 {
+		return 25
+	}
+	if c.SandboxCPU < 5 {
+		return 5
+	}
+	if c.SandboxCPU > 100 {
+		return 100
+	}
+	return c.SandboxCPU
 }
 
 // ToolEnabled reports whether a tool is enabled.

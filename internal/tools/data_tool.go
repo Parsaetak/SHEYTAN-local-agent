@@ -24,7 +24,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/logging"
@@ -94,8 +93,6 @@ func (t *DataTool) Parameters() any {
 	}{}
 }
 
-var _ = context.Background
-
 // dataParams mirrors Parameters() with json.RawMessage-friendly fields.
 type dataParams struct {
 	Action   string   `json:"action"`
@@ -116,8 +113,6 @@ type dataParams struct {
 	Limit    int      `json:"limit"`
 	Desc     bool     `json:"desc"`
 }
-
-var _ = json.Marshal
 
 func (t *DataTool) Run(ctx context.Context, args json.RawMessage) (string, error) {
 	var p dataParams
@@ -548,8 +543,6 @@ func (t *DataTool) actionQuery(p *dataParams) (string, error) {
 	sortCol := p.Column
 	if sortCol != "" {
 		if p.Desc || p.Limit > 0 {
-			var b strings.Builder
-			_ = b
 			// reuse sort logic via a temp dataset on projected data
 			si := -1
 			for j, c := range cols {
@@ -899,5 +892,3 @@ func sanitizeName(s string) string {
 	}
 	return b.String()
 }
-
-var _ = time.Now // keep time import if unused in future edits

@@ -30,6 +30,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/humanize"
 	"io"
 	"os"
 	"path/filepath"
@@ -215,7 +216,7 @@ func (m *Manager) Add(
 		return nil, fmt.Errorf(
 			"attachments: %s exceeds the %s per-file limit",
 			name,
-			humanBytes(m.limits.MaxFileSizeBytes),
+			humanize.Bytes(m.limits.MaxFileSizeBytes),
 		)
 	}
 
@@ -267,7 +268,7 @@ func (m *Manager) Add(
 	} else {
 		att.Note = fmt.Sprintf(
 			"binary attachment (%s) — not inlined; the agent can inspect it with its file tools at %s",
-			humanBytes(att.Size),
+			humanize.Bytes(att.Size),
 			obj,
 		)
 	}
@@ -524,7 +525,7 @@ func (m *Manager) Retrieve(
 			"----- attachment: %s (%s, %s) -----\n",
 			att.Name,
 			att.Kind,
-			humanBytes(att.Size),
+			humanize.Bytes(att.Size),
 		)
 	}
 
@@ -908,17 +909,6 @@ func clipRunes(s string, n int) string {
 	}
 
 	return string([]rune(s)[:n]) + "…"
-}
-
-func humanBytes(n int64) string {
-	switch {
-	case n >= 1<<20:
-		return fmt.Sprintf("%.1f MB", float64(n)/(1<<20))
-	case n >= 1<<10:
-		return fmt.Sprintf("%.1f KB", float64(n)/(1<<10))
-	default:
-		return fmt.Sprintf("%d B", n)
-	}
 }
 
 // writeObjectAtomic writes data to path refusing to follow symlinks and

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/agent"
@@ -31,6 +32,14 @@ import (
 
 // Stack is the fully-wired agent runtime.
 type Stack struct {
+	// Src is the live, concurrency-safe configuration source shared by
+	// every component that reads config at runtime (client, orchestrator,
+	// engine, API handlers). Values obtained from Load() are immutable.
+	Src *config.Source
+
+	// Cfg is the configuration the stack was CONSTRUCTED with (v1.1.4Z:
+	// historical field kept for construction-time consumers; live reads
+	// must go through Src).
 	Cfg     *config.Config
 	Client  *llm.Client
 	Orch    *agent.Orchestrator
@@ -60,14 +69,20 @@ type Stack struct {
 	// (the `linux` tool) and the Terminal view — one shared instance so the
 	// user sees (and can replay) exactly what the agent did.
 	Linux *tools.LinuxSim
+
+	// browserMu guards the lazy BrowserTool cache.
+	browserMu sync.Mutex
 }
 
 // NewStack wires every tool into the orchestrator. The sandbox is optional —
 // if the Job-Object sandbox can't be created, the plain codeExec tool stays
-// registered.
+// registered. SandboxEnabled (v1.1.4Z, default true) gates the override: the
+// setting was previously stored but never read — a meaningless toggle.
 func NewStack(cfg *config.Config) *Stack {
-	client := llm.NewClient(cfg)
-	orch := agent.New(cfg, client)
+	src := config.NewSource(cfg)
+
+	client := llm.NewClient(src)
+	orch := agent.New(src, client)
 
 	// v1.1.3Z: content-aware context cache shared by attachments, chunking
 	// pipelines and retrieval.
@@ -123,7 +138,7 @@ func NewStack(cfg *config.Config) *Stack {
 	orch.Register(tools.DiffTool{})
 
 	// v1.0.6: vision + terminal.
-	llamaSrv := llm.NewLlamaServer(cfg)
+	llamaSrv := llm.NewLlamaServer(src)
 
 	orch.Register(tools.Screenshot{})
 
@@ -419,19 +434,34 @@ func NewStack(cfg *config.Config) *Stack {
 	}
 
 	// Job-Object sandbox (overrides plain codeExec when available).
-	sb, sbErr := sandbox.NewCodeExecSandbox(
-		512,
-		25,
-		cfg.SandboxDir(),
-	)
+	// v1.1.4Z: the config's sandbox controls actually apply now —
+	// SandboxEnabled gates registration, SandboxMemory/SandboxCPU feed the
+	// governor (previously hardcoded 512 MB / 25% and the settings card did
+	// nothing).
+	var sb *sandbox.CodeExecSandbox
 
-	if sbErr == nil {
-		orch.Register(sb)
+	if cfg.SandboxEnabled {
+		var sbErr error
+
+		sb, sbErr = sandbox.NewCodeExecSandbox(
+			cfg.EffectiveSandboxMemoryMB(),
+			cfg.EffectiveSandboxCPUPercent(),
+			cfg.SandboxDir(),
+		)
+
+		if sbErr == nil {
+			orch.Register(sb)
+		} else {
+			logging.Default().Warn(
+				"runtime",
+				"Job-Object sandbox unavailable, using plain codeExec: %v",
+				sbErr,
+			)
+		}
 	} else {
-		logging.Default().Warn(
+		logging.Default().Info(
 			"runtime",
-			"Job-Object sandbox unavailable, using plain codeExec: %v",
-			sbErr,
+			"Job-Object sandbox disabled by configuration — plain codeExec in use",
 		)
 	}
 
@@ -439,7 +469,7 @@ func NewStack(cfg *config.Config) *Stack {
 		client,
 		orch,
 		mem,
-		cfg.EffectiveModel,
+		func() string { return src.Load().EffectiveModel() },
 		cfg.EffectiveMultiAgentDepth(),
 	)
 
@@ -449,6 +479,7 @@ func NewStack(cfg *config.Config) *Stack {
 	client.SetBusyHook(llamaSrv.MarkBusy)
 
 	return &Stack{
+		Src:          src,
 		Cfg:          cfg,
 		Client:       client,
 		Orch:         orch,
@@ -517,7 +548,12 @@ func formatCapsuleLine(
 }
 
 // BrowserTool returns the shared browser tool registered in the stack.
+// (v1.1.4Z: the lazy cache is mutex-guarded — two concurrent callers could
+// previously race the field write.)
 func (s *Stack) BrowserTool() *tools.BrowserTool {
+	s.browserMu.Lock()
+	defer s.browserMu.Unlock()
+
 	if s.Browser != nil {
 		return s.Browser
 	}
@@ -541,12 +577,12 @@ func (s *Stack) BrowserTool() *tools.BrowserTool {
 // This is the ONE canonical engine gate: every inference path (desktop,
 // serve, ask) funnels through it.
 func (s *Stack) EnsureLLM() error {
-	if s.Cfg.IsRemote() {
+	if s.Src.Load().IsRemote() {
 		logging.Default().Info(
 			"runtime",
 			"remote provider active: %s (model %s)",
-			s.Cfg.RemoteBaseURL,
-			s.Cfg.EffectiveModel(),
+			remoteBaseURL(s.Src.Load()),
+			s.Src.Load().EffectiveModel(),
 		)
 
 		return nil
@@ -566,12 +602,12 @@ func (s *Stack) EnsureLLM() error {
 // because the user may only be browsing settings; a later explicit start
 // or the first message retries through EnsureLLM.
 func (s *Stack) PrewarmLLM() {
-	if s.Cfg.IsRemote() {
+	if s.Src.Load().IsRemote() {
 		logging.Default().Info(
 			"runtime",
 			"remote provider active: %s (model %s) — local engine not started",
-			s.Cfg.RemoteBaseURL,
-			s.Cfg.EffectiveModel(),
+			remoteBaseURL(s.Src.Load()),
+			s.Src.Load().EffectiveModel(),
 		)
 
 		return
@@ -591,7 +627,7 @@ func (s *Stack) PrewarmLLM() {
 		logging.Default().Info(
 			"engine",
 			"local engine ready automatically (model %s)",
-			s.Cfg.EffectiveModel(),
+			s.Src.Load().EffectiveModel(),
 		)
 	}()
 }
@@ -601,7 +637,7 @@ func (s *Stack) PrewarmLLM() {
 // ready within the timeout or the request fails with a clear, visible
 // error while the startup keeps progressing in the background.
 func (s *Stack) EnsureLLMContext(ctx context.Context) error {
-	if s.Cfg.IsRemote() {
+	if s.Src.Load().IsRemote() {
 		return nil
 	}
 
@@ -624,6 +660,14 @@ func (s *Stack) EnsureLLMContext(ctx context.Context) error {
 			ctx.Err(),
 		)
 	}
+}
+
+// remoteBaseURL renders the remote endpoint for logs (empty-safe).
+func remoteBaseURL(cfg *config.Config) string {
+	if cfg.RemoteBaseURL == "" {
+		return "(unset)"
+	}
+	return cfg.RemoteBaseURL
 }
 
 // Close tears down every owned subprocess/handle.

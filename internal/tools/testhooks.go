@@ -6,7 +6,10 @@
 // narrowest possible read-only shims. Production code never calls these.
 package tools
 
-import "math"
+import (
+	"math"
+	"sync/atomic"
+)
 
 // SplitCSVLineTest exposes csvFields to the stress suite (parity checks
 // against the v1.0.8 parser semantics on hostile inputs).
@@ -41,17 +44,21 @@ func (d *dataset) RowsTest() int {
 // NumericColumnTest exposes the parse-once numeric column cache.
 func (d *dataset) NumericColumnTest(col int) []float64 { return d.numericColumn(col) }
 
-// fetchAllowPrivateTest relaxes the fetch tool's SSRF guard so the release
-// stress suite (package cmd) can exercise HTML→text extraction against a
-// loopback httptest server. It is false in production; only the stress
-// suite flips it, and it restores the previous value when done.
-var fetchAllowPrivateTest = false
+// fetchAllowPrivateTest (v1.1.4Z: now an atomic) relaxes the fetch tool's
+// SSRF guard so the release stress suite (package cmd) can exercise
+// HTML→text extraction against a loopback httptest server. It is false in
+// production; only the stress suite flips it, and it restores the previous
+// value when done. The plain bool previously raced concurrent toggles.
+var fetchAllowPrivateTest atomic.Bool
 
 // SetFetchPrivateDestinationsAllowedForTest toggles the fetch SSRF guard's
 // public-destination requirement. Test-only — never call from production
 // code paths.
 func SetFetchPrivateDestinationsAllowedForTest(v bool) bool {
-	prev := fetchAllowPrivateTest
-	fetchAllowPrivateTest = v
-	return prev
+	return fetchAllowPrivateTest.Swap(v)
+}
+
+// fetchPrivateAllowed reports the test-only relaxation state.
+func fetchPrivateAllowed() bool {
+	return fetchAllowPrivateTest.Load()
 }

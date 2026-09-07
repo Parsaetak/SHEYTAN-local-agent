@@ -9,6 +9,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -62,6 +63,17 @@ type RunResult struct {
 	ContextUsage continuum.Usage
 }
 
+// abortCaption renders the correct end caption for a canceled context:
+// a user abort and the v1.1.4Z per-run time budget are different events
+// and must not be reported identically.
+func abortCaption(err error) string {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "Run stopped: exceeded the configured time budget"
+	}
+
+	return "Aborted by user"
+}
+
 // Recaller is the subset of the recall engine the orchestrator needs
 // (keeps the package decoupled for tests).
 type Recaller interface {
@@ -101,17 +113,19 @@ const thinkingNudgeSentinel = "## THINKING MODE (enabled by the user)"
 
 // Orchestrator runs the plan-execute-critic loop with streaming activity.
 type Orchestrator struct {
-	cfg       *config.Config
-	client    *llm.Client
-	tools     map[string]Tool
+	src     *config.Source
+	client  *llm.Client
+	toolsMu sync.RWMutex
+	tools   map[string]Tool
+
 	mu        sync.Mutex
 	sessionID string
 	recaller  Recaller
 }
 
-func New(cfg *config.Config, client *llm.Client) *Orchestrator {
+func New(src *config.Source, client *llm.Client) *Orchestrator {
 	return &Orchestrator{
-		cfg:    cfg,
+		src:    src,
 		client: client,
 		tools:  make(map[string]Tool),
 	}
@@ -119,12 +133,25 @@ func New(cfg *config.Config, client *llm.Client) *Orchestrator {
 
 // Register adds a tool to the registry.
 func (o *Orchestrator) Register(t Tool) {
+	o.toolsMu.Lock()
 	o.tools[t.Name()] = t
+	o.toolsMu.Unlock()
 }
 
-// Tools returns the tool registry (for schema export to the UI).
+// Tools returns the tool registry (for schema export to the UI). The map
+// is read-only by contract.
 func (o *Orchestrator) Tools() map[string]Tool {
+	o.toolsMu.RLock()
+	defer o.toolsMu.RUnlock()
 	return o.tools
+}
+
+// tool looks one tool up under the registry read lock.
+func (o *Orchestrator) tool(name string) (Tool, bool) {
+	o.toolsMu.RLock()
+	defer o.toolsMu.RUnlock()
+	t, ok := o.tools[name]
+	return t, ok
 }
 
 // SetRecaller wires the persistent recall engine (optional; nil disables
@@ -180,6 +207,13 @@ func (o *Orchestrator) RunDetailed(
 	recaller := o.recaller
 	o.mu.Unlock()
 
+	// v1.1.4Z: one consistent config snapshot per run. The previous code
+	// read the shared mutable Config throughout the loop — a Settings PATCH
+	// mid-run produced a data race and could flip sampling/tool policy
+	// between two iterations of the SAME turn. Changes now apply cleanly
+	// from the next run on.
+	cfg := o.src.Load()
+
 	result := RunResult{}
 
 	// v1.0.1: every conversation now starts with the SHEYTAN AI-context
@@ -193,8 +227,8 @@ func (o *Orchestrator) RunDetailed(
 			len(o.tools),
 		)
 
-		for name := range o.tools {
-			if o.cfg.ToolEnabled(name) {
+		for name := range o.Tools() {
+			if cfg.ToolEnabled(name) {
 				registeredToolNames = append(
 					registeredToolNames,
 					name,
@@ -203,7 +237,7 @@ func (o *Orchestrator) RunDetailed(
 		}
 
 		ctxContent := aicontext.SystemMessageWithTools(
-			o.cfg,
+			cfg,
 			registeredToolNames,
 		)
 
@@ -234,7 +268,7 @@ func (o *Orchestrator) RunDetailed(
 	// v1.0.2 thinking mode: append the <think> nudge to the AI-context
 	// message (stable position — the prefix only changes when the user
 	// toggles the mode, which is rare).
-	if o.cfg.ThinkingMode {
+	if cfg.ThinkingMode {
 		messages = ensureThinkingNudge(messages)
 	}
 
@@ -243,11 +277,11 @@ func (o *Orchestrator) RunDetailed(
 	// BEFORE the last user message — after all earlier history (so the
 	// llama.cpp KV cache still covers the stable prefix), before the fresh
 	// turn.
-	if recaller != nil && o.cfg.RecallEnabled {
+	if recaller != nil && cfg.RecallEnabled {
 		if q := lastUserQuery(messages); q != "" {
 			block := recaller.RelevantBlock(
 				q,
-				o.cfg.EffectiveRecallTopK(),
+				cfg.EffectiveRecallTopK(),
 				recallBlockTokenBudget,
 			)
 
@@ -291,7 +325,7 @@ func (o *Orchestrator) RunDetailed(
 	names := make([]string, 0, len(o.tools))
 
 	for name := range o.tools {
-		if o.cfg.ToolEnabled(name) {
+		if cfg.ToolEnabled(name) {
 			names = append(names, name)
 		}
 	}
@@ -305,7 +339,10 @@ func (o *Orchestrator) RunDetailed(
 	)
 
 	for _, name := range names {
-		t := o.tools[name]
+		t, ok := o.tool(name)
+		if !ok {
+			continue
+		}
 
 		spec := llm.ToolSpec{}
 		spec.Type = "function"
@@ -327,8 +364,8 @@ func (o *Orchestrator) RunDetailed(
 		SystemTokens:    sysTokens,
 		ToolTokens:      toolTokens,
 		RecallTokens:    injectedTokens,
-		NumCtx:          o.cfg.LLM.NumCtx,
-		MaxOutputTokens: o.cfg.LLM.MaxTokens,
+		NumCtx:          cfg.LLM.NumCtx,
+		MaxOutputTokens: cfg.LLM.MaxTokens,
 	})
 
 	plan.Recalled = result.Recalled
@@ -405,7 +442,7 @@ func (o *Orchestrator) RunDetailed(
 		})
 	}
 
-	maxIter := o.cfg.MaxIterations
+	maxIter := cfg.MaxIterations
 
 	if maxIter < 1 {
 		maxIter = 25
@@ -427,7 +464,7 @@ func (o *Orchestrator) RunDetailed(
 		if err := ctx.Err(); err != nil {
 			onActivity(Activity{
 				Type:      "done",
-				Caption:   "Aborted by user",
+				Caption:   abortCaption(err),
 				Timestamp: time.Now(),
 			})
 
@@ -444,7 +481,7 @@ func (o *Orchestrator) RunDetailed(
 		})
 
 		req := o.client.BuildChatRequest(
-			o.cfg.EffectiveModel(),
+			cfg.EffectiveModel(),
 			messages,
 			toolSpecs,
 		)
@@ -470,8 +507,8 @@ func (o *Orchestrator) RunDetailed(
 		// v1.0.9: frame-targeted emit cadence (SmoothStream → ~8ms).
 		emitEvery := responseEmitInterval
 
-		if o.cfg.SmoothStream {
-			emitEvery = o.cfg.EffectiveStreamEmitInterval()
+		if cfg.SmoothStream {
+			emitEvery = cfg.EffectiveStreamEmitInterval()
 		}
 
 		emitProgress := func(force bool) {
@@ -530,10 +567,10 @@ func (o *Orchestrator) RunDetailed(
 		)
 
 		if err != nil {
-			if ctx.Err() != nil {
+			if cerr := ctx.Err(); cerr != nil {
 				onActivity(Activity{
 					Type:      "done",
-					Caption:   "Aborted by user",
+					Caption:   abortCaption(cerr),
 					Timestamp: time.Now(),
 				})
 
@@ -553,6 +590,18 @@ func (o *Orchestrator) RunDetailed(
 		// for the UI HUD.
 		if hud := perf.String(); hud != "" {
 			result.Perf = hud
+
+			// v1.1.4Z: ShowPerfHUD was a stored setting no
+			// runtime path ever read. When enabled (the default)
+			// the live HUD line now reaches the activity stream
+			// ("perf" events never touch the streamed text).
+			if cfg.ShowPerfHUD {
+				onActivity(Activity{
+					Type:      "perf",
+					Caption:   hud,
+					Timestamp: time.Now(),
+				})
+			}
 		}
 
 		emitProgress(true) // final flush — consumers always see the full text
@@ -602,7 +651,7 @@ func (o *Orchestrator) RunDetailed(
 			if err := ctx.Err(); err != nil {
 				onActivity(Activity{
 					Type:      "done",
-					Caption:   "Aborted by user",
+					Caption:   abortCaption(err),
 					Timestamp: time.Now(),
 				})
 
@@ -625,12 +674,12 @@ func (o *Orchestrator) RunDetailed(
 				Timestamp: time.Now(),
 			})
 
-			tool, ok := o.tools[tc.Function.Name]
+			tool, ok := o.tool(tc.Function.Name)
 
 			var result2 string
 
 			if ok &&
-				!o.cfg.ToolEnabled(
+				!cfg.ToolEnabled(
 					tc.Function.Name,
 				) {
 				// v1.0.2 tool selection: the model reached for a tool the
@@ -787,10 +836,10 @@ func (o *Orchestrator) RunDetailed(
 				},
 			)
 
-			if ctx.Err() != nil {
+			if cerr := ctx.Err(); cerr != nil {
 				onActivity(Activity{
 					Type:      "done",
-					Caption:   "Aborted by user",
+					Caption:   abortCaption(cerr),
 					Timestamp: time.Now(),
 				})
 

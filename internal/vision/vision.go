@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"fmt"
+	"golang.org/x/image/bmp"
 	"image"
 	"image/gif"
 	"image/jpeg"
@@ -397,6 +398,13 @@ func decodeImage(data []byte) (image.Image, string, error) {
 	r.Reset(data)
 	if img, err := gif.Decode(r); err == nil {
 		return img, "gif", nil
+	}
+	r.Reset(data)
+	// v1.1.4Z: .bmp files were accepted by IsImageFile but had no decoder —
+	// a bmp attachment always failed at encode time with "unsupported
+	// image format".
+	if img, err := bmp.Decode(r); err == nil {
+		return img, "bmp", nil
 	}
 	return nil, "", fmt.Errorf("unsupported image format")
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/memory"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/multiagent"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/sandbox"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/sessions"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/tools"
@@ -43,8 +44,9 @@ func runStressSuite(cfg *config.Config) int {
 	tools.SetBaseDir(cfg.DataDir)
 
 	store := sessions.New(cfg.SessionsDir)
-	client := llm.NewClient(cfg)
-	orch := agent.New(cfg, client)
+	src := config.NewSource(cfg)
+	client := llm.NewClient(src)
+	orch := agent.New(src, client)
 	orch.Register(tools.Shell{})
 	orch.Register(tools.Files{})
 	orch.Register(tools.CodeExec{})
@@ -58,9 +60,7 @@ func runStressSuite(cfg *config.Config) int {
 		{"garbage_tool_args", func() error { return stressGarbageToolArgs() }},
 		{"unknown_tool", func() error { return stressUnknownTool(orch) }},
 		{"null_path_in_files_tool", func() error { return stressNullPath() }},
-		{"infinite_loop_planner", func() error { return stressInfiniteLoop(orch) }},
 		{"malformed_json_in_tool_args", func() error { return stressMalformedJSON() }},
-		{"empty_llm_reply_thrice", func() error { return stressEmptyReplies() }},
 		{"abort_mid_call", func() error { return stressAbortMid(orch) }},
 		{"huge_tool_result", func() error { return stressHugeResult() }},
 		{"read_missing_file", func() error { return stressReadMissing() }},
@@ -164,31 +164,12 @@ func stressNullPath() error {
 	return nil
 }
 
-func stressInfiniteLoop(orch *agent.Orchestrator) error {
-	// The orchestrator's max-iterations guard should kick in (default 25).
-	// We don't actually run it (no LLM) — we just verify the cap is set.
-	cfg := &config.Config{MaxIterations: 5}
-	if cfg.MaxIterations != 5 {
-		return fmt.Errorf("max iterations not respected")
-	}
-	return nil
-}
-
 func stressMalformedJSON() error {
 	t := tools.Shell{}
 	// Trailing comma, unquoted keys — should error
 	_, err := t.Run(context.Background(), json.RawMessage(`{command: "ls",}`))
 	if err == nil {
 		return fmt.Errorf("expected error for malformed JSON")
-	}
-	return nil
-}
-
-func stressEmptyReplies() error {
-	// Simulate 3 empty LLM replies — the orchestrator should handle gracefully
-	// (We can't actually call the LLM here without a running model, so we
-	// verify that an empty stream is a no-op.)
-	if "" == "" { /* simulate empty reply */
 	}
 	return nil
 }
@@ -338,9 +319,6 @@ func randomString(n int) string {
 	return string(b)
 }
 
-// stub to satisfy the os import if unused
-var _ = os.O_RDONLY
-
 // --- new v0.7 stress tests ---
 
 func stressMemorySearch() error {
@@ -467,7 +445,7 @@ func stressExtractJSONFences() error {
 	// We can't call it directly (private function) — so we test via the
 	// behavior contract: it should return the JSON string without fences.
 	raw := "```json\n{\"a\": 1, \"b\": [1, 2, 3]}\n```"
-	extracted := simulateExtractJSON(raw)
+	extracted := multiagent.ExtractJSON(raw)
 	if !strings.Contains(extracted, `"a": 1`) {
 		return fmt.Errorf("extract failed to strip fences: got %q", extracted)
 	}
@@ -481,7 +459,7 @@ func stressExtractJSONNested() error {
 	raw := `Here's the plan:
 {"summary": "x", "steps": [{"id": 1, "goal": "do thing"}]}
 That's it.`
-	extracted := simulateExtractJSON(raw)
+	extracted := multiagent.ExtractJSON(raw)
 	if !strings.Contains(extracted, `"summary": "x"`) {
 		return fmt.Errorf("extract failed: %q", extracted)
 	}
@@ -496,45 +474,11 @@ That's it.`
 
 func stressExtractJSONNoBraces() error {
 	raw := "just prose, no JSON here"
-	extracted := simulateExtractJSON(raw)
+	extracted := multiagent.ExtractJSON(raw)
 	if extracted != raw {
 		return fmt.Errorf("expected raw string when no braces, got %q", extracted)
 	}
 	return nil
-}
-
-// simulateExtractJSON mirrors multiagent.extractJSON (kept here because the
-// original is package-private).
-func simulateExtractJSON(s string) string {
-	s = strings.TrimSpace(s)
-	if strings.HasPrefix(s, "```") {
-		lines := strings.Split(s, "\n")
-		var out []string
-		for _, l := range lines {
-			if strings.HasPrefix(l, "```") {
-				continue
-			}
-			out = append(out, l)
-		}
-		s = strings.Join(out, "\n")
-	}
-	start := strings.Index(s, "{")
-	if start < 0 {
-		return s
-	}
-	depth := 0
-	for i := start; i < len(s); i++ {
-		switch s[i] {
-		case '{':
-			depth++
-		case '}':
-			depth--
-			if depth == 0 {
-				return s[start : i+1]
-			}
-		}
-	}
-	return s[start:]
 }
 
 func stressSandboxSmoke() error {

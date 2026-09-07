@@ -14,16 +14,16 @@ const activityTimeFormatter = new Intl.DateTimeFormat([], {
 function formatActivity(activity: ActivityEvent): string {
   const data = activity.data;
 
+  // v1.1.4Z: the backend agent.Activity contract carries the caption in
+  // `caption` — this formatter previously probed message/content/text/error
+  // (fields the backend never populates), so every event rendered as a bare
+  // type label like "tool_start" instead of the actual caption.
+  if (typeof data.caption === "string" && data.caption) {
+    return data.caption;
+  }
+
   if (typeof data.message === "string") {
     return data.message;
-  }
-
-  if (typeof data.content === "string") {
-    return data.content;
-  }
-
-  if (typeof data.text === "string") {
-    return data.text;
   }
 
   if (typeof data.error === "string") {

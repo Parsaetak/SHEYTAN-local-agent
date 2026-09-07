@@ -129,7 +129,7 @@ func fakeEngineConfig(t *testing.T, mode string) (*config.Config, string) {
 func TestEngineStartReachesReady(t *testing.T) {
 	cfg, modelFile := fakeEngineConfig(t, "")
 
-	srv := NewLlamaServer(cfg)
+	srv := NewLlamaServer(config.NewSource(cfg))
 	defer func() { _ = srv.Stop() }()
 
 	if got := srv.State(); got != StateIdle {
@@ -161,7 +161,7 @@ func TestEngineStartFailsWithMissingBinary(t *testing.T) {
 	cfg, _ := fakeEngineConfig(t, "")
 	cfg.LlamaBinPath = "/nonexistent/llama-server-missing"
 
-	srv := NewLlamaServer(cfg)
+	srv := NewLlamaServer(config.NewSource(cfg))
 
 	err := srv.Start()
 	if err == nil {
@@ -179,7 +179,7 @@ func TestEngineStartFailsWithNoModel(t *testing.T) {
 	dir := t.TempDir()
 	cfg.ModelsDir = dir + "/empty-models"
 
-	srv := NewLlamaServer(cfg)
+	srv := NewLlamaServer(config.NewSource(cfg))
 
 	err := srv.Start()
 	if err == nil {
@@ -194,7 +194,7 @@ func TestEngineStartFailsWithNoModel(t *testing.T) {
 func TestEngineStopWalksStoppingToStopped(t *testing.T) {
 	cfg, _ := fakeEngineConfig(t, "")
 
-	srv := NewLlamaServer(cfg)
+	srv := NewLlamaServer(config.NewSource(cfg))
 	defer func() { _ = srv.Stop() }()
 
 	if err := srv.Start(); err != nil {
@@ -221,7 +221,7 @@ func TestEngineStopWalksStoppingToStopped(t *testing.T) {
 func TestEngineEventsArePublished(t *testing.T) {
 	cfg, _ := fakeEngineConfig(t, "")
 
-	srv := NewLlamaServer(cfg)
+	srv := NewLlamaServer(config.NewSource(cfg))
 	defer func() { _ = srv.Stop() }()
 
 	events, unsubscribe := srv.SubscribeEvents()
@@ -255,7 +255,7 @@ func TestEngineEventsArePublished(t *testing.T) {
 func TestEngineDeathTriggersBoundedAutoRestart(t *testing.T) {
 	cfg, _ := fakeEngineConfig(t, "crash")
 
-	srv := NewLlamaServer(cfg)
+	srv := NewLlamaServer(config.NewSource(cfg))
 	defer func() { _ = srv.Stop() }()
 
 	if err := srv.Start(); err != nil {
@@ -303,7 +303,7 @@ func TestEngineDeathTriggersBoundedAutoRestart(t *testing.T) {
 func TestMarkBusyFlipsReadyAndBusy(t *testing.T) {
 	cfg, _ := fakeEngineConfig(t, "")
 
-	srv := NewLlamaServer(cfg)
+	srv := NewLlamaServer(config.NewSource(cfg))
 	defer func() { _ = srv.Stop() }()
 
 	// Idle engine: busy reporting must be a no-op.
@@ -337,7 +337,7 @@ func TestMarkBusyFlipsReadyAndBusy(t *testing.T) {
 func TestStopWithoutProcessIsSafe(t *testing.T) {
 	cfg, _ := fakeEngineConfig(t, "")
 
-	srv := NewLlamaServer(cfg)
+	srv := NewLlamaServer(config.NewSource(cfg))
 
 	if err := srv.Stop(); err != nil {
 		t.Fatalf("Stop on never-started engine: %v", err)

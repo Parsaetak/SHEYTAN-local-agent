@@ -164,10 +164,12 @@ func (r *Runner) Run(
 	// Coding Lab processes must not inherit the full host environment.
 	// This removes API keys, tokens, passwords, credentials, cookies, and
 	// other host secrets while retaining normal compiler/runtime variables.
-	cmd.Env = mergeEnvironment(
-		sanitizedEnvironment(),
-		command.Environment,
-	)
+	// v1.1.4Z: HOME and USERPROFILE are pinned to the workspace. A lexical
+	// policy check cannot see through shell expansion, so $HOME/~/ tokens
+	// previously escaped the workspace jail while still resolving to the
+	// real user profile (reads AND writes outside the sandbox).
+	sanitized := proc.SanitizedEnvironment(homeOverrides(workingDir))
+	cmd.Env = mergeEnvironment(sanitized, command.Environment)
 
 	// stdin remains disconnected: autonomous runs must never block waiting
 	// for terminal input.
@@ -316,91 +318,6 @@ func buildShellCommand(
 
 // sanitizedEnvironment keeps normal build/runtime variables while removing
 // variables that commonly contain credentials or other host secrets.
-func sanitizedEnvironment() []string {
-	base := os.Environ()
-	result := make([]string, 0, len(base))
-
-	for _, item := range base {
-		key := envKey(item)
-
-		if key == "" {
-			continue
-		}
-
-		if isSensitiveEnvKey(key) {
-			continue
-		}
-
-		result = append(result, item)
-	}
-
-	return result
-}
-
-func isSensitiveEnvKey(key string) bool {
-	key = strings.ToUpper(strings.TrimSpace(key))
-
-	if key == "" {
-		return true
-	}
-
-	// Explicit high-value secret variables.
-	switch key {
-	case "OPENAI_API_KEY",
-		"ANTHROPIC_API_KEY",
-		"GEMINI_API_KEY",
-		"GOOGLE_API_KEY",
-		"GITHUB_TOKEN",
-		"GH_TOKEN",
-		"AWS_ACCESS_KEY_ID",
-		"AWS_SECRET_ACCESS_KEY",
-		"AWS_SESSION_TOKEN",
-		"AZURE_CLIENT_SECRET",
-		"NPM_TOKEN",
-		"PYPI_TOKEN":
-		return true
-	}
-
-	// Generic secret-bearing names.
-	sensitiveFragments := []string{
-		"API_KEY",
-		"APIKEY",
-		"ACCESS_TOKEN",
-		"AUTH_TOKEN",
-		"BEARER_TOKEN",
-		"CLIENT_SECRET",
-		"PASSWORD",
-		"PASSWD",
-		"SECRET",
-		"TOKEN",
-		"CREDENTIAL",
-		"PRIVATE_KEY",
-		"COOKIE",
-		"SESSION_SECRET",
-	}
-
-	for _, fragment := range sensitiveFragments {
-		if strings.Contains(key, fragment) {
-			return true
-		}
-	}
-
-	// Cloud/provider credential namespaces should not enter autonomous jobs.
-	for _, prefix := range []string{
-		"AWS_",
-		"AZURE_",
-		"GOOGLE_APPLICATION_CREDENTIALS",
-		"GCP_",
-		"DOCKER_AUTH",
-	} {
-		if strings.HasPrefix(key, prefix) {
-			return true
-		}
-	}
-
-	return false
-}
-
 func mergeEnvironment(
 	base,
 	extra []string,
@@ -420,7 +337,7 @@ func mergeEnvironment(
 	for _, item := range extra {
 		key := envKey(item)
 
-		if key == "" || isSensitiveEnvKey(key) {
+		if key == "" || proc.IsSensitiveEnvKey(key) {
 			continue
 		}
 
@@ -444,6 +361,17 @@ func envKey(value string) string {
 	}
 
 	return strings.ToUpper(value[:index])
+}
+
+// homeOverrides pins the shell-visible home directory into the workspace so
+// $HOME/~/ expansion cannot escape the jail (v1.1.4Z).
+func homeOverrides(workingDir string) map[string]string {
+	return map[string]string{
+		"HOME":          workingDir,
+		"USERPROFILE":   workingDir,
+		"TMPDIR":        workingDir,
+		"SHELLYTAN_JOB": "1",
+	}
 }
 
 func buildCommandResult(

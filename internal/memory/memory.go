@@ -74,6 +74,18 @@ type Entry struct {
 type Store struct {
 	path string
 	mu   sync.Mutex
+
+	// v1.1.4Z: parsed-entry cache keyed by file (size, mtime). Every read
+	// previously re-opened and re-parsed the whole JSONL file — the memory
+	// tool calls Search on every use, so long stores made each tool call
+	// O(file). Appends invalidate by bumping the observed stat.
+	cache    []Entry
+	cacheKey cacheKey
+}
+
+type cacheKey struct {
+	size int64
+	mod  time.Time
 }
 
 func New(path string) *Store {
@@ -299,13 +311,30 @@ func (s *Store) All() ([]Entry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if entries, ok := s.cachedLocked(); ok {
+		out := make([]Entry, len(entries))
+		copy(out, entries)
+		return out, nil
+	}
+
 	return s.allLocked()
+}
+
+// cachedLocked returns the cached entries when the backing file is
+// byte-identical to the cache key (same size + mtime).
+func (s *Store) cachedLocked() ([]Entry, bool) {
+	fi, err := os.Stat(s.path)
+	if err != nil || fi.Size() != s.cacheKey.size || !fi.ModTime().Equal(s.cacheKey.mod) {
+		return nil, false
+	}
+	return s.cache, true
 }
 
 func (s *Store) allLocked() ([]Entry, error) {
 	f, err := os.Open(s.path)
 	if err != nil {
 		if os.IsNotExist(err) {
+			s.cache, s.cacheKey = nil, cacheKey{}
 			return nil, nil
 		}
 
@@ -338,6 +367,11 @@ func (s *Store) allLocked() ([]Entry, error) {
 
 	if err := sc.Err(); err != nil {
 		return nil, err
+	}
+
+	// refresh the cache key from the post-read stat
+	if fi, err := f.Stat(); err == nil {
+		s.cache, s.cacheKey = out, cacheKey{size: fi.Size(), mod: fi.ModTime()}
 	}
 
 	return out, nil

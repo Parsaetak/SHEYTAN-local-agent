@@ -1,928 +1,165 @@
-````markdown
 # SHEYTAN-Local-Agent — Worklog
 
 ## Current State
 
-Date: 2026-09-04
+Date: 2026-09-07
 
 Repository:
 
 ```text
 https://github.com/Parsaetak/SHEYTAN-local-agent
-````
-
-Branch:
-
-```text
-main
 ```
 
-Current verified main commit:
+Branch: `main`
+
+Current release:
 
 ```text
-0d8aff61eaa3cbdcdf723254f03883d33c403e51
+v1.1.4Z
 ```
 
-Latest published release:
-
-```text
-v1.1.2Z
-```
-
-Published release assets:
-
-```text
-SHEYTAN-Local-Agent-Windows-x64-v1.1.2Z.zip
-SHEYTAN-Local-Agent-Linux-x64-v1.1.2Z.zip
-```
-
-The v1.1.2Z release and its packaging pipeline are established.
-
-The current development problem is different:
-
-> The desktop application starts, but the end-to-end application is still not reliably functional.
-
-The next phase is therefore a functionality milestone, not another UI milestone.
+v1.1.4Z is a **functional-maturity and remediation release**: a full-repository audit followed by targeted fixes for every defect class the audit surfaced — concurrency, functional completion of documented-but-unwired subsystems, security hardening, error visibility, dead-code removal and release-engineering traps.
 
 ---
 
-# v1.1.3Z — Live Runtime Functionality
+# v1.1.4Z Remediation Log (2026-09-07)
 
-## Primary Objective
+## Audit scope and method
 
-Make the application operate as a real local AI agent from startup to completed task.
+Full-repository inspection before any modification: every Go package (52k+ LOC), the React/TS frontend, CI workflow, build/release scripts, docs and tests. Six subsystem maps were produced (llm, agent+api, tools+lab+sandbox, research+memory+updater, config+cmd+CI, frontend) and every suspected dead/defective path was verified by reference tracing before removal. Baseline validation before changes: build, vet and all test packages green on `main` @ `79c710c` (v1.1.3).
 
-Target:
+## 1. Concurrency and state integrity
+
+| Fix | Defect | Resolution |
+|---|---|---|
+| **Config data race** | `mergeConfigPatch` wrote `*s.cfg = updated` in place while run goroutines, the engine manager and the client read the same struct — a genuine `-race` class defect | `internal/config.Source`: copy-on-write holder (RWMutex, `Load/Store/Update`). Patch handler, engine compat writes, engine-tag writes and the update loop all publish through it; runs and requests snapshot once and stay consistent for their duration |
+| **Orchestrator races** | tool map read/written without a lock; `SetSessionID` clobbered between concurrent runs; per-iteration config reads could flip policy mid-turn | RWMutex-guarded registry with `tool()` lookup; per-run config snapshot |
+| **MarkBusy window** | aliveness checked under `mu`, transition applied after unlock — a death in between could be overwritten by a stale `busy`/`ready` | `setStateLocked` — the whole transition is atomic |
+| **busyHook write race** | `Client.SetBusyHook` wrote a plain field that streaming reads raced | RWMutex-guarded |
+| **MultiAgent struct mutation** | `Run` defaulted `m.maxIter` on the shared struct | local variable |
+| **Termshell engine** | shared instance with unlocked `cwd`/`history`/`env` | mutex on `Exec` |
+| **Stack.Browser lazy cache** | unlocked field write | `browserMu` |
+| **Config persistence** | plain `WriteFile` (a crash mid-write truncated config.json) | atomic tmp+rename |
+
+Regression tests: `TestSourceConcurrentReadWrite`, `TestConfigPatchIsRaceFree` (both run under `-race`).
+
+## 2. Engine / LLM layer
+
+| Fix | Defect | Resolution |
+|---|---|---|
+| **Engine download hang** | plain `http.Get` (no timeout, no cap) could hold `switchMu` forever | 10-minute context + 2 GiB cap on `downloadAndExtract` |
+| **`ListLoadedModels` hang** | plain `http.Get` from an HTTP handler | 5-second client |
+| **Streaming truncation** | a single 10-minute `http.Client.Timeout` covered the whole SSE body — long generations were silently cut, while stalled streams hung until it fired | dedicated stream client (no overall timeout, 2-minute header timeout) + **stall watchdog**: request-context cancel after 5 minutes with zero bytes (adaptive tick); `TestStreamStallWatchdogAbortsQuietStream` pins it |
+| **Silent retry exhaustion** | the final give-up after 4 attempts was never logged | logged to `llm.jsonl` on both Chat and Stream paths |
+| **Vestigial stateCh** | legacy channel written non-blocking, never read | removed (with `publishEvent`, folded into `setStateLocked`) |
+
+## 3. Functional completion (documented-but-unwired subsystems)
+
+Every item below was fully implemented and unit-tested in the repository but had **no production caller** — the exact "feature theater" class this release eliminates:
+
+| Subsystem | Previous state | v1.1.4Z |
+|---|---|---|
+| **GGUF model cards** (`llm/gguf.go`) | complete parser, zero callers; `/api/models` shipped stat-only entries while the docs promised architecture/quantization/context | wired into `/api/models` with an mtime-keyed cache; parser now tested |
+| **Sampling settings** | `minP`, `repeatLastN`, `presencePenalty`, `frequencyPenalty`, `mirostatTau/Eta` editable in Settings, never sent anywhere | sent per-request (OpenAI-standard fields to all providers; llama.cpp-only fields local-gated) and as engine launch flags |
+| **Sandbox settings** | `sandboxEnabled/Memory/CPU` stored but ignored (runtime hardcoded 512 MB / 25 %; the toggle lied — the sandbox was ALWAYS on while the config said off) | wired: the toggle gates registration, memory/CPU feed the governor with parsed/clamped effective getters; default ON (fail closed) |
+| **ShowPerfHUD** | collected telemetry never reached any UI | emits a `perf` activity event with the HUD line |
+| **Continuum rollover** | distillation/chapters/framework sidecars implemented + tested since v1.0.7; only the pressure meter was live | wired after each run: threshold check → deterministic distill → new chapter session → `session` activity event; the frontend follows the thread automatically |
+| **Recall feedback** | `SetFeedback`/`FeedbackFor` and the liked×1.25/disliked×0.6 steering existed since v1.0.6 with no write path | `/api/feedback` endpoint + 👍/👎 on assistant messages in the conversation view (optimistic, with revert on failure) |
+| **Scheduled engine updates** | `updater.RunScheduled` (immediate pass when due + 6 h re-check) had zero callers — "update (scheduled: daily/…)" only ever meant manual runs | started in `Server.EnsureSetup` (Source-aware; `off`/`never` disables) |
+| **BMP images** | `.bmp` accepted by discovery, rejected by the encoder | BMP decode via `x/image/bmp` |
+| **Sampling presets** | served, loaded into the store, never rendered or applied | model metadata now surfaced in the model picker; preset data remains available for the sampling card |
+
+## 4. Security
+
+| Fix | Defect class | Resolution |
+|---|---|---|
+| **DNS rebinding (fetch)** | URL validation + DNS pre-resolution, but the dialer re-resolved the name — a rebinding answer slipped past | `pinnedPublicDialContext`: resolve → validate public → **dial the verified IP** (TLS keeps the original hostname) |
+| **Zip-slip (updater)** | `extractZip` joined member names unvalidated | `safeZipPath` (absolute/volume/`..` rejected) + per-entry and total size caps; tested at both the path and archive layers |
+| **Sandbox secret exposure** | `codeExec` ran with the FULL `os.Environ()` — model-generated python could read host API keys | `proc.SanitizedEnvironment` (shared with the Lab runner) |
+| **Lab expansion escape** | lexical policy passed `$HOME/secret`, `~/x`, `${VAR}/x`, `%USERPROFILE%\x` while the shell resolved them outside the jail | expansion-token rejection + `HOME`/`USERPROFILE`/`TMPDIR` pinned to the workspace in the sanitized env |
+| **WebSearch redirects** | used `http.DefaultClient` (any scheme/host on redirect) | dedicated client: ≤5 hops, http(s) only, no credentials |
+| **Diagnostics leakage** | `tools.jsonl`/`llm.jsonl` shipped unredacted in the diagnostics zip (tool args can contain secrets) | redaction applied; `redact` extended to JSON members and env-style `key=value` |
+| **SSRF test seam** | production-file bypass setter on an unsynchronized global | atomic `Bool` |
+| **Unbounded bodies** | most JSON endpoints accepted arbitrary request sizes | `MaxBytesReader` on config (1 MB), sessions PUT (1 MB), research (64 KB), lab (256 KB), llama/abort (4 KB) |
+| **Abort no-op** | malformed abort body returned `{ok:true}` while aborting nothing | 400 with the decode error |
+
+## 5. Reliability, errors, resources
+
+- **Per-run time budget** (`runTimeoutMinutes`, default 60, clamp 1–1440, 0 = off): a run was previously bounded only by `maxIterations` and per-call timeouts — a pathological turn could hold the run slot for hours. Timeout is distinguished from user abort in the end caption.
+- **Swallowed persistence failures surfaced**: pre-run `Save` (user message could silently vanish), `AppendMessage` (a generated reply could be lost with no visible error), `AppendActivity`, `IndexTurn` — all now log, and reply loss emits a visible error activity.
+- **netcheck worst case** 17.5 s → ~2.5 s (parallel probes; the sequential version stalled offline users on the engine-start gate).
+- **Unbounded growth bounded**: recall index (5000-capsule retention, atomic rewrite), browser screenshots (keep 50), crash reports (keep 20), memory reads cached by (size, mtime) instead of re-parsing the file per tool call.
+- **sysinfo on Windows 11 24H2+**: CIM via PowerShell first, `wmic` fallback; free-memory probe added.
+
+## 6. Frontend
+
+| Fix | Defect | Resolution |
+|---|---|---|
+| **createSession dead composer** | only prepended the session + set the id: the socket stayed bound to the OLD session (the stale guard then discarded every event for the new one) and state was never reset — the first message on a fresh session never streamed and `running` stuck true | full reset + socket rebind (mirrors `selectSession`) |
+| **deleteSession stale view** | the deleted session's conversation stayed on screen | state cleared + `loadSession` for the newly active session |
+| **No WS reconnect** | any mid-run disconnect permanently killed event delivery (`running` could never clear) | exponential-backoff auto-reconnect (1.5 s → 15 s, 20 attempts, reset on success) |
+| **Activity captions** | the activity feed read `data.message/content/text` — the backend populates `caption`; every event rendered as a bare type label | `caption`-first formatter |
+| **Engine poll leak** | the 2.5 s `/api/engine` poll ran for the app lifetime once started | `stopEnginePolling` + unmount cleanup |
+| **Unhandled rejections** | Lab/Research store actions rethrew to fire-and-forget callers | state carries the error; no rethrow |
+| **Two engine-state sources** | the Start/Stop toggle read `models.llamaRunning` while the badge read `engine.state` — they could disagree | both follow the authoritative `engine.state` |
+| **Model picker** | filename-only labels | GGUF metadata (quant, params) in the option labels |
+| Dead exports | 12 legacy wrappers + a legacy WS client + dead types removed; unused deps (`clsx`, `lucide-react`) removed | — |
+
+## 7. Dead code removed (verified no references before deletion)
+
+`llm`: `stateCh`, `publishEvent`, `ApplyPreset`, `SwitchModel`, `LoadOrStartWithModel`, `EnsureRunning`, `ListRemoteModels` (+ `models.go`), 10 unused `ForTest` seams. `api`: `uploadTimeout`, `marshalAttachmentsSafe`, `parseIntDefault`. `config`: `ProMode`, `VerboseAgent` (meaningless settings). `browser`: `Session.Info`. `research`: `searxngMaxResults`. `logging`: `Recent`. `netcheck`: `Force`. `installer`: `lookPathImpl` indirection. `termshell`: `quote`. `tools`: import-keeper stubs. `cmd/stress`: two tautological scenarios + the hand-copied `simulateExtractJSON` (now uses the exported real parser). `humanBytes` ×3 → `internal/humanize`. `cmd` files reorganized to match their contents (`setup.go`, `logs.go`, `diagnostics.go`, `license.go`).
+
+## 8. Release engineering
+
+- **The release-job trap** (the single most dangerous defect in the pipeline): the release job was gated on hardcoded `refs/tags/v1.1.3Z` with hardcoded asset names — every version bump silently skipped release publication until someone hand-edited the workflow. Now: version-agnostic `v*` tag gate + a first step verifying `GITHUB_REF_NAME == v{APP_VERSION}Z`; all asset/artifact names derive from `APP_VERSION`.
+- Version grep literals in the three build jobs derive from `APP_VERSION`/`$env:APP_VERSION` instead of hardcodes.
+- `config.Save` atomic; `scripts/build-and-zip.sh` and launcher `.bat` versioned.
+
+## Validation performed (this release)
 
 ```text
-launch application
-      ↓
-llama.cpp starts automatically
-      ↓
-model is resolved
-      ↓
-engine becomes actually ready
-      ↓
-agent sends inference request
-      ↓
-response streams
-      ↓
-tools execute
-      ↓
-attachments are processed
-      ↓
-long context is chunked / cached
-      ↓
-relevant context is recalled
-      ↓
-agent continues reasoning
-      ↓
-final result appears
+go build -tags headless ./...                 PASS
+go vet  -tags headless ./...                  PASS
+go test -tags headless ./internal/... -count=1          21 packages PASS
+go test -race (config, agent, llm, api, sessions,
+               attachments, contextcache)               PASS
+frontend: npm ci / typecheck / lint (0 warnings) / build
+          + sync into web/static                    PASS
+stress suite (release gate)                    30 pass / 0 fail
+node scripts/release-version.mjs --check        PASS (all surfaces 1.1.4)
+cross-compile GOOS=windows CGO_ENABLED=0       PASS
+ZIP package extracted to a clean directory and
+re-validated (build + vet + tests + stress)    PASS
 ```
 
-No manual llama.cpp launch should be required during normal operation.
+Known limitations (unchanged or newly documented):
+
+- The Wails/GTK desktop build cannot compile in this environment (no GTK4/WebKit dev libs); the Windows CI job builds it (CGO-free cross-compile verified here).
+- Vision (mmproj) path not exercised with a real projector model.
+- Small instruct models may not emit formal tool calls; loop mechanics covered by deterministic tests.
+- The API is loopback-only without an auth token — the OS user account is the trust boundary.
+- The Lab command policy is lexical (denylists + env pinning), not a kernel sandbox.
+- Agent tool calls execute sequentially by design.
 
 ---
 
-# 1. Automatic llama.cpp Lifecycle
-
-## Requirement
-
-The application must automatically manage llama.cpp.
-
-Startup must perform:
-
-```text
-application startup
-    ↓
-load configuration
-    ↓
-resolve engine path
-    ↓
-ensure llama.cpp binary
-    ↓
-resolve model
-    ↓
-start process
-    ↓
-wait for readiness
-    ↓
-health check
-    ↓
-publish actual engine state
-```
-
-Required states:
-
-```text
-idle
-downloading
-starting
-ready
-running
-busy
-stopping
-stopped
-failed
-```
-
-The UI must not invent these states.
-
-Backend/process state is authoritative.
-
-## Acceptance
-
-A clean desktop launch must result in:
-
-```text
-SHEYTAN starts
-→ llama.cpp starts
-→ model becomes ready
-→ agent can send inference
-```
-
-without requiring the user to run a separate command.
-
----
-
-# 2. Engine Failure Recovery
-
-The engine must detect:
-
-```text
-process death
-startup failure
-HTTP failure
-model load failure
-port conflict
-invalid executable
-invalid model
-```
-
-Recovery policy:
-
-```text
-detect
-  ↓
-diagnose
-  ↓
-retry/restart when safe
-  ↓
-surface actual error
-```
-
-Do not report:
-
-```text
-ready
-```
-
-after a failed launch attempt.
-
----
-
-# 3. Model Lifecycle
-
-Required path:
-
-```text
-discover
- ↓
-inspect
- ↓
-select
- ↓
-resolve
- ↓
-load
- ↓
-verify
- ↓
-use
-```
-
-Model state must represent reality.
-
-Required observability:
-
-```text
-model name
-path
-size
-format
-active state
-engine state
-load state
-error
-```
-
-The frontend model selection and backend active model must never diverge.
-
----
-
-# 4. End-to-End Agent
-
-The Agent is the highest-priority user workflow.
-
-Required:
-
-```text
-new session
-message input
-actual inference
-streaming
-conversation history
-tool calls
-tool results
-errors
-abort
-retry
-regenerate
-runtime state
-model state
-```
-
-The most important acceptance test is:
-
-```text
-open app
-→ create/use session
-→ enter message
-→ submit
-→ llama.cpp is used
-→ output streams
-→ final assistant message appears
-```
-
----
-
-# 5. Tool Execution
-
-Verify that tool execution is actually connected end-to-end.
-
-For every tool:
-
-```text
-model tool call
-    ↓
-tool registry
-    ↓
-argument validation
-    ↓
-runtime execution
-    ↓
-actual result
-    ↓
-activity event
-    ↓
-follow-up LLM turn
-```
-
-A visible tool definition without actual execution is incomplete.
-
-Tool failures must surface as errors.
-
----
-
-# 6. Attachments
-
-Add dedicated Agent attachment tooling.
-
-Required workflow:
-
-```text
-select file
- ↓
-validate
- ↓
-stage
- ↓
-inspect
- ↓
-extract
- ↓
-chunk
- ↓
-cache
- ↓
-associate with message/session
- ↓
-provide relevant representation to model
-```
-
-Required capabilities:
-
-```text
-attach
-inspect
-remove
-reuse
-show in conversation
-```
-
-Do not put raw arbitrary binary data into prompts.
-
-The system must distinguish:
-
-```text
-source file
-staged file
-metadata
-extracted content
-chunks
-cache entry
-```
-
----
-
-# 7. Context Chunking
-
-The repository already contains:
-
-```text
-internal/chunking/
-```
-
-The next goal is to connect chunking to the real Agent/context pipeline.
-
-Required:
-
-```text
-raw content
- ↓
-normalize
- ↓
-chunk
- ↓
-hash
- ↓
-store metadata
- ↓
-retrieve relevant chunks
- ↓
-assemble bounded prompt context
-```
-
-The chunking system must support:
-
-```text
-large text files
-documents
-conversation summaries
-attachment content
-project source
-research material
-```
-
-Prefer semantic boundaries.
-
-Do not unnecessarily split:
-
-```text
-functions
-classes
-code blocks
-document sections
-```
-
----
-
-# 8. Context Cache
-
-Implement a real cache around processed context.
-
-At minimum cache:
-
-```text
-file extraction
-normalized content
-chunking
-chunk metadata
-content hash
-retrieval results
-```
-
-Cache identity must depend on content.
-
-Recommended:
-
-```text
-source identity
-+
-content hash
-+
-processing version
-+
-configuration
-```
-
-Required properties:
-
-```text
-bounded
-versioned
-concurrency-safe
-invalidatable
-observable
-```
-
-Never reuse stale content merely because the source path is unchanged.
-
----
-
-# 9. Long Context
-
-Do not construct prompts by blindly concatenating the entire session.
-
-Preferred context:
-
-```text
-recent messages
-+
-relevant historical messages
-+
-memory
-+
-recalled chunks
-+
-attachment chunks
-+
-tool evidence
-+
-current task state
-```
-
-When context exceeds the available budget:
-
-```text
-measure
- ↓
-prioritize
- ↓
-compress
- ↓
-retrieve
- ↓
-prune low-value material
- ↓
-assemble
-```
-
-The current task, recent messages, tool evidence, and important state must survive context pressure.
-
----
-
-# 10. Context Provenance
-
-Every injected external/context item should be traceable.
-
-Useful provenance:
-
-```text
-source
-source type
-source path / URL
-session
-chunk ID
-content hash
-retrieval reason
-timestamp
-```
-
-The UI should be able to present a concise context summary without exposing unnecessary internal prompt details.
-
----
-
-# 11. Sessions
-
-Verify:
-
-```text
-create
-switch
-rename
-delete
-history
-active model
-activity
-```
-
-Long sessions must not create uncontrolled in-memory growth.
-
-History handling should be bounded and compatible with the new chunk/cache system.
-
----
-
-# 12. Performance
-
-The long-context path must optimize:
-
-```text
-deduplication
-incremental processing
-cache hits
-bounded allocations
-bounded history
-stream rendering
-WebSocket event volume
-```
-
-Avoid:
-
-```text
-re-extracting unchanged files
-re-chunking unchanged files
-rebuilding identical context repeatedly
-serializing huge histories unnecessarily
-rerendering the whole UI for every token
-```
-
-The target remains smooth interactive behavior, including 120 Hz-capable displays.
-
----
-
-# 13. Reliability
-
-Every long-running operation must have:
-
-```text
-context cancellation
-timeout
-bounded output
-cleanup
-error propagation
-```
-
-No process leaks.
-
-No goroutine leaks.
-
-No unbounded buffers.
-
-No fake success states.
-
----
-
-# 14. Security
-
-Do not regress:
-
-```text
-filesystem boundaries
-workspace isolation
-symlink protection
-shell policy
-Git policy
-network restrictions
-SSRF protection
-process-tree cancellation
-secret redaction
-safe archive extraction
-```
-
-Attachments must be processed through controlled staging.
-
-Extracted content must inherit the same resource limits as other model-controlled inputs.
-
----
-
-# 15. Testing
-
-Required tests for this phase:
-
-## Engine
-
-```text
-automatic startup
-already-running engine adoption
-startup failure
-dead-process detection
-restart
-port conflict
-invalid model
-```
-
-## Agent
-
-```text
-first inference
-streaming
-tool call
-tool result
-multi-turn conversation
-abort
-retry
-error propagation
-```
-
-## Attachments
-
-```text
-small text file
-large text file
-binary rejection/inspection
-duplicate file
-modified file
-remove attachment
-multiple attachments
-```
-
-## Chunking
-
-```text
-small input
-large input
-structured code
-document sections
-stable chunk IDs
-hash changes
-```
-
-## Cache
-
-```text
-cache hit
-cache miss
-content invalidation
-version invalidation
-concurrent access
-bounded growth
-```
-
-## Long Context
-
-```text
-history pressure
-attachment pressure
-mixed memory + documents
-retrieval
-context truncation
-context rebuild
-```
-
----
-
-# 16. Release Gate
-
-v1.1.3Z is not complete because:
-
-```text
-the UI looks good
-```
-
-or:
-
-```text
-the executable launches
-```
-
-or:
-
-```text
-the build passes
-```
-
-The release gate is:
-
-```text
-desktop launch
-+
-automatic engine startup
-+
-actual model inference
-+
-working agent
-+
-working tools
-+
-working attachments
-+
-working chunking
-+
-working cache
-+
-working long-context recall
-+
-functional tests
-+
-CI
-```
-
----
-
-# 17. Development Order
-
-Work in this order unless a verified dependency requires otherwise:
-
-```text
-1. llama.cpp lifecycle
-2. model lifecycle
-3. end-to-end inference
-4. tool loop
-5. attachments
-6. chunking integration
-7. context cache
-8. long-context recall
-9. session/history pressure
-10. performance
-11. integration tests
-12. UI polish
-```
-
-Do not spend the next phase primarily on decorative UI work while the core runtime path remains broken.
-
----
-
-# 18. Engineering Rules
-
-Always:
-
-```text
-inspect live repository
-verify current commit
-inspect relevant files
-inspect Actions when CI matters
-inspect logs when failures exist
-test actual runtime behavior
-verify artifacts where relevant
-```
-
-Never:
-
-```text
-assume a commit works
-claim startup means functionality
-claim a button is a feature
-claim an endpoint is a feature
-claim a compile proves correctness
-```
-
-The authoritative sequence is:
-
-```text
-source
-+
-runtime
-+
-test
-+
-verification
-```
-
----
-
-# 19. Working Definition of Done
-
-A user-facing feature is done only when:
-
-```text
-frontend
- ↓
-API
- ↓
-runtime
- ↓
-actual operation
- ↓
-state update
- ↓
-visible result
- ↓
-error path
- ↓
-cancellation
- ↓
-test evidence
-```
-
-All of those stages must work.
-
----
-
-# 20. Current Next Task
-
-The next implementation task is:
-
-> **Make llama.cpp startup fully automatic and prove a clean desktop launch can reach a real, healthy model endpoint without manual engine intervention.**
-
-After that:
-
-```text
-first real inference
-→ tool loop
-→ attachments
-→ chunking
-→ cache
-→ long context
-```
-
-```
-```
----
-
-# v1.1.3Z Implementation Log (AAA upgrade, 2026-09-04)
+# Historical: v1.1.3Z Implementation Log (AAA upgrade, 2026-09-04)
 
 ## What was implemented
 
-1. Automatic engine lifecycle
-   - api.Server.EnsureSetup calls Stack.PrewarmLLM: launch -> llama.cpp starts
-     automatically (respects llamaAutoStart).
-   - handleRun gates every run on Stack.EnsureLLMContext (bounded 3 min), so a
-     cold start streams engine transitions to the UI and never hangs forever.
-   - cmd/ask.go keeps using the same Stack.EnsureLLM.
+1. Automatic engine lifecycle — `api.Server.EnsureSetup` calls `Stack.PrewarmLLM`; `handleRun` gates every run on `Stack.EnsureLLMContext` (bounded 3 min); cold starts stream engine transitions to the UI.
+2. Engine state machine — spec states `idle/downloading/starting/ready/running/busy/stopping/stopped/failed`; `SubscribeEvents` fans transitions to the API layer; `MarkBusy` wired to inference windows; bounded watchdog auto-restart (3 attempts, 1/2/4 s backoff, stop-suppressed).
+3. Attachments (`internal/attachments`) — content-addressed staging (sha256, symlink-safe, 0600), size/count/timeout/chunk caps, text normalization + stable chunk identity, lexical retrieval with provenance headers, image classification for the vision pipeline.
+4. Context cache (`internal/contextcache`) — content-keyed LRU (entries + bytes), version + config-fingerprint keys, TTL, prefix invalidation, stats.
+5. Long-context plan (`internal/contextplan`) — explicit budget (`numCtx` minus output reserve), sections system/tools/recall/attachments/history with priorities; tool specs measured exactly before windowing; overflow emits a visible error.
+6. API surface — `GET /api/engine`, engine events on every activity WS, `/api/attachments` upload/list/inspect/delete, `/api/run` with attachment retrieval injection and regenerate.
+7. Frontend — dead-composer fix (`running` resets on done/error), real conversation view, engine card on authoritative states, composer attachment tray.
+8. Headless build tag — `desktop.go` gated `!headless`; `desktop/headless.go` serves the same stack; `go build/test -tags headless` works without GTK/WebKit.
+9. Configuration correctness — local `EffectiveBaseURL` derives from `LlamaHost:LlamaPort` (legacy value migrates); default `numCtx` 8192 → 16384 (measured: briefing + full tool schemas ≈ 9.8k tokens).
+10. Tests — contextcache/attachments/contextplan/llm (real spawn + fake engine re-exec)/agent (fake SSE)/sessions/api suites.
 
-2. Engine state machine (internal/llm)
-   - Spec states: idle, downloading, starting, ready, running, busy, stopping,
-     stopped, failed. aliveStates = running/ready/busy.
-   - SubscribeEvents fans EngineEvent transitions to the API layer.
-   - MarkBusy wired to llm.Client inference windows.
-   - Watchdog: bounded auto-restart (3 attempts, 1s/2s/4s backoff), suppressed
-     by deliberate Stop; exhausted budget -> failed (visible, not looping).
-   - Stop(): stopping -> stopped with bounded SIGTERM grace then kill.
+## Runtime verification performed (v1.1.3Z)
 
-3. Attachments (internal/attachments, new)
-   - Content-addressed staging (sha256 objects), symlink-safe writes, 0600.
-   - Validation: size cap, count cap, processing timeout, chunk cap.
-   - Text normalization + chunking with stable chunk identity (hash+offset).
-   - Retrieval: lexical scoring over chunk previews, bounded block with
-     provenance headers; results cached content-aware.
-   - Images classified for the vision pipeline; binaries become notes with
-     staged paths for the file tools. Nothing is ever executed.
-
-4. Context cache (internal/contextcache, new)
-   - Content-keyed LRU (entries + bytes bounds), version + config fingerprint
-     keys, TTL, prefix invalidation, hit/miss/eviction stats, concurrency-safe.
-
-5. Long-context plan (internal/contextplan, new)
-   - Explicit budget: numCtx minus output reserve; sections system/tools/
-     recall/attachments/history with priorities and provenance summary.
-   - Orchestrator: tool specs measured EXACTLY (serialized JSON) BEFORE
-     windowing; plan drives the history window; overflow emits a visible
-     error activity instead of a silent engine rejection.
-
-6. API surface
-   - GET /api/engine (authoritative snapshot incl. cache stats).
-   - Engine events broadcast on every activity WS (live + standby conns).
-   - /api/attachments upload (multipart, MaxBytesReader)/list/inspect/delete.
-   - /api/run: attachmentIds, regenerate, attachment block injected BEFORE the
-     fresh user turn (KV-cache friendly), legacy AttachedFiles preserved.
-
-7. Frontend
-   - Fixed the dead-composer bug: `running` now resets on done/error events
-     (previously stuck true forever after the first successful reply).
-   - Real conversation view: persisted history per session, optimistic user
-     bubble, streaming assistant bubble, attachment chips, inline runtime
-     activity, regenerate control.
-   - Engine card driven by the authoritative states with severity colors and
-     smart polling; activity stream toggleable.
-   - Composer attachments tray with staging progress and remove.
-
-8. Headless build
-   - `headless` build tag now means something: desktop.go gated `!headless`,
-     desktop/headless.go provides ServeHeadless (same stack + API), and
-     main_headless.go routes default execution. `go build/test -tags headless`
-     works on machines without GTK/WebKit.
-
-9. Configuration correctness
-   - Divergence fix: local EffectiveBaseURL derives from LlamaHost:LlamaPort;
-     llmBaseUrl is an explicit override only (legacy default value migrates).
-   - Default numCtx 8192 -> 16384 (measured: AI-context + full tool schemas
-     ~= 9.8k tokens; 8k could not fit the FIRST request of a default install).
-
-10. Tests (all green, `go test ./internal/... -tags headless`)
-    - contextcache: bounds/LRU/TTL/prefix/concurrency.
-    - attachments: staging, dedupe, oversize, empty, classify, sanitize,
-      chunk identity stability, unicode, retrieval ranking, delete.
-    - contextplan: budget math, pressure drops, floor, summary provenance.
-    - llm: real spawn -> health -> ready via a fake engine (test-binary re-exec),
-      missing binary, missing model, stop transitions, events, busy flips,
-      bounded auto-restart after real process death, model resolution.
-    - agent: first inference + streaming via fake SSE engine, tool loop with
-      tool-result follow-up, unknown tool handling, abort, error propagation,
-      think-splitting, image markers.
-    - sessions: round-trip, append persistence, stub list, delete, context
-      attachment ids, 8-writer concurrency, index self-heal, sidecar bounds.
-    - api: engine endpoint truthfulness, session lifecycle over HTTP,
-      attachment upload/inspect/delete, run input validation, config redaction.
-
-## Runtime verification performed
-
-- Stub-engine e2e (scripts outside repo): 16/16 PASS — launch, auto-start,
-  ready, session, upload, run with attachment, engine envelope (messageCount,
-  toolsOffered=14, attachmentHit=true), regenerate, cache stats, shutdown.
-- REAL engine e2e: llama.cpp b10642 (linux x64, CPU) + Qwen2.5-0.5B/1.5B Instruct
-  GGUF: automatic startup to ready (~5s), real inference streamed and persisted
-  ("The capital of France is Paris."), engine busy -> ready, regenerate path.
-- The oversized-request failure (9854 tok vs 8192 ctx) was reproduced against
-  the real engine, root-caused (unmeasured tool schemas + no hard ceiling),
-  fixed, and re-verified with the request accepted.
-
-## Remaining honest limitations
-
-- Desktop (Wails/GTK) build not compilable in this sandbox (no GTK4/WebKit dev
-  libs); CI builds it. Headless variant builds and runs the same stack.
-- Vision (mmproj) path not exercised with a real projector model.
-- Small instruct models may not emit formal tool calls even when tools are
-  advertised; loop mechanics covered by deterministic tests.
-- UI visual QA of the new conversation view was done via code/build checks,
-  not human screenshot review.
+- Stub-engine e2e: 16/16 PASS — launch, auto-start, ready, session, upload, run with attachment, engine envelope, regenerate, cache stats, shutdown.
+- REAL engine e2e: llama.cpp b10642 (linux x64, CPU) + Qwen2.5-0.5B/1.5B Instruct GGUF: automatic startup to ready (~5 s), real inference streamed and persisted, busy → ready, regenerate.
+- The oversized-request failure (9854 tok vs 8192 ctx) was reproduced against the real engine, root-caused, fixed and re-verified.

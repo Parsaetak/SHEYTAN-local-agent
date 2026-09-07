@@ -590,7 +590,53 @@ func containsWorkspaceEscapeTokens(tokens []shellToken) bool {
 				strings.Contains(value, "/..") {
 				return true
 			}
+
+			// v1.1.4Z: home-relative and env-expanded PATH tokens. The
+			// lexical policy could not see through shell expansion, so
+			// `cat $HOME/secret` and `~/x` passed the check while the real
+			// shell resolved them OUTSIDE the workspace. HOME is now also
+			// pinned to the workspace in the sanitized environment, so
+			// legitimate uses keep working — but an explicit ~/ or $VAR/
+			// path token is still rejected outright because its intent is
+			// to reference the user profile.
+			if isExpandedPathToken(value) {
+				return true
+			}
 		}
+	}
+
+	return false
+}
+
+// isExpandedPathToken reports whether a token expands to a filesystem path
+// outside the workspace: "~/..." or "$VAR/..." / "${VAR}/...". A bare
+// "$PATH" or "$VAR" without a slash is left alone (echo $PATH is not an
+// escape).
+func isExpandedPathToken(value string) bool {
+	if strings.HasPrefix(value, "~/") || value == "~" {
+		return true
+	}
+
+	// windows %VAR% expansion — matched before the separator gate because
+	// the tokenizer may swallow the separator after the closing %
+	if strings.HasPrefix(value, "%") &&
+		strings.Contains(value[1:], "%") {
+		return true
+	}
+
+	if !strings.Contains(value, "/") && !strings.Contains(value, "\\") {
+		return false
+	}
+
+	// any $-prefixed variable segment followed by a path separator
+	if strings.HasPrefix(value, "$") {
+		return true
+	}
+	if strings.HasPrefix(value, "${") {
+		return true
+	}
+	if strings.HasPrefix(value, "%") {
+		return true // %VAR%/path form
 	}
 
 	return false

@@ -227,11 +227,13 @@ func (p *RedditProvider) Search(
 		return SearchResponse{}, redditHTTPError(response)
 	}
 
+	// v1.1.4Z: +1 byte so an oversized payload is DETECTED instead of
+	// silently truncated mid-JSON (the other providers already did this).
 	const maxResponseBytes = 4 << 20
 
 	limitedBody := io.LimitReader(
 		response.Body,
-		maxResponseBytes,
+		maxResponseBytes+1,
 	)
 
 	var payload redditSearchResponse

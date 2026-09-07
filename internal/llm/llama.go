@@ -71,12 +71,15 @@ type EngineEvent struct {
 // LlamaServer manages a llama.cpp server subprocess. This is the standalone
 // inference engine that replaces LM Studio's local server.
 type LlamaServer struct {
-	cfg     *config.Config
+	// src is the live configuration source. Engine starts capture one
+	// consistent snapshot; health probes read the current value.
+	// (v1.1.4Z: replaced the shared mutable *Config which raced the HTTP
+	// config patcher.)
+	src     *config.Source
 	cmd     *exec.Cmd
 	mu      sync.Mutex
 	state   string
 	detail  string
-	stateCh chan string
 	logBuf  *ringBuffer
 	errRing *ringBuffer
 
@@ -95,7 +98,8 @@ type LlamaServer struct {
 	// reset on each successful Start. Bounded by maxAutoRestarts.
 	restarts int
 
-	// stopOnce guards the stop path against the watchdog racing Stop.
+	// stopping arms the deliberate-shutdown flag so the exit watcher's
+	// auto-restart is suppressed while Stop() runs.
 	stopping bool
 
 	// subs receive every state transition (never blocked; slow subscribers
@@ -157,12 +161,11 @@ func (r *ringBuffer) reset() {
 	r.head = 0
 }
 
-// NewLlamaServer returns a manager bound to the given config.
-func NewLlamaServer(cfg *config.Config) *LlamaServer {
+// NewLlamaServer returns a manager bound to the live config source.
+func NewLlamaServer(src *config.Source) *LlamaServer {
 	return &LlamaServer{
-		cfg:     cfg,
+		src:     src,
 		state:   StateIdle,
-		stateCh: make(chan string, 16),
 		logBuf:  newRing(500),
 		errRing: newRing(64),
 		subs:    make(map[int]chan EngineEvent),
@@ -188,19 +191,6 @@ func (s *LlamaServer) SubscribeEvents() (<-chan EngineEvent, func()) {
 		if existing, ok := s.subs[id]; ok {
 			delete(s.subs, id)
 			close(existing)
-		}
-	}
-}
-
-// publishEvent fans one transition out to every subscriber.
-func (s *LlamaServer) publishEvent(ev EngineEvent) {
-	s.subsMu.Lock()
-	defer s.subsMu.Unlock()
-
-	for _, ch := range s.subs {
-		select {
-		case ch <- ev:
-		default:
 		}
 	}
 }
@@ -232,23 +222,24 @@ func (s *LlamaServer) IsAlive() bool {
 // MarkBusy flips the healthy engine between ready and busy around an
 // inference request. It is a no-op unless the engine is alive — remote
 // providers and adopted engines never report busy through this path.
+//
+// v1.1.4Z: the whole transition runs under one mutex acquisition. The
+// previous version checked aliveness, released the lock, then re-locked in
+// setState — a process death inside that window could be overwritten by a
+// stale busy/ready transition.
 func (s *LlamaServer) MarkBusy(busy bool) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	if !aliveStates[s.state] || s.stopping {
-		s.mu.Unlock()
 		return
 	}
 
 	switch {
 	case busy && s.state != StateBusy:
-		s.mu.Unlock()
-		s.setState(StateBusy)
+		s.setStateLocked(StateBusy)
 	case !busy && s.state == StateBusy:
-		s.mu.Unlock()
-		s.setState(StateReady)
-	default:
-		s.mu.Unlock()
+		s.setStateLocked(StateReady)
 	}
 }
 
@@ -275,63 +266,80 @@ func (s *LlamaServer) IsRunning() bool {
 	return aliveStates[s.state]
 }
 
-// ensureBinary makes sure the llama.cpp server binary exists.
-func (s *LlamaServer) ensureBinary() error {
-	if s.cfg.LlamaBinPath == "" {
-		s.cfg.LlamaBinPath = filepath.Join(
-			s.cfg.DataDir,
+// ensureBinary makes sure the llama.cpp server binary exists and returns
+// its effective path. An empty configured LlamaBinPath is resolved to the
+// default location and persisted through the config source (v1.1.4Z: the
+// old code mutated the shared Config in place).
+func (s *LlamaServer) ensureBinary(cfg *config.Config) (string, error) {
+	binPath := cfg.LlamaBinPath
+
+	if binPath == "" {
+		binPath = filepath.Join(
+			cfg.DataDir,
 			"bin",
 			llamaBinaryName(),
 		)
+
+		next := s.src.Update(func(c *config.Config) {
+			c.LlamaBinPath = binPath
+		})
+
+		if err := config.Save(next.ConfigPath(), next); err != nil {
+			return "", fmt.Errorf("persist default engine path: %w", err)
+		}
 	}
 
-	if _, err := os.Stat(s.cfg.LlamaBinPath); err == nil {
-		if updater.InstalledEngineTag(s.cfg) == "" {
-			updater.RecordEngineTag(s.cfg, updater.DefaultEngineTag)
+	if _, err := os.Stat(binPath); err == nil {
+		if updater.InstalledEngineTag(cfg) == "" {
+			updater.RecordEngineTag(cfg, updater.DefaultEngineTag)
 		}
 
-		return nil
+		return binPath, nil
 	}
 
 	if netcheck.IsOffline() {
-		return fmt.Errorf(
+		return "", fmt.Errorf(
 			"llama.cpp server binary missing and you appear to be OFFLINE. "+
 				"Reconnect once so the server can be downloaded automatically, "+
 				"or place a prebuilt llama-server(.exe) into %s and retry",
-			filepath.Dir(s.cfg.LlamaBinPath),
+			filepath.Dir(binPath),
 		)
 	}
 
-	dir := filepath.Dir(s.cfg.LlamaBinPath)
+	dir := filepath.Dir(binPath)
 
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
+		return "", err
 	}
 
 	s.setState(StateDownloading)
 
 	url, err := llamaDownloadURL()
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	s.logf("Downloading llama.cpp server from %s", url)
 
 	if err := downloadAndExtract(url, dir); err != nil {
-		return fmt.Errorf("download llama.cpp: %w", err)
+		return "", fmt.Errorf("download llama.cpp: %w", err)
 	}
 
-	if _, err := os.Stat(s.cfg.LlamaBinPath); err != nil {
-		return fmt.Errorf(
+	if _, err := os.Stat(binPath); err != nil {
+		return "", fmt.Errorf(
 			"llama.cpp binary not found at %s after extraction",
-			s.cfg.LlamaBinPath,
+			binPath,
 		)
 	}
 
-	_ = os.Chmod(s.cfg.LlamaBinPath, 0o755)
-	updater.RecordEngineTag(s.cfg, updater.DefaultEngineTag)
+	if err := os.Chmod(binPath, 0o755); err != nil {
+		// The binary must be executable on Unix; keep going on Windows where
+		// the permission bit is meaningless but log the failure.
+		s.logf("chmod engine binary: %v", err)
+	}
+	updater.RecordEngineTag(cfg, updater.DefaultEngineTag)
 
-	return nil
+	return binPath, nil
 }
 
 const modelLoadTimeout = 180 * time.Second
@@ -378,13 +386,17 @@ func (s *LlamaServer) startLocked() error {
 
 	s.mu.Unlock()
 
+	// v1.1.4Z: one consistent snapshot for the whole boot. A concurrent
+	// Settings PATCH can no longer produce a half-old, half-new launch.
+	cfg := s.src.Load()
+
 	portInUse := PortInUse(
-		s.cfg.LlamaHost,
-		s.cfg.LlamaPort,
+		cfg.LlamaHost,
+		cfg.LlamaPort,
 	)
 
 	if portInUse {
-		if s.adoptExisting() {
+		if s.adoptExisting(cfg) {
 			s.setState(StateReady)
 			return nil
 		}
@@ -394,20 +406,21 @@ func (s *LlamaServer) startLocked() error {
 		return fmt.Errorf(
 			"port %d is already in use by another program — "+
 				"change LlamaPort in config.json or close the other app",
-			s.cfg.LlamaPort,
+			cfg.LlamaPort,
 		)
 	}
 
 	s.setState(StateStarting)
 
-	if err := s.ensureBinary(); err != nil {
+	binPath, err := s.ensureBinary(cfg)
+	if err != nil {
 		s.setState(StateFailed)
 		return err
 	}
 
 	modelPath, err := ResolveModelPath(
-		s.cfg.ModelsDir,
-		s.cfg.Model,
+		cfg.ModelsDir,
+		cfg.Model,
 	)
 	if err != nil {
 		s.setState(StateFailed)
@@ -416,11 +429,11 @@ func (s *LlamaServer) startLocked() error {
 
 	mmproj := ""
 
-	if s.cfg.VisionEnabled {
+	if cfg.VisionEnabled {
 		if p := vision.FindProjector(
-			s.cfg.ModelsDir,
+			cfg.ModelsDir,
 			modelPath,
-			s.cfg.VisionMMProj,
+			cfg.VisionMMProj,
 		); p != "" {
 			mmproj = p
 			s.logf(
@@ -437,7 +450,7 @@ func (s *LlamaServer) startLocked() error {
 	visionRetryDone := false
 
 	for {
-		startLevel := s.cfg.EngineCompat
+		startLevel := cfg.EngineCompat
 
 		if startLevel < 0 || startLevel > engineCompatMax {
 			startLevel = 0
@@ -447,15 +460,20 @@ func (s *LlamaServer) startLocked() error {
 
 		for pass := 0; pass < 2; pass++ {
 			for level := startLevel; level <= engineCompatMax; level++ {
-				err := s.launchOnce(modelPath, level)
+				err := s.launchOnce(cfg, binPath, modelPath, level)
 
 				if err == nil {
-					if s.cfg.EngineCompat != level {
-						s.cfg.EngineCompat = level
-						_ = config.Save(
-							s.cfg.ConfigPath(),
-							s.cfg,
-						)
+					if cur := s.src.Load(); cur.EngineCompat != level {
+						next := s.src.Update(func(c *config.Config) {
+							c.EngineCompat = level
+						})
+
+						if err := config.Save(
+							next.ConfigPath(),
+							next,
+						); err != nil {
+							s.logf("persist engine compat: %v", err)
+						}
 					}
 
 					if level > 0 {
@@ -504,7 +522,7 @@ func (s *LlamaServer) startLocked() error {
 
 			if pass == 0 &&
 				needsNewerEngine(lastErr) &&
-				s.updateEngineForModel() {
+				s.updateEngineForModel(cfg) {
 				startLevel = 0
 				s.setState(StateStarting)
 				continue
@@ -578,7 +596,13 @@ func (s *LlamaServer) Pid() int {
 //	1 — everything + --jinja
 //	2 — --jinja + GPU, but no speed flags
 //	3 — bare: model, host/port, context, threads
+//
+// v1.1.4Z: the optional sampling knobs (min-p, repeat-last-n, presence and
+// frequency penalty, mirostat tau/eta) are only emitted when the user set a
+// non-zero value, so default installs keep the exact launch contract the
+// stress suite pins while Settings sampling edits actually reach the engine.
 func (s *LlamaServer) buildArgs(
+	cfg *config.Config,
 	modelPath string,
 	level int,
 ) []string {
@@ -586,23 +610,51 @@ func (s *LlamaServer) buildArgs(
 		"--model",
 		modelPath,
 		"--host",
-		s.cfg.LlamaHost,
+		cfg.LlamaHost,
 		"--port",
-		fmt.Sprintf("%d", s.cfg.LlamaPort),
+		fmt.Sprintf("%d", cfg.LlamaPort),
 		"--ctx-size",
-		fmt.Sprintf("%d", s.cfg.LLM.NumCtx),
+		fmt.Sprintf("%d", cfg.LLM.NumCtx),
 		"--batch-size",
-		fmt.Sprintf("%d", s.cfg.LLM.NumBatch),
+		fmt.Sprintf("%d", cfg.LLM.NumBatch),
 		"--threads",
-		fmt.Sprintf("%d", threadsFor(s.cfg)),
+		fmt.Sprintf("%d", threadsFor(cfg)),
 		"--temp",
-		fmt.Sprintf("%v", s.cfg.LLM.Temperature),
+		fmt.Sprintf("%v", cfg.LLM.Temperature),
 		"--top-p",
-		fmt.Sprintf("%v", s.cfg.LLM.TopP),
+		fmt.Sprintf("%v", cfg.LLM.TopP),
 		"--top-k",
-		fmt.Sprintf("%d", s.cfg.LLM.TopK),
+		fmt.Sprintf("%d", cfg.LLM.TopK),
 		"--repeat-penalty",
-		fmt.Sprintf("%v", s.cfg.LLM.RepeatPenalty),
+		fmt.Sprintf("%v", cfg.LLM.RepeatPenalty),
+	}
+
+	if cfg.LLM.MinP > 0 {
+		base = append(base, "--min-p", fmt.Sprintf("%v", cfg.LLM.MinP))
+	}
+
+	if cfg.LLM.RepeatLastN > 0 {
+		base = append(
+			base,
+			"--repeat-last-n",
+			fmt.Sprintf("%d", cfg.LLM.RepeatLastN),
+		)
+	}
+
+	if cfg.LLM.PresencePenalty != 0 {
+		base = append(
+			base,
+			"--presence-penalty",
+			fmt.Sprintf("%v", cfg.LLM.PresencePenalty),
+		)
+	}
+
+	if cfg.LLM.FrequencyPenalty != 0 {
+		base = append(
+			base,
+			"--frequency-penalty",
+			fmt.Sprintf("%v", cfg.LLM.FrequencyPenalty),
+		)
 	}
 
 	s.mu.Lock()
@@ -613,19 +665,35 @@ func (s *LlamaServer) buildArgs(
 		base = append(base, "--mmproj", mmproj)
 	}
 
-	if s.cfg.LLM.Mirostat > 0 {
+	if cfg.LLM.Mirostat > 0 {
 		base = append(
 			base,
 			"--mirostat",
-			fmt.Sprintf("%d", s.cfg.LLM.Mirostat),
+			fmt.Sprintf("%d", cfg.LLM.Mirostat),
 		)
+
+		if cfg.LLM.MirostatTau > 0 {
+			base = append(
+				base,
+				"--mirostat-tau",
+				fmt.Sprintf("%v", cfg.LLM.MirostatTau),
+			)
+		}
+
+		if cfg.LLM.MirostatEta > 0 {
+			base = append(
+				base,
+				"--mirostat-eta",
+				fmt.Sprintf("%v", cfg.LLM.MirostatEta),
+			)
+		}
 	}
 
-	if s.cfg.LLM.Seed != 0 {
+	if cfg.LLM.Seed != 0 {
 		base = append(
 			base,
 			"--seed",
-			fmt.Sprintf("%d", s.cfg.LLM.Seed),
+			fmt.Sprintf("%d", cfg.LLM.Seed),
 		)
 	}
 
@@ -633,9 +701,9 @@ func (s *LlamaServer) buildArgs(
 		return base
 	}
 
-	gpuLayers := s.cfg.LLM.NumGPU
+	gpuLayers := cfg.LLM.NumGPU
 
-	if gpuLayers <= 0 && s.autoGPUOffload() {
+	if gpuLayers <= 0 && s.autoGPUOffload(cfg) {
 		gpuLayers = 99
 	}
 
@@ -648,7 +716,7 @@ func (s *LlamaServer) buildArgs(
 	}
 
 	if level <= 1 {
-		base = append(base, SpeedArgs(s.cfg)...)
+		base = append(base, SpeedArgs(cfg)...)
 	} else {
 		base = append(base, "--no-webui")
 	}
@@ -658,10 +726,10 @@ func (s *LlamaServer) buildArgs(
 	}
 
 	if level <= 2 &&
-		strings.TrimSpace(s.cfg.LlamaExtraArgs) != "" {
+		strings.TrimSpace(cfg.LlamaExtraArgs) != "" {
 		base = append(
 			base,
-			strings.Fields(s.cfg.LlamaExtraArgs)...,
+			strings.Fields(cfg.LlamaExtraArgs)...,
 		)
 	}
 
@@ -676,6 +744,8 @@ type procExit struct {
 // launchOnce spawns the server with one profile's flags and waits until it
 // is HTTP-ready.
 func (s *LlamaServer) launchOnce(
+	cfg *config.Config,
+	binPath string,
 	modelPath string,
 	level int,
 ) error {
@@ -687,14 +757,14 @@ func (s *LlamaServer) launchOnce(
 		)
 	}
 
-	args := s.buildArgs(modelPath, level)
+	args := s.buildArgs(cfg, modelPath, level)
 
 	cmd := proc.Command(
-		s.cfg.LlamaBinPath,
+		binPath,
 		args...,
 	)
 
-	cmd.Dir = s.cfg.DataDir
+	cmd.Dir = cfg.DataDir
 
 	cmd.Stdout = newLineWriter(func(line string) {
 		s.logf("[llama.cpp] %s", line)
@@ -766,6 +836,7 @@ func (s *LlamaServer) launchOnce(
 	}()
 
 	if err := s.waitReadySignaled(
+		cfg,
 		modelLoadTimeout,
 		exit,
 	); err != nil {
@@ -816,6 +887,7 @@ func (s *LlamaServer) launchOnce(
 // waitReadySignaled polls /health until 200, but aborts immediately when
 // the subprocess exits or the timeout passes.
 func (s *LlamaServer) waitReadySignaled(
+	cfg *config.Config,
 	timeout time.Duration,
 	exit *procExit,
 ) error {
@@ -823,8 +895,8 @@ func (s *LlamaServer) waitReadySignaled(
 
 	url := fmt.Sprintf(
 		"http://%s:%d/health",
-		s.cfg.LlamaHost,
-		s.cfg.LlamaPort,
+		cfg.LlamaHost,
+		cfg.LlamaPort,
 	)
 
 	client := &http.Client{
@@ -974,7 +1046,7 @@ func needsNewerEngine(err error) bool {
 	return false
 }
 
-func (s *LlamaServer) updateEngineForModel() bool {
+func (s *LlamaServer) updateEngineForModel(cfg *config.Config) bool {
 	if s.engineUpdateTried {
 		return false
 	}
@@ -1003,7 +1075,7 @@ func (s *LlamaServer) updateEngineForModel() bool {
 		return false
 	}
 
-	current := updater.InstalledEngineTag(s.cfg)
+	current := updater.InstalledEngineTag(cfg)
 
 	if current == "" {
 		current = updater.DefaultEngineTag
@@ -1035,7 +1107,7 @@ func (s *LlamaServer) updateEngineForModel() bool {
 
 	if _, err := updater.UpdateEngine(
 		ctx,
-		s.cfg,
+		cfg,
 		nil,
 		latest,
 	); err != nil {
@@ -1053,21 +1125,23 @@ func (s *LlamaServer) updateEngineForModel() bool {
 		return false
 	}
 
-	s.cfg.EngineCompat = 0
-	_ = config.Save(
-		s.cfg.ConfigPath(),
-		s.cfg,
-	)
+	next := s.src.Update(func(c *config.Config) {
+		c.EngineCompat = 0
+	})
+
+	if err := config.Save(next.ConfigPath(), next); err != nil {
+		s.logf("persist engine compat reset: %v", err)
+	}
 
 	return true
 }
 
-func (s *LlamaServer) autoGPUOffload() bool {
-	if !s.cfg.GPUAutoOffload {
+func (s *LlamaServer) autoGPUOffload(cfg *config.Config) bool {
+	if !cfg.GPUAutoOffload {
 		return false
 	}
 
-	if !s.hasVulkanBackend() {
+	if !s.hasVulkanBackend(cfg) {
 		return false
 	}
 
@@ -1075,12 +1149,12 @@ func (s *LlamaServer) autoGPUOffload() bool {
 	return len(info.GPU) > 0
 }
 
-func (s *LlamaServer) hasVulkanBackend() bool {
-	bin := s.cfg.LlamaBinPath
+func (s *LlamaServer) hasVulkanBackend(cfg *config.Config) bool {
+	bin := cfg.LlamaBinPath
 
 	if bin == "" {
 		bin = filepath.Join(
-			s.cfg.DataDir,
+			cfg.DataDir,
 			"bin",
 			llamaBinaryName(),
 		)
@@ -1110,18 +1184,18 @@ func (s *LlamaServer) hasVulkanBackend() bool {
 }
 
 func (s *LlamaServer) HasVulkanBackendForTest() bool {
-	return s.hasVulkanBackend()
+	return s.hasVulkanBackend(s.src.Load())
 }
 
 func (s *LlamaServer) AutoGPUOffloadForTest() bool {
-	return s.autoGPUOffload()
+	return s.autoGPUOffload(s.src.Load())
 }
 
 func (s *LlamaServer) BuildArgsForTest(
 	modelPath string,
 	level int,
 ) []string {
-	return s.buildArgs(modelPath, level)
+	return s.buildArgs(s.src.Load(), modelPath, level)
 }
 
 func (s *LlamaServer) SetProjectorForTest(path string) {
@@ -1162,11 +1236,11 @@ func CompactLinesForTest(
 
 // adoptExisting reports whether the port already answers our llama.cpp
 // /health endpoint.
-func (s *LlamaServer) adoptExisting() bool {
+func (s *LlamaServer) adoptExisting(cfg *config.Config) bool {
 	url := fmt.Sprintf(
 		"http://%s:%d/health",
-		s.cfg.LlamaHost,
-		s.cfg.LlamaPort,
+		cfg.LlamaHost,
+		cfg.LlamaPort,
 	)
 
 	client := &http.Client{
@@ -1269,39 +1343,6 @@ func (s *LlamaServer) Restart() error {
 	return s.startLocked()
 }
 
-// SwitchModel points the engine at a new GGUF and reloads it if running.
-func (s *LlamaServer) SwitchModel(name string) error {
-	s.mu.Lock()
-	running := aliveStates[s.state]
-	s.mu.Unlock()
-
-	s.cfg.Model = name
-
-	if !running {
-		return nil
-	}
-
-	return s.Restart()
-}
-
-// LoadOrStartWithModel remembers the chosen model and starts/reloads it.
-func (s *LlamaServer) LoadOrStartWithModel(name string) error {
-	s.switchMu.Lock()
-	defer s.switchMu.Unlock()
-
-	s.cfg.Model = name
-
-	if s.IsRunning() {
-		if err := s.Stop(); err != nil {
-			return err
-		}
-
-		time.Sleep(300 * time.Millisecond)
-	}
-
-	return s.startLocked()
-}
-
 // LoadedModel returns the absolute path of the model currently served.
 func (s *LlamaServer) LoadedModel() string {
 	s.mu.Lock()
@@ -1310,15 +1351,21 @@ func (s *LlamaServer) LoadedModel() string {
 	return s.loaded
 }
 
-// setState records one state transition, notifies the legacy state
-// channel, and publishes an EngineEvent to every subscriber.
+// setState records one state transition and publishes an EngineEvent to
+// every subscriber.
 func (s *LlamaServer) setState(st string) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.setStateLocked(st)
+}
 
+// setStateLocked performs a transition while s.mu is held. Callers that
+// already hold the mutex (MarkBusy) use this to keep the aliveness check
+// and the transition atomic.
+func (s *LlamaServer) setStateLocked(st string) {
 	previous := s.state
 
 	if previous == st {
-		s.mu.Unlock()
 		return
 	}
 
@@ -1331,20 +1378,30 @@ func (s *LlamaServer) setState(st string) {
 		model = filepath.Base(s.loaded)
 	}
 
-	s.mu.Unlock()
-
-	select {
-	case s.stateCh <- st:
-	default:
-	}
-
-	s.publishEvent(EngineEvent{
+	ev := EngineEvent{
 		State:     st,
 		Previous:  previous,
 		Model:     model,
 		Detail:    detail,
 		Timestamp: time.Now(),
-	})
+	}
+
+	// The subscriber fan-out must never run under s.mu: a slow subscriber
+	// would block the state machine. The snapshot+unlock below keeps the
+	// non-blocking sends outside the state lock.
+	s.subsMu.Lock()
+	subs := make([]chan EngineEvent, 0, len(s.subs))
+	for _, ch := range s.subs {
+		subs = append(subs, ch)
+	}
+	s.subsMu.Unlock()
+
+	for _, ch := range subs {
+		select {
+		case ch <- ev:
+		default:
+		}
+	}
 }
 
 // scheduleAutoRestart implements the watchdog's bounded recovery: restart
@@ -1512,17 +1569,35 @@ func safeArchivePath(dir, name string) (string, error) {
 	return target, nil
 }
 
+// engineDownloadTimeout bounds one engine-binary download. The previous
+// plain http.Get had no deadline: a stalled CDN connection could hang the
+// prewarm goroutine AND hold switchMu forever, blocking every later engine
+// start/restart (v1.1.4Z).
+const engineDownloadTimeout = 10 * time.Minute
+
+// engineDownloadCapBytes bounds the downloaded archive size (2 GiB — the
+// full Vulkan llama.cpp bundles are a few hundred MB).
+const engineDownloadCapBytes = 2 << 30
+
 // downloadAndExtract downloads url and extracts it into dir.
 func downloadAndExtract(url, dir string) error {
-	tmp, err := os.CreateTemp("", "llama-*")
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		engineDownloadTimeout,
+	)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodGet,
+		url,
+		nil,
+	)
 	if err != nil {
 		return err
 	}
 
-	defer os.Remove(tmp.Name())
-	defer tmp.Close()
-
-	resp, err := http.Get(url)
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return err
 	}
@@ -1537,8 +1612,26 @@ func downloadAndExtract(url, dir string) error {
 		)
 	}
 
-	if _, err := io.Copy(tmp, resp.Body); err != nil {
+	tmp, err := os.CreateTemp("", "llama-*")
+	if err != nil {
 		return err
+	}
+
+	defer os.Remove(tmp.Name())
+	defer tmp.Close()
+
+	if _, err := io.Copy(
+		tmp,
+		io.LimitReader(resp.Body, engineDownloadCapBytes+1),
+	); err != nil {
+		return fmt.Errorf("download llama.cpp: %w", err)
+	}
+
+	if fi, err := tmp.Stat(); err == nil && fi.Size() > engineDownloadCapBytes {
+		return fmt.Errorf(
+			"engine download exceeds %d bytes — refusing to extract",
+			engineDownloadCapBytes,
+		)
 	}
 
 	if _, err := tmp.Seek(0, 0); err != nil {
@@ -1862,13 +1955,19 @@ func (s *LlamaServer) ListLoadedModels() ([]string, error) {
 			fmt.Errorf("llama.cpp server not running")
 	}
 
+	cfg := s.src.Load()
+
 	url := fmt.Sprintf(
 		"http://%s:%d/v1/models",
-		s.cfg.LlamaHost,
-		s.cfg.LlamaPort,
+		cfg.LlamaHost,
+		cfg.LlamaPort,
 	)
 
-	resp, err := http.Get(url)
+	// v1.1.4Z: bounded request. The previous plain http.Get could hang an
+	// HTTP handler forever when the engine stopped answering mid-poll.
+	client := &http.Client{Timeout: 5 * time.Second}
+
+	resp, err := client.Get(url)
 	if err != nil {
 		return nil, err
 	}

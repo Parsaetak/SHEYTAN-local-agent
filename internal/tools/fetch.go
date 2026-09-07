@@ -25,14 +25,19 @@ type FetchTool struct {
 }
 
 // NewFetchTool builds a fetch tool with its own bounded HTTP client.
+//
+// v1.1.4Z DNS-rebinding defense: the transport's DialContext resolves the
+// hostname itself, validates every candidate address as globally routable,
+// and dials a VERIFIED IP. validateFetchURL already checks DNS before the
+// request, but the default dialer resolved the name a second time — a
+// rebinding attacker could answer the second lookup with a private address.
+// Pinning the dial to the validated IP closes that window; TLS still
+// verifies the original hostname (SNI/cert), so https is not weakened.
 func NewFetchTool() *FetchTool {
 	transport := &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
-		DialContext: (&net.Dialer{
-			Timeout:   10 * time.Second,
-			KeepAlive: 30 * time.Second,
-		}).DialContext,
+		Proxy:             http.ProxyFromEnvironment,
 		ForceAttemptHTTP2: true,
+		DialContext:       pinnedPublicDialContext(10 * time.Second),
 	}
 
 	client := &http.Client{
@@ -305,7 +310,7 @@ func validateFetchURL(u *url.URL) error {
 	// Test-only relaxation: the release stress suite points fetch at a
 	// loopback httptest server. Scheme, credential, and hostname rules
 	// above still apply — only the public-IP requirement is lifted.
-	if fetchAllowPrivateTest {
+	if fetchPrivateAllowed() {
 		return nil
 	}
 
@@ -673,5 +678,43 @@ func stripBetween(
 
 		s = s[:i] +
 			s[i+j+len(close):]
+	}
+}
+
+// pinnedPublicDialContext returns a DialContext that resolves the host,
+// rejects non-public addresses, and dials the verified IP (the TLS layer
+// keeps using the original hostname for SNI + certificate verification).
+func pinnedPublicDialContext(timeout time.Duration) func(ctx context.Context, network, addr string) (net.Conn, error) {
+	dialer := &net.Dialer{Timeout: timeout, KeepAlive: 30 * time.Second}
+
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		if fetchPrivateAllowed() {
+			return dialer.DialContext(ctx, network, addr)
+		}
+
+		host, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			return nil, fmt.Errorf("fetch: dial %q: %w", addr, err)
+		}
+
+		if ip := net.ParseIP(host); ip != nil {
+			if !isPublicIP(ip) {
+				return nil, fmt.Errorf("fetch: destination %s is not a public IP address", host)
+			}
+			return dialer.DialContext(ctx, network, net.JoinHostPort(host, port))
+		}
+
+		ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+		if err != nil {
+			return nil, fmt.Errorf("fetch: DNS resolution failed for %q: %w", host, err)
+		}
+
+		for _, ip := range ips {
+			if isPublicIP(ip.IP) {
+				return dialer.DialContext(ctx, network, net.JoinHostPort(ip.IP.String(), port))
+			}
+		}
+
+		return nil, fmt.Errorf("fetch: host %q resolves to no public address", host)
 	}
 }

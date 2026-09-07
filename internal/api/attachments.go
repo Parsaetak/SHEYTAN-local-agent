@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/attachments"
 )
@@ -29,10 +28,6 @@ import (
 // maxUploadBodyBytes caps the whole multipart body per upload request
 // (per-file limits are enforced by the attachments manager itself).
 const maxUploadBodyBytes = 160 << 20
-
-// uploadTimeout bounds one upload request (protection against slow-loris
-// style stalls on the local loopback).
-const uploadTimeout = 2 * time.Minute
 
 // handleAttachments dispatches the attachment endpoints.
 func (s *Server) handleAttachments(w http.ResponseWriter, r *http.Request) {

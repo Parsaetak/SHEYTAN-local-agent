@@ -433,7 +433,7 @@ func TestEnhanceAgainstLiveServer(t *testing.T) {
 	cfg := config.Default()
 	cfg.Provider = config.ProviderRemote
 	cfg.RemoteBaseURL = srv.URL + "/v1"
-	client := llm.NewClient(cfg)
+	client := llm.NewClient(config.NewSource(cfg))
 
 	fw := Distill(NewFramework(), distillTestMessages())
 	refined := Enhance(context.Background(), client, "m", fw, distillTestMessages())

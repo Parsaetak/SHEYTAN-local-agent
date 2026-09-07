@@ -123,7 +123,7 @@ func dispatch(cfg *config.Config, defaultFn func() int) int {
 		return License(cfg)
 
 	case "context", "ai-context":
-		return AICtx(cfg)
+		return AICtx(cfg, args[1:])
 
 	case "help", "-h", "--help":
 		printHelp()

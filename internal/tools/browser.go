@@ -354,6 +354,11 @@ func (b *BrowserTool) Run(ctx context.Context, args json.RawMessage) (string, er
 		if err := os.WriteFile(path, buf, 0o644); err != nil {
 			return "", err
 		}
+
+		// v1.1.4Z: screenshots used to accumulate without bound — every
+		// capture lived on disk forever. Keep the most recent 50.
+		pruneScreenshots(dir, 50)
+
 		logging.Default().Info("browser", "screenshot saved: %s (%d KB)", path, len(buf)/1024)
 		return fmt.Sprintf("screenshot saved: %s (%d KB)", path, len(buf)/1024), nil
 

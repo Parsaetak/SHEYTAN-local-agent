@@ -21,7 +21,7 @@ permissions:
 env:
   GO_VERSION: "1.26"
   NODE_VERSION: "24"
-  APP_VERSION: "1.1.3"
+  APP_VERSION: "1.1.4"
   APP_CODENAME: "Zeta"
 
 jobs:
@@ -63,10 +63,10 @@ jobs:
 
           node scripts/release-version.mjs
 
-          grep -F 'AppVersion  = "1.1.3"' internal/config/config.go
-          grep -F '"version": "1.1.3-zeta"' package.json
-          grep -F 'productVersion: "1.1.3-zeta"' build/config.yml
-          grep -F 'SHEYTAN-Local-Agent v1.1.3' SIGNATURE
+          grep -F "AppVersion  = \"$APP_VERSION\"" internal/config/config.go
+          grep -F "\"version\": \"$APP_VERSION-zeta\"" package.json
+          grep -F "productVersion: \"$APP_VERSION-zeta\"" build/config.yml
+          grep -F "SHEYTAN-Local-Agent v$APP_VERSION" SIGNATURE
 
       - name: Install frontend dependencies
         shell: bash
@@ -152,25 +152,25 @@ jobs:
 
           Select-String `
             -Path "internal/config/config.go" `
-            -Pattern 'AppVersion  = "1.1.3"' `
+            -Pattern "AppVersion  = \"$env:APP_VERSION\"" `
             -SimpleMatch `
             -ErrorAction Stop | Out-Null
 
           Select-String `
             -Path "package.json" `
-            -Pattern '"version": "1.1.3-zeta"' `
+            -Pattern "\"version\": \"$env:APP_VERSION-zeta\"" `
             -SimpleMatch `
             -ErrorAction Stop | Out-Null
 
           Select-String `
             -Path "build/config.yml" `
-            -Pattern 'productVersion: "1.1.3-zeta"' `
+            -Pattern "productVersion: \"$env:APP_VERSION-zeta\"" `
             -SimpleMatch `
             -ErrorAction Stop | Out-Null
 
           Select-String `
             -Path "SIGNATURE" `
-            -Pattern 'SHEYTAN-Local-Agent v1.1.3' `
+            -Pattern "SHEYTAN-Local-Agent v$env:APP_VERSION" `
             -SimpleMatch `
             -ErrorAction Stop | Out-Null
 
@@ -580,10 +580,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          grep -F 'AppVersion  = "1.1.3"' internal/config/config.go
-          grep -F '"version": "1.1.3-zeta"' package.json
-          grep -F 'productVersion: "1.1.3-zeta"' build/config.yml
-          grep -F 'SHEYTAN-Local-Agent v1.1.3' SIGNATURE
+          grep -F "AppVersion  = \"$APP_VERSION\"" internal/config/config.go
+          grep -F "\"version\": \"$APP_VERSION-zeta\"" package.json
+          grep -F "productVersion: \"$APP_VERSION-zeta\"" build/config.yml
+          grep -F "SHEYTAN-Local-Agent v$APP_VERSION" SIGNATURE
 
       - name: Install frontend dependencies
         shell: bash
@@ -885,9 +885,12 @@ jobs:
       - build-windows
       - build-linux
 
-    # GitHub Actions does not expose the global env context here.
-    # Match the exact intended release tag directly.
-    if: github.ref == 'refs/tags/v1.1.3Z'
+    # v1.1.4Z: version-agnostic gate — the job runs for any v* tag and the
+    # first step verifies the tag equals v${APP_VERSION}Z. The previous
+    # hardcode silently skipped the release job on every version bump
+    # until someone remembered to edit this file (the single most
+    # dangerous trap in the old pipeline).
+    if: startsWith(github.ref, 'refs/tags/v')
 
     runs-on: ubuntu-24.04
 
@@ -900,20 +903,20 @@ jobs:
         run: |
           set -euo pipefail
 
-          test "${GITHUB_REF_NAME}" = "v1.1.3Z"
+          test "${GITHUB_REF_NAME}" = "v${APP_VERSION}Z"
 
           echo "Release tag verified: ${GITHUB_REF_NAME}"
 
       - name: Download Windows package
         uses: actions/download-artifact@v7
         with:
-          name: SHEYTAN-Local-Agent-Windows-x64-v1.1.3Z
+          name: SHEYTAN-Local-Agent-Windows-x64-v${{ env.APP_VERSION }}Z
           path: dist/windows
 
       - name: Download Linux package
         uses: actions/download-artifact@v7
         with:
-          name: SHEYTAN-Local-Agent-Linux-x64-v1.1.3Z
+          name: SHEYTAN-Local-Agent-Linux-x64-v${{ env.APP_VERSION }}Z
           path: dist/linux
 
       - name: Verify release ZIP payloads
@@ -921,8 +924,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          windows_zip_name="SHEYTAN-Local-Agent-Windows-x64-v1.1.3Z.zip"
-          linux_zip_name="SHEYTAN-Local-Agent-Linux-x64-v1.1.3Z.zip"
+          windows_zip_name="SHEYTAN-Local-Agent-Windows-x64-v${APP_VERSION}Z.zip"
+          linux_zip_name="SHEYTAN-Local-Agent-Linux-x64-v${APP_VERSION}Z.zip"
 
           windows="$(find dist/windows -type f -name "$windows_zip_name" -print -quit)"
           linux="$(find dist/linux -type f -name "$linux_zip_name" -print -quit)"
@@ -1065,8 +1068,8 @@ jobs:
 
           echo "$payload"
 
-          windows_asset="SHEYTAN-Local-Agent-Windows-x64-v1.1.3Z.zip"
-          linux_asset="SHEYTAN-Local-Agent-Linux-x64-v1.1.3Z.zip"
+          windows_asset="SHEYTAN-Local-Agent-Windows-x64-v${APP_VERSION}Z.zip"
+          linux_asset="SHEYTAN-Local-Agent-Linux-x64-v${APP_VERSION}Z.zip"
 
           echo "$payload" |
             jq -e \

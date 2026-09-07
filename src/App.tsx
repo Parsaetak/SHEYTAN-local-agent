@@ -108,7 +108,7 @@ function App() {
         </div>
 
         <div className="topbar-meta">
-          <span>{appVersion ?? "ZETA"}</span>
+          <span>{appVersion ?? "v1.1.4Z"}</span>
         </div>
       </header>
 

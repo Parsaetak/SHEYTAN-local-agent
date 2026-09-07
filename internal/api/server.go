@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,12 +18,15 @@ import (
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/attachments"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/chunking"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/continuum"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/installer"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/logging"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/recall"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/runtime"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/sessions"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/sysinfo"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/updater"
 	"github.com/Parsaetak/SHEYTAN-local-agent/web"
 
 	"github.com/gorilla/websocket"
@@ -36,7 +38,10 @@ import (
 // This keeps the HTTP/API surface feature-identical with the CLI and desktop
 // runtime instead of constructing a second independent orchestrator.
 type Server struct {
-	cfg       *config.Config
+	// src is the live configuration source shared with the runtime stack.
+	// (v1.1.4Z: handlers snapshot it per request; the old shared mutable
+	// *Config raced the patch handler against active runs.)
+	src       *config.Source
 	store     *sessions.Store
 	stack     *runtime.Stack
 	orch      *agent.Orchestrator
@@ -44,6 +49,15 @@ type Server struct {
 	installer *installer.Manager
 	sys       *sysinfo.SysInfo
 	recall    *recall.Engine // v1.0.2 persistent memory over past chats
+
+	// continuum evaluates chapter rollover after long sessions
+	// (v1.1.4Z: the manager was fully implemented and tested but never
+	// wired into any production path before).
+	continuum *continuum.Manager
+
+	// updateCancel stops the scheduled engine-update loop on Close
+	// (v1.1.4Z: updater.RunScheduled existed with zero callers).
+	updateCancel context.CancelFunc
 
 	// active runs: sessionID → runState
 	runsMu sync.Mutex
@@ -214,7 +228,7 @@ func New(cfg *config.Config) (*Server, error) {
 	stack := runtime.NewStack(cfg)
 
 	s := &Server{
-		cfg:        cfg,
+		src:        stack.Src,
 		store:      store,
 		stack:      stack,
 		orch:       stack.Orch,
@@ -224,6 +238,7 @@ func New(cfg *config.Config) (*Server, error) {
 		standby:    make(map[string][]*standbyConn),
 		sys:        sysinfo.Probe(),
 		recall:     stack.Recall,
+		continuum:  continuum.NewManager(store, cfg.SessionsDir),
 		engineStop: make(chan struct{}),
 		engineDone: make(chan struct{}),
 	}
@@ -238,10 +253,13 @@ func New(cfg *config.Config) (*Server, error) {
 	return s, nil
 }
 
-// EnsureSetup runs the installer, creates directories, and prewarms the
-// local engine (launch → llama.cpp starts automatically → healthy model).
+// EnsureSetup runs the installer, creates directories, prewarms the
+// local engine (launch → llama.cpp starts automatically → healthy model)
+// and starts the scheduled engine-update loop.
 func (s *Server) EnsureSetup() error {
-	if err := s.cfg.EnsureDirs(); err != nil {
+	cfg := s.src.Load()
+
+	if err := cfg.EnsureDirs(); err != nil {
 		return err
 	}
 
@@ -252,8 +270,32 @@ func (s *Server) EnsureSetup() error {
 	// v1.1.3Z — THE acceptance requirement: the application owns the engine
 	// lifecycle. A clean launch must reach a healthy model without any
 	// manual llama.cpp intervention.
-	if s.cfg.LlamaAutoStart && s.stack != nil {
+	if cfg.LlamaAutoStart && s.stack != nil {
 		s.stack.PrewarmLLM()
+	}
+
+	// v1.1.4Z: the scheduled engine-update loop is live. RunScheduled was
+	// fully implemented (immediate pass when due, re-check every 6 h) but
+	// had zero callers — the "update (scheduled: daily/weekly/monthly)"
+	// contract in the CLI help was only ever honored by manual runs. It
+	// respects the UpdateSchedule setting ("off" disables it) and
+	// short-circuits while offline.
+	sched := strings.ToLower(strings.TrimSpace(cfg.UpdateSchedule))
+	if sched != "off" && sched != "never" {
+		ctx, cancel := context.WithCancel(context.Background())
+		s.updateCancel = cancel
+
+		go updater.RunScheduled(
+			ctx,
+			s.src,
+			s.llama,
+			nil,
+			func() {
+				// persist LastUpdateCheck mutations through the source
+				next := s.src.Load()
+				_ = config.Save(next.ConfigPath(), next)
+			},
+		)
 	}
 
 	return nil
@@ -281,6 +323,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/attachments/", s.handleAttachments)
 	mux.HandleFunc("/api/run", s.handleRun)
 	mux.HandleFunc("/api/abort", s.handleAbort)
+	mux.HandleFunc("/api/feedback", s.handleFeedback)
 	mux.HandleFunc("/api/tools", s.handleTools)
 	mux.HandleFunc("/api/lab", s.handleLab)
 	mux.HandleFunc("/api/lab/", s.handleLabTask)
@@ -349,16 +392,64 @@ func (s *Server) handlePresets(w http.ResponseWriter, r *http.Request) {
 // frontend expected {id, name, path, sizeBytes} objects — every <option>
 // rendered with an undefined value, so selecting a model silently wrote
 // "undefined" into the config. The wire format now matches the contract.
+//
+// v1.1.4Z: architecture / quantization / context capacity arrive from the
+// GGUF header (llm.ReadModelCard) — a full parser that existed in the
+// repository with ZERO callers while the README documented exactly these
+// fields. Headers are read from a bounded 8 MB prefix and cached by
+// path+mtime so repeated polls never re-parse model files.
 type modelInfo struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
 	Provider  string `json:"provider,omitempty"`
 	Path      string `json:"path,omitempty"`
 	SizeBytes int64  `json:"sizeBytes,omitempty"`
+
+	Architecture  string `json:"architecture,omitempty"`
+	Quantization  string `json:"quantization,omitempty"`
+	ContextLength int    `json:"contextLength,omitempty"`
+	ParameterInfo string `json:"parameterInfo,omitempty"`
+}
+
+// modelCardCache memoizes GGUF header reads for handleModels.
+var (
+	modelCardMu    sync.Mutex
+	modelCardCache = map[string]modelCardEntry{}
+)
+
+type modelCardEntry struct {
+	modTime time.Time
+	info    *llm.ModelCard
+}
+
+// modelCardFor returns cached GGUF metadata for path (nil card when
+// unreadable — a broken header must not hide the file from the picker).
+func modelCardFor(path string) *llm.ModelCard {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return nil
+	}
+
+	modelCardMu.Lock()
+	cached, ok := modelCardCache[path]
+	modelCardMu.Unlock()
+
+	if ok && cached.modTime.Equal(fi.ModTime()) {
+		return cached.info
+	}
+
+	card, _ := llm.ReadModelCard(path)
+
+	modelCardMu.Lock()
+	modelCardCache[path] = modelCardEntry{modTime: fi.ModTime(), info: card}
+	modelCardMu.Unlock()
+
+	return card
 }
 
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
-	local := llm.ListLocalModels(s.cfg.ModelsDir)
+	cfg := s.src.Load()
+	local := llm.ListLocalModels(cfg.ModelsDir)
 
 	loaded, err := s.llama.ListLoadedModels()
 	if err != nil {
@@ -372,11 +463,18 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 			ID:       name,
 			Name:     strings.TrimSuffix(name, ".gguf"),
 			Provider: "local",
-			Path:     filepath.Join(s.cfg.ModelsDir, name),
+			Path:     filepath.Join(cfg.ModelsDir, name),
 		}
 
 		if fi, statErr := os.Stat(info.Path); statErr == nil {
 			info.SizeBytes = fi.Size()
+		}
+
+		if card := modelCardFor(info.Path); card != nil && card.Arch != "" {
+			info.Architecture = card.Arch
+			info.Quantization = card.Quant
+			info.ContextLength = card.ContextLength
+			info.ParameterInfo = card.FormatParams()
 		}
 
 		localInfos = append(localInfos, info)
@@ -408,6 +506,8 @@ func (s *Server) handleLlama(w http.ResponseWriter, r *http.Request) {
 		})
 
 	case http.MethodPost:
+		r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
+
 		var body struct {
 			Action string `json:"action"`
 		}
@@ -492,6 +592,8 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 		})
 
 	case http.MethodPut:
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+
 		var body struct {
 			Title   *string           `json:"title,omitempty"`
 			Context *sessions.Context `json:"context,omitempty"`
@@ -540,33 +642,40 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 // redactedConfig returns a copy safe for API responses.
 // Secrets are never returned to the browser.
 func (s *Server) redactedConfig() config.Config {
-	cfg := *s.cfg
+	cfg := *s.src.Load()
 	cfg.RemoteAPIKey = ""
 	return cfg
 }
 
-// mergeConfigPatch applies a JSON object as a partial configuration update.
+// mergeConfigPatch applies a JSON object as a partial configuration update
+// and publishes the result through the config source.
 //
-// Fields omitted from the request retain their current values. The existing
-// Config pointer is preserved so all runtime components continue sharing the
-// same configuration object.
-func (s *Server) mergeConfigPatch(data []byte) error {
+// Fields omitted from the request retain their current values.
+//
+// v1.1.4Z: the patch is applied to a PRIVATE COPY under the source's write
+// lock and the new value is atomically published (copy-on-write). The old
+// implementation wrote `*s.cfg = updated` in place on the shared pointer —
+// a genuine data race against every run goroutine and the engine manager,
+// which read the same struct concurrently. Handlers and runs now snapshot
+// via s.src.Load() and observe either the old or the new value, never a
+// half-written one.
+func (s *Server) mergeConfigPatch(data []byte) (*config.Config, error) {
 	var patch map[string]json.RawMessage
 	if err := json.Unmarshal(data, &patch); err != nil {
-		return err
+		return nil, err
 	}
 	if patch == nil {
-		return fmt.Errorf("configuration patch must be a JSON object")
+		return nil, fmt.Errorf("configuration patch must be a JSON object")
 	}
 
-	currentData, err := json.Marshal(s.cfg)
+	currentData, err := json.Marshal(s.src.Load())
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	var current map[string]json.RawMessage
 	if err := json.Unmarshal(currentData, &current); err != nil {
-		return err
+		return nil, err
 	}
 
 	for key, value := range patch {
@@ -585,21 +694,20 @@ func (s *Server) mergeConfigPatch(data []byte) error {
 
 	merged, err := json.Marshal(current)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	var updated config.Config
 	if err := json.Unmarshal(merged, &updated); err != nil {
-		return err
+		return nil, err
 	}
 
-	// Preserve the original shared pointer.
-	*s.cfg = updated
-
-	return nil
+	s.src.Store(&updated)
+	return &updated, nil
 }
 
-// handleConfig deliberately updates the existing Config object in place.
+// handleConfig patches the live configuration through the copy-on-write
+// source.
 //
 // GET never exposes RemoteAPIKey.
 //
@@ -611,6 +719,10 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, s.redactedConfig())
 
 	case http.MethodPut, http.MethodPost:
+		// v1.1.4Z: bounded body — the config endpoint previously
+		// accepted unbounded request bodies.
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+
 		var raw json.RawMessage
 
 		decoder := json.NewDecoder(r.Body)
@@ -626,17 +738,18 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if err := s.mergeConfigPatch(raw); err != nil {
+		next, err := s.mergeConfigPatch(raw)
+		if err != nil {
 			writeErr(w, http.StatusBadRequest, err)
 			return
 		}
 
-		if err := config.Save(s.cfg.ConfigPath(), s.cfg); err != nil {
+		if err := config.Save(next.ConfigPath(), next); err != nil {
 			writeErr(w, http.StatusInternalServerError, err)
 			return
 		}
 
-		if err := s.cfg.EnsureDirs(); err != nil {
+		if err := next.EnsureDirs(); err != nil {
 			writeErr(w, http.StatusInternalServerError, err)
 			return
 		}
@@ -798,7 +911,15 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	_ = s.store.Save(sess)
+	// v1.1.4Z: a failed pre-run persistence was previously invisible —
+	// the user message could silently vanish while the run continued.
+	if err := s.store.Save(sess); err != nil {
+		logging.Default().Warn(
+			"api",
+			"persist session before run: %v",
+			err,
+		)
+	}
 
 	// Build the LLM message list (with optional system prompt).
 	var messages []llm.Message
@@ -818,7 +939,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		note := chunking.ComposeUserMessage(
 			"",
 			sess.Context.AttachedFiles,
-			s.cfg.AttachmentsBudgetBytes(),
+			s.src.Load().AttachmentsBudgetBytes(),
 		)
 
 		messages = append(messages, llm.Message{
@@ -872,7 +993,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		budget := s.cfg.AttachmentsBudgetBytes()
+		budget := s.src.Load().AttachmentsBudgetBytes()
 
 		if block := s.stack.Attachments.Retrieve(
 			r.Context(),
@@ -906,7 +1027,21 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Spawn the run.
-	ctx, cancel := context.WithCancel(context.Background())
+	//
+	// v1.1.4Z: RunTimeoutMinutes (default 60) bounds the whole turn.
+	// Previously a run was bounded ONLY by maxIterations and the LLM
+	// client's per-call timeout — a pathological turn could legally run
+	// for hours while holding the run slot.
+	runCtx := context.Background()
+	budgetCancel := func() {}
+
+	if budget := s.src.Load().EffectiveRunTimeout(); budget > 0 {
+		var budgetCtx context.Context
+		budgetCtx, budgetCancel = context.WithTimeout(runCtx, budget)
+		runCtx = budgetCtx
+	}
+
+	ctx, cancel := context.WithCancel(runCtx)
 	hub := newActivityHub()
 
 	s.runsMu.Lock()
@@ -931,6 +1066,9 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 
 	go func() {
 		defer func() {
+			// release the run-budget timer with the run itself
+			budgetCancel()
+
 			s.runsMu.Lock()
 
 			// Only remove the run if this goroutine still owns the current
@@ -982,14 +1120,22 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 
-				_ = s.store.AppendActivity(
+				// v1.1.4Z: persistence failures surface as a
+				// visible warning instead of vanishing.
+				if err := s.store.AppendActivity(
 					sess.ID,
 					sessions.ActivityEntry{
 						Type:      a.Type,
 						Caption:   a.Caption,
 						Timestamp: a.Timestamp,
 					},
-				)
+				); err != nil {
+					logging.Default().Warn(
+						"api",
+						"append activity: %v",
+						err,
+					)
+				}
 			},
 		)
 
@@ -1005,25 +1151,88 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 
 		// Append assistant reply.
 		if res.Text != "" {
-			_, _ = s.store.AppendMessage(
+			if _, err := s.store.AppendMessage(
 				sess.ID,
 				llm.Message{
 					Role:      "assistant",
 					Content:   res.Text,
 					Reasoning: res.Reasoning,
 				},
-			)
+			); err != nil {
+				// v1.1.4Z: a lost reply is a REAL failure the
+				// user must see, not a swallowed error.
+				hub.publish(agent.Activity{
+					Type:      "error",
+					Caption:   "The reply was generated but could not be saved to the session: " + err.Error(),
+					Timestamp: time.Now(),
+				})
+
+				logging.Default().Error(
+					"api",
+					"append assistant reply: %v",
+					err,
+				)
+			}
 		}
 
 		// Index completed exchange into persistent recall.
 		if s.recall != nil && res.Text != "" {
-			_ = s.recall.IndexTurn(
+			if err := s.recall.IndexTurn(
 				sess.ID,
 				sess.Title,
 				body.Message,
 				res.Text,
 				res.ToolsUsed,
-			)
+			); err != nil {
+				logging.Default().Warn(
+					"recall",
+					"index turn: %v",
+					err,
+				)
+			}
+		}
+
+		// v1.1.4Z: Continuum chapter rollover. The whole subsystem
+		// (distillation, chapter sessions, framework sidecars) was
+		// implemented and unit-tested since v1.0.7 but NEVER wired
+		// into a production path — only the pressure meter was
+		// live. After a completed turn, a session at ≥ the
+		// configured pressure threshold is distilled into a fresh
+		// chapter that carries the framework + recent tail; the UI
+		// is told via a `session` activity so it can follow the
+		// thread into the new chapter.
+		if s.continuum != nil {
+			if fresh, err := s.store.Get(sess.ID); err == nil {
+				if s.continuum.ShouldRollover(fresh, s.src.Load()) {
+					if child, _, err := s.continuum.Rollover(fresh, s.src.Load()); err == nil {
+						hub.publish(agent.Activity{
+							Type:    "session",
+							Caption: "Context threshold reached — conversation continued in chapter " + fmt.Sprint(child.Chapter),
+							Detail: map[string]any{
+								"sessionId": child.ID,
+								"threadId":  child.ThreadID,
+								"chapter":   child.Chapter,
+								"previous":  fresh.ID,
+							},
+							Timestamp: time.Now(),
+						})
+
+						logging.Default().Info(
+							"continuum",
+							"rolled over session %s → chapter %d (%s)",
+							fresh.ID,
+							child.Chapter,
+							child.ID,
+						)
+					} else {
+						logging.Default().Warn(
+							"continuum",
+							"rollover failed (conversation continues in current session): %v",
+							err,
+						)
+					}
+				}
+			}
 		}
 	}()
 
@@ -1039,11 +1248,23 @@ func (s *Server) handleAbort(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// v1.1.4Z: bounded body AND a decode failure that previously
+	// returned {ok:true} while aborting nothing.
+	r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
+
 	var body struct {
 		SessionID string `json:"sessionId"`
 	}
 
-	_ = json.NewDecoder(r.Body).Decode(&body)
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("abort: %w", err))
+		return
+	}
+
+	if body.SessionID == "" {
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("sessionId required"))
+		return
+	}
 
 	s.runsMu.Lock()
 	rs, ok := s.runs[body.SessionID]
@@ -1051,6 +1272,65 @@ func (s *Server) handleAbort(w http.ResponseWriter, r *http.Request) {
 
 	if ok {
 		rs.cancel()
+	}
+
+	writeJSON(w, map[string]any{
+		"ok": true,
+	})
+}
+
+// --- Recall feedback ---
+
+// handleFeedback records the user's 👍/👎 verdict for one past exchange
+// (v1.1.4Z). The recall feedback sidecar (SetFeedback / FeedbackFor and
+// the liked×1.25 / disliked×0.6 scoring boosts) existed since v1.0.6 with
+// NO write path — the steering could never fire. The frontend sends the
+// query text of the exchange it is rating; the deterministic capsule id
+// is derived exactly like IndexTurn does.
+func (s *Server) handleFeedback(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeErr(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+
+	var body struct {
+		SessionID string `json:"sessionId"`
+		Query     string `json:"query"`
+		Liked     bool   `json:"liked"`
+		Clear     bool   `json:"clear,omitempty"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+
+	if body.SessionID == "" || body.Query == "" {
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("sessionId and query required"))
+		return
+	}
+
+	if s.recall == nil {
+		writeErr(w, http.StatusServiceUnavailable, fmt.Errorf("recall engine unavailable"))
+		return
+	}
+
+	id := recall.CapsuleID(body.SessionID, body.Query)
+
+	fb := 0
+	if !body.Clear {
+		if body.Liked {
+			fb = 1
+		} else {
+			fb = -1
+		}
+	}
+
+	if err := s.recall.SetFeedback(id, fb); err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
 	}
 
 	writeJSON(w, map[string]any{
@@ -1214,13 +1494,4 @@ func writeErr(w http.ResponseWriter, code int, err error) {
 
 func errMethodNotAllowed() error {
 	return fmt.Errorf("method not allowed")
-}
-
-func parseIntDefault(s string, def int) int {
-	n, err := strconv.Atoi(s)
-	if err != nil {
-		return def
-	}
-
-	return n
 }

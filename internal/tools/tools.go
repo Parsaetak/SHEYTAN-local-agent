@@ -878,6 +878,27 @@ func htmlToText(s string) string {
 
 var searchUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36"
 
+// searchClient is the WebSearch HTTP client. v1.1.4Z: it no longer shares
+// http.DefaultClient — the default follows redirects to ANY scheme/host,
+// so a compromised search endpoint could bounce the agent at internal
+// addresses. This client caps redirects and validates every hop stays on
+// plain http(s) with no embedded credentials.
+var searchClient = &http.Client{
+	Timeout: 25 * time.Second,
+	CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 5 {
+			return fmt.Errorf("webSearch: too many redirects")
+		}
+		if req.URL.Scheme != "http" && req.URL.Scheme != "https" {
+			return fmt.Errorf("webSearch: redirect to non-http scheme %q blocked", req.URL.Scheme)
+		}
+		if req.URL.User != nil {
+			return fmt.Errorf("webSearch: redirect with embedded credentials blocked")
+		}
+		return nil
+	},
+}
+
 func fetchSearchPage(ctx context.Context, endpoint string) (string, int, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", endpoint, nil)
 	if err != nil {
@@ -886,7 +907,7 @@ func fetchSearchPage(ctx context.Context, endpoint string) (string, int, error) 
 	req.Header.Set("User-Agent", searchUA)
 	req.Header.Set("Accept", "text/html,application/xhtml+xml")
 	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := searchClient.Do(req)
 	if err != nil {
 		return "", 0, err
 	}
