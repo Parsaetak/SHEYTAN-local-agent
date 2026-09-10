@@ -6,7 +6,7 @@ Repository: https://github.com/Parsaetak/SHEYTAN-local-agent
 
 Branch: `main`
 
-Current release: `v1.1.5Z` (SHEYTAN Native AI Engine architecture foundation; see `worklog.md` for the full Phase 1 log).
+Current release: `v1.1.5Z` (SHEYTAN Native AI Engine — Phase 2: native GGUF model loading; see `worklog.md` for the full Phase 1 + Phase 2 logs).
 
 **Read `worklog.md` before working.** It records the audit findings and the fixes this release shipped, including which subsystems were previously unwired and why.
 
@@ -66,11 +66,11 @@ inspect → verify → diagnose → fix → retest → continue
 
 Backend: Go 1.26, Wails v3 (desktop shell), Go HTTP API + WebSocket on `127.0.0.1:8765`.
 
-Engine stack (v1.1.5Z Phase 1 — the native engine is a supervised FOUNDATION, llama.cpp is still the only generation engine):
+Engine stack (v1.1.5Z Phase 2 — the native engine loads GGUF models natively; llama.cpp is still the only generation engine):
 
 ```text
 React/TypeScript → Wails → Go Core → llm.Backend contract → llama.cpp (default + fallback)
-                                              ↘ internal/native/engine → shtn-engine-host (C++, lifecycle/metrics only)
+                                              ↘ internal/native/engine → shtn-engine-host (C++, lifecycle/metrics/GGUF model loading — no inference yet)
 ```
 
 Frontend: React 19, TypeScript, Vite, Zustand; embedded via `web/static` (go:embed) — **`npm run build` must be re-run after any frontend change** so the embedded assets stay in sync.
@@ -81,9 +81,10 @@ Primary packages:
 internal/agent       orchestrator (per-run config snapshot, tool registry)
 internal/llm         LlamaServer (engine lifecycle) + OpenAI-compatible client
                      + Backend contract + LlamaBackend + selection (v1.1.5Z)
-internal/native/engine  SHEYTAN native engine: protocol, supervised runtime,
-                     Backend adapter, hardware profile, metrics, concern types
-                     (Phase 1: NO inference — see doc.go for the boundary decision)
+internal/native/engine  SHEYTAN native engine: protocol (v2), supervised runtime,
+                     Backend adapter, hardware profile, metrics, model lifecycle
+                     (Phase 2: native GGUF loading + metadata + memory plan;
+                     NO inference — see doc.go for the boundary decision)
 internal/api         REST/WS surface, run registry, engine event bus
 internal/runtime     Stack wiring (single source for every subsystem)
 internal/config      Config + Source (copy-on-write live config)  ← READ THIS
@@ -125,8 +126,9 @@ Violating this contract reintroduces the v1.1.3Z data race (`*s.cfg = updated` i
 - `MarkBusy` performs the whole transition under one lock — do not split it again (see `setStateLocked`).
 - Streaming has NO overall client timeout by design; the stall watchdog (5 min zero-byte) provides the hang bound. Do not reintroduce a blanket `http.Client.Timeout` on the stream client.
 - Engine downloads are context-bounded (10 min) and size-capped (2 GiB).
-- v1.1.5Z backend rules: generation is routed by `llm.SelectGenerationBackend` — the native engine only when selected (`engineBackend: "native"`) AND `GenerationCapable()`; otherwise llama.cpp. In Phase 1 native generation is not implemented, so generation ALWAYS resolves to llama.cpp. The native backend's Generate/StreamGenerate/LoadModel return `llm.ErrNotImplemented` — that is the fallback signal, never a bug to "fix" by faking inference. Native engine failures never fail the llama path (best-effort, logged, visible in `native.state`).
-- The native engine host (`shtn-engine-host`) runs with a sanitized environment, bounded op timeouts (10 s), a 1 MiB frame cap and a protocol/ABI handshake that fails closed. Build it from `native/engine/` (CMake or Make); Phase 1 does not ship or auto-download it.
+- v1.1.5Z backend rules: generation is routed by `llm.SelectGenerationBackend` — the native engine only when selected (`engineBackend: "native"`) AND `GenerationCapable()`; otherwise llama.cpp. Native GENERATION is not implemented yet, so generation ALWAYS resolves to llama.cpp. The native backend's Generate/StreamGenerate return `llm.ErrNotImplemented` — that is the fallback signal, never a bug to "fix" by faking inference. Native engine failures never fail the llama path (best-effort, logged, visible in `native.state`).
+- Native MODEL loading (Phase 2) is real: `LoadModel` validates the file and loads it natively (GGUF validate → memory-map → metadata → memory plan). Model states use their own dedicated vocabulary — `unloaded/loading/loaded/failed` — separate from the engine states above; a host restart resets the model state (a fresh host maps nothing). Loading a model does NOT enable generation.
+- The native engine host (`shtn-engine-host`) runs with a sanitized environment, bounded op timeouts (10 s; model loads 30 s), a 1 MiB frame cap and a protocol/ABI handshake that fails closed (protocol/ABI v2 — both sides bumped together). Build it from `native/engine/` (CMake or Make); this phase does not ship or auto-download it.
 
 # 6. Bounded-resource invariants
 
@@ -188,9 +190,9 @@ go run ./scripts/stress-main stress          # release gate (0 fail required)
 node scripts/release-version.mjs --check     # version surfaces consistent
 # C++ native engine (when toolchain available):
 cmake -S native/engine -B native/engine/build && cmake --build native/engine/build
-ctest --test-dir native/engine/build         # 3 suites: engine, protocol, host
+ctest --test-dir native/engine/build         # 5 suites: engine, protocol, host, gguf, model
 # Go↔C++ integration (skips when the host binary is not built):
-go test -tags headless ./internal/native/engine/ -run TestRealCppHostEndToEnd
+go test -tags headless ./internal/native/engine/ -run 'TestRealCppHostEndToEnd|TestRealCppHostModelLifecycle'
 ```
 
 New runtime features need a regression test at the level where a real user would notice the failure (HTTP-level for API changes, request-shape tests for wire fields, behavioral tests for loop mechanics).
@@ -213,22 +215,20 @@ A button is not a feature. An endpoint is not a feature. A compile is not a feat
 # 13. Immediate next tasks (priority order)
 
 ```text
-1. Native engine Phase 2: real generation — implement Generate/
+1. Native engine Phase 3: real generation — implement Generate/
    StreamGenerate in the C++ core + host protocol (coarse-grained:
    whole requests, streamed chunks), then flip GenerationCapable().
-   Extend internal/native/engine/{model,memory,kv,generation,scheduler}
-   from types to implementations. Do NOT change the wire types or the
-   ABI without bumping SHTN_PROTOCOL_VERSION / SHTN_ABI_VERSION.
-2. Native model loading: GGUF parsing + weights/KV memory planning
-   (memory.go MemoryPlan) behind LoadModel; then ModelInfo.
-3. Native engine packaging: build + ship shtn-engine-host in the
+   Extend internal/native/engine/{kv,generation,scheduler} from types
+   to implementations. Do NOT change the wire types or the ABI without
+   bumping SHTN_PROTOCOL_VERSION / SHTN_ABI_VERSION.
+2. Native engine packaging: build + ship shtn-engine-host in the
    portable layout (bin/) with an update path (updater pattern).
-4. Vision pipeline verification with a real mmproj projector
-5. Tool-calling reliability tuning with larger instruct models
-6. Continuum rollover exercise under real long sessions (it is wired +
+3. Vision pipeline verification with a real mmproj projector
+4. Tool-calling reliability tuning with larger instruct models
+5. Continuum rollover exercise under real long sessions (it is wired +
    unit-tested; it has not yet been observed in a real multi-hour thread)
-7. Context Engine foundations (PLANNED work — see ARCHITECTURE.md Part II)
-8. Model tier discovery + capability-based routing (PLANNED — see
+6. Context Engine foundations (PLANNED work — see ARCHITECTURE.md Part II)
+7. Model tier discovery + capability-based routing (PLANNED — see
    ARCHITECTURE.md §II.2)
 ```
 

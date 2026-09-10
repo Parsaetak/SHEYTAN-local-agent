@@ -10,16 +10,16 @@ package llm
 // llama.cpp engine and the future SHEYTAN native engine are
 // interchangeable behind one interface:
 //
-//	React/TypeScript → Wails → Go Core → SHEYTAN Native API → C++ Native Engine
-//	                                    ↘ Backend contract (this file)
+//      React/TypeScript → Wails → Go Core → SHEYTAN Native API → C++ Native Engine
+//                                          ↘ Backend contract (this file)
 //
 // Phase 1 status (do not overstate):
 //
-//	llama   — full implementation: lifecycle + generation, the default
-//	          engine and the fallback for every generation request.
-//	native  — lifecycle, health, hardware and metrics only. Generate /
-//	          StreamGenerate / LoadModel / ModelInfo return ErrNotImplemented
-//	          until later phases; callers fall back to the llama backend.
+//      llama   — full implementation: lifecycle + generation, the default
+//                engine and the fallback for every generation request.
+//      native  — lifecycle, health, hardware and metrics only. Generate /
+//                StreamGenerate / LoadModel / ModelInfo return ErrNotImplemented
+//                until later phases; callers fall back to the llama backend.
 //
 // The wire types reused by this contract (Message, ChatRequest,
 // ChatResponse, StreamEvent, PerfStats, ToolSpec) are the same ones the
@@ -151,6 +151,12 @@ type ModelSpec struct {
 
 // ModelInfo describes the model state of one backend. Only fields the
 // backend can actually determine are populated.
+//
+// Phase 2 additions (native engine GGUF loading): State, FileSizeBytes,
+// TensorCount, VocabSize, EmbeddingLength, LayerCount, GGUFVersion and
+// the memory-plan estimates. They are additive optional fields — the
+// llama backend leaves them zero, so the shared contract stays
+// backward-compatible.
 type ModelInfo struct {
 	Backend string `json:"backend"`
 
@@ -168,6 +174,27 @@ type ModelInfo struct {
 	Quantization  string `json:"quantization,omitempty"`
 	Parameters    string `json:"parameters,omitempty"`
 	ContextLength int    `json:"contextLength,omitempty"`
+
+	// Native-engine lifecycle state of the model (unloaded / loading /
+	// loaded / failed). Empty on backends without a model state.
+	State string `json:"state,omitempty"`
+
+	// File facts (native engine, read from the GGUF header).
+	FileSizeBytes uint64 `json:"fileSizeBytes,omitempty"`
+	TensorCount   int    `json:"tensorCount,omitempty"`
+	GGUFVersion   int    `json:"ggufVersion,omitempty"`
+
+	// Architecture facts (native engine; zero when not present in the
+	// file — never guessed).
+	VocabSize       int `json:"vocabSize,omitempty"`
+	EmbeddingLength int `json:"embeddingLength,omitempty"`
+	LayerCount      int `json:"layerCount,omitempty"`
+
+	// Memory-plan estimates from the native loader (planned, not
+	// allocated).
+	KVCacheEstimateBytes     uint64 `json:"kvCacheEstimateBytes,omitempty"`
+	WorkspaceEstimateBytes   uint64 `json:"workspaceEstimateBytes,omitempty"`
+	TotalMemoryEstimateBytes uint64 `json:"totalMemoryEstimateBytes,omitempty"`
 }
 
 // HardwareInfo is the platform-neutral hardware profile (v1.1.5Z).
@@ -244,10 +271,10 @@ type AcceleratorHardware struct {
 // Generation-time metrics become measurable when a backend actually serves
 // generation.
 type Metrics struct {
-	Backend     string  `json:"backend"`
-	EngineState string  `json:"engineState"`
-	Model       string  `json:"model,omitempty"`
-	Pid         int     `json:"pid,omitempty"`
+	Backend     string `json:"backend"`
+	EngineState string `json:"engineState"`
+	Model       string `json:"model,omitempty"`
+	Pid         int    `json:"pid,omitempty"`
 
 	// UptimeSeconds is measured from the engine's last successful start.
 	UptimeSeconds float64 `json:"uptimeSeconds,omitempty"`

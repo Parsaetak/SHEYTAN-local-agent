@@ -63,7 +63,8 @@ stress suite; see the exact commands in `agent.md` §10.
 | Release engineering (single-source version sync, CI gates, zip-slip-safe updater) | `scripts/release-version.mjs`, `.github/workflows/build-desktop.yml`, `internal/updater` | IMPLEMENTED + TESTED | `package.json` is the single source of truth for the version |
 | Frontend (React 19 + TS + Vite, embedded via `go:embed`) | `src/`, `web/static` | IMPLEMENTED + TESTED | `npm run build` must be re-run after frontend changes |
 | **LLM backend contract** (v1.1.5Z Phase 1): engine-agnostic interface — Start/Stop/Health/LoadModel/UnloadModel/Generate/StreamGenerate/Cancel/ModelInfo/HardwareInfo/Metrics — plus generation-backend selection with automatic llama.cpp fallback | `internal/llm` (`backend.go`, `llamabackend.go`) | IMPLEMENTED + TESTED | `LlamaBackend` delegates to the existing LlamaServer+Client paths (no behavior change); selection resolves to llama in Phase 1 because the native backend honestly reports generation-incapable |
-| **SHEYTAN Native Engine foundation** (v1.1.5Z Phase 1): supervised `shtn-engine-host` subprocess (spawn → protocol/ABI handshake → health → ready → bounded auto-restart), length-prefixed JSON IPC, platform-neutral hardware profile (native probe + sysinfo merge), native metrics (measured values only), C++ skeleton with a narrow C ABI (create/destroy/health/hwinfo/metrics) and its own test suite | `internal/native/engine`, `native/engine/` | IMPLEMENTED + TESTED (lifecycle/health/hwinfo/metrics only) | **No native inference exists** — Generate/StreamGenerate/LoadModel return `ErrNotImplemented` and generation runs on llama.cpp; opt-in via `engineBackend: "native"`; default behavior identical to v1.1.4Z |
+| **SHEYTAN Native Engine foundation** (v1.1.5Z Phase 1): supervised `shtn-engine-host` subprocess (spawn → protocol/ABI handshake → health → ready → bounded auto-restart), length-prefixed JSON IPC, platform-neutral hardware profile (native probe + sysinfo merge), native metrics (measured values only), C++ engine with a narrow C ABI (create/destroy/health/hwinfo/metrics) and its own test suite | `internal/native/engine`, `native/engine/` | IMPLEMENTED + TESTED | **No native inference exists** — Generate/StreamGenerate return `ErrNotImplemented` and generation runs on llama.cpp; opt-in via `engineBackend: "native"`; default behavior identical to v1.1.4Z |
+| **Native GGUF model loading** (v1.1.5Z Phase 2): bounds-checked, overflow-safe C++ GGUF reader (magic/version/metadata/tensor-table validation, hostile-input bounds, mmap-backed lazy access), `LoadModel`/`UnloadModel` with replace semantics and clean resource release, real metadata extraction (architecture, parameter count, context, vocab, embedding, layers, quantization, tensor count, file size), load-time memory plan (file/mapped/weights/workspace/KV estimate/overhead — computed, never allocated), model states `unloaded/loading/loaded/failed` with host-restart resets, `model_info`/`load_model`/`unload_model` wire ops (protocol v2) and the `llm.ModelInfo` mapping with additive fields | `internal/native/engine` (`model.go`, `protocol.go`, `backend.go`), `native/engine/src/{gguf,model}.*`, `native/engine/include/shtn/*` | IMPLEMENTED + TESTED (loading/metadata/planning only) | **No native inference exists** — loading a model does NOT enable generation; `GenerationCapable()` stays false and Generate/StreamGenerate still return `ErrNotImplemented` |
 
 Explicit non-goals of the **current** runtime (do not mistake these for
 missing features):
@@ -75,7 +76,7 @@ missing features):
 - The Lab command policy is lexical (denylists + env pinning), not a
   kernel-level sandbox.
 
-## I.9 — The SHEYTAN Native AI Engine architecture (v1.1.5Z Phase 1, IMPLEMENTED foundation)
+## I.9 — The SHEYTAN Native AI Engine architecture (v1.1.5Z, IMPLEMENTED foundation + model loading)
 
 The target engine stack is now wired at the foundation level:
 
@@ -92,9 +93,10 @@ C++ Native Engine         ← native/engine/ (narrow C ABI + host process)
 ```
 
 Go remains the main application/runtime engine. The C++ native engine is
-the future heavy-compute/AI execution engine. **Phase 1 implements the
-architecture foundation, not inference** — the managed llama.cpp engine
-remains the only generation engine (fallback and default).
+the future heavy-compute/AI execution engine. **Phase 1 implemented the
+architecture foundation and Phase 2 added native GGUF model loading —
+still no inference.** The managed llama.cpp engine remains the only
+generation engine (fallback and default).
 
 ### Go↔C++ boundary decision: supervised subprocess + IPC (IMPLEMENTED)
 
@@ -113,8 +115,37 @@ little-endian length-prefixed JSON frames over stdin/stdout (1 MiB frame
 cap, protocol + ABI version handshake that fails closed on mismatch,
 malformed requests answered with bounded errors — never a crash). The
 underlying engine core is a narrow C ABI (`include/shtn/engine.h`):
-create/destroy/health/hardware_info/metrics in Phase 1, extended — never
-broken — by later phases.
+create/destroy/health/hardware_info/metrics since Phase 1,
+load_model/unload_model/model_info/memory_plan since Phase 2 (protocol
+v2 / ABI v2, both sides bumped together) — extended — never broken — by
+later phases.
+
+### Native model lifecycle (Phase 2, IMPLEMENTED)
+
+`LoadModel` on the native backend drives a strict, all-or-nothing native
+load: validate the path (regular file) → open + `fstat` + whole-file
+read-only `mmap` (lazy — tensor data is faulted in page by page, never
+copied) → parse the GGUF container (magic, version 2/3, bounded counts
+and lengths, per-KV type validation) → parse the tensor table (dims
+bounds, overflow-checked element products, per-tensor offsets validated
+against the data section, exact byte-size checks for known GGML types)
+→ extract metadata only from keys actually present → compute the memory
+plan (weights = tensor-data span; KV = 2·K/V·layers·context·embedding·2
+bytes f16; workspace = context·vocab·4 logits row; fixed 64 MiB runtime
+allowance; totals overflow-checked; compared against detected RAM) →
+state `loaded`. Any failure unmaps, releases everything, and walks the
+model state to `failed` with the reason — a failed load never leaves a
+stale model behind. `UnloadModel` is idempotent; `LoadModel` while
+loaded replaces the resident model. The Go side resets its model
+snapshot on every host lifecycle boundary (a fresh host maps nothing).
+
+### Model state vocabulary (Phase 2)
+
+The model concern uses its own small vocabulary — `unloaded`,
+`loading`, `loaded`, `failed` — deliberately separate from the engine
+states (`llm.State*`) that keep describing the host subprocess. There is
+still only ONE engine-state system and now ONE model-state system; the
+two never mix.
 
 ### State authority
 
@@ -129,13 +160,15 @@ generation.
 
 ### Honest capability reporting
 
-`engine.Backend.GenerationCapable()` returns `false` in Phase 1. This
-single boolean is what `llm.SelectGenerationBackend` uses to route
-generation to the llama fallback — when a later phase implements native
-generation, the routing flips by changing that boolean (and implementing
-the methods), not by editing call sites. Generation-related metrics
-(TTFT, prompt/decode speed) are omitted — never zero-filled — until a
-backend actually measures them.
+`engine.Backend.GenerationCapable()` returns `false` — in Phase 2 as in
+Phase 1 — because model LOADING is not generation. This single boolean is
+what `llm.SelectGenerationBackend` uses to route generation to the llama
+fallback — when a later phase implements native generation, the routing
+flips by changing that boolean (and implementing the methods), not by
+editing call sites. Generation-related metrics (TTFT, prompt/decode
+speed) are omitted — never zero-filled — until a backend actually
+measures them. Native `ModelInfo` reports only values the C++ reader
+actually read or derived; absent GGUF keys stay zero.
 
 ---
 

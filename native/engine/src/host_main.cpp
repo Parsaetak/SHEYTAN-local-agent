@@ -12,6 +12,10 @@
 //   - "shutdown" acknowledges and exits cleanly;
 //   - stdin EOF exits cleanly (the Go side closes stdin on stop);
 //   - every op is coarse-grained; there is no per-token traffic.
+//
+// Phase 2 ops: load_model / unload_model / model_info — the native GGUF
+// loading surface (validate + memory-map + metadata + memory plan; no
+// inference in this phase).
 
 #include "shtn/engine.h"
 #include "shtn/types.h"
@@ -21,6 +25,7 @@
 #include "protocol.h"
 
 #include <cstdio>
+#include <cstring>
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -111,11 +116,17 @@ std::string op_metrics(shtn_engine* engine) {
         throw std::string("metrics failed with error code ") + std::to_string(rc);
     }
 
+    // The model concern rides along as an honest snapshot (state only;
+    // full metadata is the model_info op's job).
+    shtn_model_info mi{};
+    shtn_engine_model_info(engine, &mi);
+
     std::ostringstream oss;
     oss << "{"
         << "\"engineState\":" << quote(m.state)
         << ",\"uptimeSeconds\":" << json_num(m.uptime_seconds)
         << ",\"processRssBytes\":" << json_uint(m.process_rss_bytes)
+        << ",\"modelState\":" << quote(mi.state)
         << ",\"scheduler\":{"
         << "\"activeRequests\":" << m.active_requests
         << ",\"maxConcurrentRequests\":1"
@@ -131,13 +142,158 @@ std::string op_metrics(shtn_engine* engine) {
 }
 
 std::string op_cancel() {
-    // Phase 1: no generation requests exist, so a cancel is honestly
-    // reported as a miss (the Go side surfaces the reason).
+    // No generation requests exist in this phase, so a cancel is
+    // honestly reported as a miss (the Go side surfaces the reason).
     std::ostringstream oss;
     oss << "{"
         << "\"cancelled\":false"
-        << ",\"reason\":\"no active generation requests (phase 1 skeleton)\""
+        << ",\"reason\":\"no active generation requests (generation is a later phase)\""
         << "}";
+    return oss.str();
+}
+
+// model_info_json renders one shtn_model_info snapshot (only fields the
+// engine actually read or derived; zeros/empties stay zero/empty).
+std::string model_info_json(const shtn_model_info& mi) {
+    std::ostringstream oss;
+    oss << "{"
+        << "\"path\":" << quote(mi.path)
+        << ",\"architecture\":" << quote(mi.architecture)
+        << ",\"name\":" << quote(mi.name)
+        << ",\"quantization\":" << quote(mi.quantization)
+        << ",\"state\":" << quote(mi.state)
+        << ",\"error\":" << quote(mi.error)
+        << ",\"fileSizeBytes\":" << json_uint(mi.file_size_bytes)
+        << ",\"parameterCount\":" << json_uint(mi.parameter_count)
+        << ",\"contextLength\":" << json_uint(mi.context_length)
+        << ",\"vocabularySize\":" << json_uint(mi.vocabulary_size)
+        << ",\"embeddingLength\":" << json_uint(mi.embedding_length)
+        << ",\"layerCount\":" << json_uint(mi.layer_count)
+        << ",\"tensorCount\":" << mi.tensor_count
+        << ",\"ggufVersion\":" << mi.gguf_version
+        << ",\"fileType\":" << mi.general_file_type
+        << ",\"hasFileType\":" << (mi.has_file_type ? "true" : "false")
+        << ",\"kvCacheBytes\":" << json_uint(mi.kv_cache_bytes)
+        << ",\"workspaceBytes\":" << json_uint(mi.workspace_bytes)
+        << ",\"totalPlanBytes\":" << json_uint(mi.total_plan_bytes)
+        << "}";
+    return oss.str();
+}
+
+std::string memory_plan_json(const shtn_memory_plan& mp) {
+    std::ostringstream oss;
+    oss << "{"
+        << "\"modelFileBytes\":" << json_uint(mp.model_file_bytes)
+        << ",\"mappedBytes\":" << json_uint(mp.mapped_bytes)
+        << ",\"weightsBytes\":" << json_uint(mp.weights_bytes)
+        << ",\"workspaceBytes\":" << json_uint(mp.workspace_bytes)
+        << ",\"kvCacheBytes\":" << json_uint(mp.kv_cache_bytes)
+        << ",\"runtimeOverheadBytes\":" << json_uint(mp.runtime_overhead_bytes)
+        << ",\"totalBytes\":" << json_uint(mp.total_bytes)
+        << ",\"availableRamBytes\":" << json_uint(mp.available_ram_bytes)
+        << ",\"fitsInRam\":" << mp.fits_in_ram
+        << "}";
+    return oss.str();
+}
+
+// op_load_model validates the payload, runs the native load and renders
+// the post-load model snapshot. Errors are thrown as readable strings
+// (the dispatch turns them into bounded error frames).
+std::string op_load_model(shtn_engine* engine, const std::string& payload_raw,
+                          bool has_payload) {
+    std::string path;
+    uint32_t context_length = 0;
+    std::string err;
+
+    if (!has_payload) {
+        throw std::string("load_model requires a payload");
+    }
+
+    if (!shtn::json::extract_load_payload(payload_raw, path, context_length,
+                                          err)) {
+        throw std::string("malformed load_model payload: ") + err;
+    }
+
+    shtn_model_load_options opts{};
+    opts.context_length = context_length;
+    opts.reserved = 0;
+
+    const int32_t rc = shtn_engine_load_model(engine, path.c_str(), &opts);
+
+    if (rc != SHTN_OK) {
+        // The model snapshot carries the failure detail — surface it in
+        // the error response instead of a bare code.
+        shtn_model_info mi{};
+        shtn_engine_model_info(engine, &mi);
+
+        std::string msg = "load failed";
+        if (mi.error[0] != '\0') {
+            msg = mi.error;
+        } else {
+            msg += " (error code " + std::to_string(rc) + ")";
+        }
+        throw msg;
+    }
+
+    shtn_model_info mi{};
+    shtn_memory_plan mp{};
+
+    shtn_engine_model_info(engine, &mi);
+    shtn_engine_memory_plan(engine, &mp);
+
+    std::ostringstream oss;
+    oss << "{"
+        << "\"loaded\":true"
+        << ",\"state\":" << quote(mi.state)
+        << ",\"model\":" << model_info_json(mi)
+        << ",\"memory\":" << memory_plan_json(mp)
+        << "}";
+    return oss.str();
+}
+
+std::string op_unload_model(shtn_engine* engine) {
+    const int32_t rc = shtn_engine_unload_model(engine);
+
+    if (rc != SHTN_OK) {
+        throw std::string("unload failed (error code ") + std::to_string(rc) + ")";
+    }
+
+    std::ostringstream oss;
+    oss << "{"
+        << "\"loaded\":false"
+        << ",\"state\":" << quote(SHTN_MODEL_STATE_UNLOADED)
+        << "}";
+    return oss.str();
+}
+
+std::string op_model_info(shtn_engine* engine) {
+    shtn_model_info mi{};
+    shtn_memory_plan mp{};
+
+    const int32_t rc = shtn_engine_model_info(engine, &mi);
+    if (rc != SHTN_OK) {
+        throw std::string("model_info failed (error code ") +
+            std::to_string(rc) + ")";
+    }
+
+    shtn_engine_memory_plan(engine, &mp);
+
+    const bool loaded = std::strcmp(mi.state, SHTN_MODEL_STATE_LOADED) == 0;
+
+    std::ostringstream oss;
+    oss << "{"
+        << "\"loaded\":" << (loaded ? "true" : "false")
+        << ",\"state\":" << quote(mi.state);
+
+    // With nothing attempted, model/memory stay absent — the snapshot is
+    // honest about "nothing to report".
+    if (mi.state[0] != '\0' &&
+        std::strcmp(mi.state, SHTN_MODEL_STATE_UNLOADED) != 0) {
+        oss << ",\"model\":" << model_info_json(mi)
+            << ",\"memory\":" << memory_plan_json(mp);
+    }
+
+    oss << "}";
     return oss.str();
 }
 
@@ -145,23 +301,32 @@ std::string op_cancel() {
 
 // handle_request processes one parsed request and returns the RESULT JSON
 // (success) or throws a std::string error message (failure).
-std::string handle_request(shtn_engine* engine, const std::string& op) {
-    if (op == "ping") {
+std::string handle_request(shtn_engine* engine, const shtn::json::Parsed& req) {
+    if (req.op == "ping") {
         return op_ping();
     }
-    if (op == "health") {
+    if (req.op == "health") {
         return op_health(engine);
     }
-    if (op == "hwinfo") {
+    if (req.op == "hwinfo") {
         return op_hardware(engine);
     }
-    if (op == "metrics") {
+    if (req.op == "metrics") {
         return op_metrics(engine);
     }
-    if (op == "cancel") {
+    if (req.op == "cancel") {
         return op_cancel();
     }
-    if (op == "shutdown") {
+    if (req.op == "load_model") {
+        return op_load_model(engine, req.payload_raw, req.has_payload);
+    }
+    if (req.op == "unload_model") {
+        return op_unload_model(engine);
+    }
+    if (req.op == "model_info") {
+        return op_model_info(engine);
+    }
+    if (req.op == "shutdown") {
         // Acknowledged by the caller specially (respond, then exit).
         return "{}";
     }
@@ -228,7 +393,7 @@ int host_loop(std::istream& in, std::ostream& out, shtn_engine* engine) {
         }
 
         try {
-            const std::string result = handle_request(engine, parsed.op);
+            const std::string result = handle_request(engine, parsed);
 
             if (parsed.op == "shutdown") {
                 // Respond first, then exit cleanly.
@@ -286,7 +451,7 @@ int main() {
               << "engine=" << SHTN_ENGINE_NAME
               << " abi=" << SHTN_ABI_VERSION
               << " protocol=" << SHTN_PROTOCOL_VERSION
-              << " (phase 1 skeleton: lifecycle, health, hardware, metrics)"
+              << " (phase 2: lifecycle, health, hardware, metrics, GGUF model loading)"
               << std::endl;
 
     return shtn_host_run(std::cin, std::cout);

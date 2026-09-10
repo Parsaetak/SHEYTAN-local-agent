@@ -20,7 +20,7 @@ static int failures = 0;
 int main() {
     // ABI version sanity: must match the version the Go core pins.
     CHECK(shtn_abi_version() == SHTN_ABI_VERSION);
-    CHECK(shtn_abi_version() == 1u); // Phase 1
+    CHECK(shtn_abi_version() == 2u); // Phase 2 (model loading added)
 
     // --- create/destroy round trip --------------------------------------
     {
@@ -38,18 +38,33 @@ int main() {
     {
         CHECK(shtn_engine_create(nullptr, nullptr) == SHTN_ERR_INVALID_ARG);
 
-        shtn_engine* engine = nullptr;
+        shtn_engine* created = nullptr;
         shtn_engine_options opts{};
         opts.abi_version = SHTN_ABI_VERSION;
 
         CHECK(shtn_engine_create(&opts, nullptr) == SHTN_ERR_INVALID_ARG);
-        CHECK(shtn_engine_create(nullptr, &engine) == SHTN_ERR_INVALID_ARG);
+        CHECK(shtn_engine_create(nullptr, &created) == SHTN_ERR_INVALID_ARG);
+        CHECK(created == nullptr);
+
+        // A valid instance for the (engine, NULL-out) pairs below.
+        CHECK(shtn_engine_create(&opts, &created) == SHTN_OK);
 
         shtn_engine_destroy(nullptr); // must be a safe no-op
 
         CHECK(shtn_engine_health(nullptr, nullptr) == SHTN_ERR_INVALID_ARG);
         CHECK(shtn_engine_hardware_info(nullptr, nullptr) == SHTN_ERR_INVALID_ARG);
         CHECK(shtn_engine_metrics(nullptr, nullptr) == SHTN_ERR_INVALID_ARG);
+
+        // Phase 2 model surface: NULL arguments rejected, never dereferenced.
+        CHECK(shtn_engine_load_model(nullptr, "x", nullptr) == SHTN_ERR_INVALID_ARG);
+        CHECK(shtn_engine_load_model(created, nullptr, nullptr) == SHTN_ERR_INVALID_ARG);
+        CHECK(shtn_engine_unload_model(nullptr) == SHTN_ERR_INVALID_ARG);
+        CHECK(shtn_engine_model_info(nullptr, nullptr) == SHTN_ERR_INVALID_ARG);
+        CHECK(shtn_engine_model_info(created, nullptr) == SHTN_ERR_INVALID_ARG);
+        CHECK(shtn_engine_memory_plan(nullptr, nullptr) == SHTN_ERR_INVALID_ARG);
+        CHECK(shtn_engine_memory_plan(created, nullptr) == SHTN_ERR_INVALID_ARG);
+
+        shtn_engine_destroy(created);
     }
 
     // --- ABI mismatch fails closed ---------------------------------------
@@ -130,6 +145,29 @@ int main() {
         shtn_metrics m2{};
         CHECK(shtn_engine_metrics(engine, &m2) == SHTN_OK);
         CHECK(m2.uptime_seconds >= m.uptime_seconds);
+
+        shtn_engine_destroy(engine);
+    }
+
+    // --- model surface: fresh engine reports unloaded -----------------------
+    {
+        shtn_engine* engine = nullptr;
+        shtn_engine_options opts{};
+        opts.abi_version = SHTN_ABI_VERSION;
+
+        CHECK(shtn_engine_create(&opts, &engine) == SHTN_OK);
+
+        shtn_model_info mi{};
+        CHECK(shtn_engine_model_info(engine, &mi) == SHTN_OK);
+        CHECK(std::strcmp(mi.state, SHTN_MODEL_STATE_UNLOADED) == 0);
+
+        shtn_memory_plan mp{};
+        CHECK(shtn_engine_memory_plan(engine, &mp) == SHTN_OK);
+        CHECK(mp.total_bytes == 0);
+
+        // Loading a nonexistent file fails cleanly without crashing.
+        CHECK(shtn_engine_load_model(engine, "/definitely/not/here.gguf",
+                                     nullptr) == SHTN_ERR_INVALID_ARG);
 
         shtn_engine_destroy(engine);
     }

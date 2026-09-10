@@ -1,75 +1,76 @@
-SHEYTAN-Local-Agent — v1.1.5Z Phase 1 Replacement Package
+SHEYTAN-Local-Agent — v1.1.5Z Phase 2 Replacement Package
 =========================================================
 
 Contents
 --------
 This package contains EVERY new and modified repository file required to
-replace the v1.1.4Z repository state with v1.1.5Z (Phase 1), at
+replace the v1.1.5Z Phase 1 repository state with v1.1.5Z Phase 2, at
 repository-relative paths. No deleted files exist in this release. To
-apply: unzip over a v1.1.4Z checkout (or clean clone at the base commit),
-overwriting files; then run the verification commands below.
+apply: unzip over a v1.1.5Z Phase 1 checkout (or clean clone at the base
+commit), overwriting files; then run the verification commands below.
 
 Summary
 -------
-Version:            1.1.5 (codename Zeta) — "v1.1.5Z"
-Base commit:        91e43d82ac0e6dc95164c17e610cb45f2e948de9 (tag v1.1.4Z)
-Target:             SHEYTAN Native AI Engine architecture, Phase 1
-                    (foundation; llama.cpp preserved as fallback)
+Version:            1.1.5 (codename Zeta) — "v1.1.5Z" (unchanged — this
+                    phase does NOT create a new release number)
+Base commit:        f4488d5f621c1b9af387b8ab4d1bae709011b17d (v1.1.5Z-phase1)
+Target:             SHEYTAN Native AI Engine Phase 2 — native GGUF model
+                    loading (metadata, validation, memory planning,
+                    ModelInfo) — generation stays on llama.cpp
 
-Phase 1 status statement (do not overstate):
-  SHEYTAN Native AI Engine architecture  = implemented foundation
-    (backend contract, supervised native lifecycle, hardware profile,
-     native metrics, buildable C++ skeleton with real create/destroy/
-     health/hwinfo/metrics functions)
-  Full native inference                  = future phase (NOT implemented)
-  llama.cpp                              = current fallback AND default
-    generation engine — unchanged behavior unless explicitly opted in
-    via engineBackend: "native"
+Native loader status (do not overstate):
+  Native engine lifecycle            = implemented (Phase 1)
+  Native GGUF loading                = implemented/tested
+  Native metadata                    = implemented/tested
+  Native memory planning             = implemented/tested
+  Native generation                  = NOT implemented yet
+  llama.cpp                          = current generation backend
 
-Go↔C++ boundary decision
-------------------------
-B) supervised native subprocess + IPC (shtn-engine-host, 4-byte
-little-endian length-prefixed JSON over stdin/stdout, 1 MiB frame cap,
-protocol/ABI handshake failing closed). Chosen over cgo/shared library
-for: crash isolation (native crash cannot kill the app; bounded watchdog
-restarts), preserved CGO_ENABLED=0 Windows cross-build, Android service
-mapping, explicit versioned protocol, coarse-grained-only ops (the
-boundary never carries tiny high-frequency calls). Documented in
-internal/native/engine/doc.go and ARCHITECTURE.md §I.9.
+Protocol / ABI
+--------------
+Protocol v1 → v2, ABI v1 → v2, bumped TOGETHER on both sides
+(native/engine/include/shtn/version.h and
+internal/native/engine/{protocol,backend}.go). The handshake still fails
+closed on mismatch. The Go↔C++ boundary (supervised shtn-engine-host +
+versioned length-prefixed JSON IPC) is UNCHANGED — the change is purely
+additive:
 
-Changed files (modified, v1.1.4Z → v1.1.5Z):
----------------------------------------------
-  .github/workflows/build-desktop.yml
-  .gitignore
-  .oxlintrc.json
+  - wire ops: load_model (payload {"path","contextLength"?}),
+    unload_model, model_info;
+  - C ABI: shtn_engine_load_model / shtn_engine_unload_model /
+    shtn_engine_model_info / shtn_engine_memory_plan; new fixed-size
+    structs shtn_model_load_options / shtn_model_info /
+    shtn_memory_plan; error codes APPENDED (never renumbered):
+    SHTN_ERR_MODEL_FORMAT / SHTN_ERR_MODEL_STATE / SHTN_ERR_NO_MODEL;
+  - pre-existing ops (ping/health/hwinfo/metrics/cancel/shutdown) kept
+    their exact wire shapes (metrics gained one additive
+    "modelState" field).
+
+New files (9)
+-------------
+  internal/native/engine/model_test.go
+  native/engine/src/gguf.cpp
+  native/engine/src/gguf.h
+  native/engine/src/model.cpp
+  native/engine/src/model.h
+  native/engine/src/util.h
+  native/engine/tests/gguf_writer.h
+  native/engine/tests/test_gguf.cpp
+  native/engine/tests/test_model.cpp
+
+Changed files (29, v1.1.5Z-phase1 → v1.1.5Z-phase2)
+---------------------------------------------------
   ARCHITECTURE.md
   README.md
-  SIGNATURE
+  REPLACEMENT-MANIFEST.txt
+  REPLACEMENT-SHA256.txt
   agent.md
-  build/config.yml
-  internal/api/engine.go
-  internal/api/server.go
-  internal/config/config.go
-  internal/llm/llama.go
-  internal/runtime/runtime.go
-  package.json
-  src/api.ts
-  worklog.md
-
-New files:
-----------
-  internal/api/server_native_test.go
   internal/llm/backend.go
-  internal/llm/backend_test.go
-  internal/llm/llamabackend.go
+  internal/llm/gguf.go
   internal/native/engine/backend.go
   internal/native/engine/cpp_integration_test.go
   internal/native/engine/doc.go
   internal/native/engine/engine_test.go
-  internal/native/engine/generation.go
-  internal/native/engine/kv.go
-  internal/native/engine/memory.go
-  internal/native/engine/metrics.go
   internal/native/engine/model.go
   internal/native/engine/platform.go
   internal/native/engine/protocol.go
@@ -82,112 +83,111 @@ New files:
   native/engine/include/shtn/types.h
   native/engine/include/shtn/version.h
   native/engine/src/engine.cpp
-  native/engine/src/hardware.cpp
-  native/engine/src/hardware.h
   native/engine/src/host_main.cpp
   native/engine/src/json.cpp
   native/engine/src/json.h
-  native/engine/src/protocol.cpp
-  native/engine/src/protocol.h
   native/engine/tests/test_engine.cpp
   native/engine/tests/test_host.cpp
-  native/engine/tests/test_protocol.cpp
+  worklog.md
 
-Deleted files:
----------------
-  (none)
+Deleted files: none.
 
-Commands executed (verification, all in this environment)
-----------------------------------------------------------
-Go 1.26.0, Node 24.19.0, npm 11.17.0, cmake 3.30.5, g++ 14.2.0 (linux/amd64)
+Build commands
+--------------
+  # C++ native engine (CMake preferred)
+  cmake -S native/engine -B native/engine/build
+  cmake --build native/engine/build
+  ctest --test-dir native/engine/build
 
-  go build -tags headless ./...                                PASS
-  go test  -tags headless ./internal/... -count=1              PASS (22 packages, 0 failures)
-  go test  -race -tags headless ./internal/agent/ ./internal/llm/ ./internal/api/    PASS
-  go test  -race -tags headless ./internal/native/engine/ ./internal/config/          PASS (additional)
-  go vet   -tags headless ./...                                PASS
-  npm run typecheck                                            PASS
-  npm run lint                                                 PASS (0 warnings, 0 errors)
-  npm run build                                                PASS (tsc + vite + sync:web; web/static
-                                                                byte-identical — api.ts edit is types-only)
-  go run ./scripts/stress-main stress                          PASS (30 pass / 0 fail — release gate)
-  node scripts/release-version.mjs                             PASS (4 surfaces synced 1.1.4 → 1.1.5)
-  node scripts/release-version.mjs --check                     PASS (consistent)
-  version smoke (stress-main version)                          PASS ("SHEYTAN-Local-Agent v1.1.5")
+  # C++ native engine (plain make alternative)
+  make -C native/engine && make -C native/engine test
 
-C++ native component (actual available toolchain)
--------------------------------------------------
-  cmake -S native/engine -B native/engine/build                PASS
-  cmake --build native/engine/build                            PASS (libshtn_engine.a, shtn-engine-host,
-                                                                3 test binaries; -Wall -Wextra -Wpedantic
-                                                                clean; C++17, zero third-party deps)
-  ctest --test-dir native/engine/build                         PASS (3/3: engine, protocol, host)
-  go test -tags headless ./internal/native/engine/ -run
-      TestRealCppHostEndToEnd                                  PASS (Go Engine ↔ real C++ host:
-                                                                handshake, health, hardware, metrics,
-                                                                cancel, clean stop — end-to-end)
+  # Go
+  go build -tags headless ./...
+  go vet -tags headless ./...
+  go test -tags headless ./internal/... -count=1
+  go test -race -tags headless ./internal/agent/ ./internal/llm/ \
+      ./internal/api/ ./internal/native/engine/
 
-Native-engine status
---------------------
-  IMPLEMENTED  backend contract (llm.Backend: Start/Stop/Health/LoadModel/
-               UnloadModel/Generate/StreamGenerate/Cancel/ModelInfo/
-               HardwareInfo/Metrics) + LlamaBackend delegation adapter
-               + selection (llm.SelectGenerationBackend) with automatic
-               llama.cpp fallback
-  IMPLEMENTED  supervised native engine (internal/native/engine):
-               spawn → protocol/ABI handshake (fail-closed) → health →
-               ready; event-driven failure detection; bounded auto-restart
-               (3 recoveries/episode, 1/2/4 s backoff, stop-suppression);
-               same state vocabulary + events as llama.cpp (no second
-               engine-state system)
-  IMPLEMENTED  length-prefixed JSON IPC protocol (1 MiB frame cap,
-               malformed-request bounded errors, per-op 10 s timeouts)
-  IMPLEMENTED  platform-neutral hardware profile (CPU/RAM/architecture
-               from the C++ probe merged with sysinfo GPU/VRAM; NPU/
-               accelerator + shared-memory GPU fields representable,
-               empty until a detector exists; no vendor hardcoding)
-  IMPLEMENTED  native metrics (engine state, uptime, pid, restarts, the
-               C++ engine's measured process RSS; generation metrics
-               omitted — not measurable without inference)
-  IMPLEMENTED  C++ skeleton: C ABI (create/destroy/health/hwinfo/metrics),
-               real platform hardware detection, host subprocess, protocol
-               + JSON framing, 3 C++ test suites
-  NOT YET      native inference: Generate/StreamGenerate/LoadModel/
-               ModelInfo return llm.ErrNotImplemented — the fallback
-               signal; generation ALWAYS resolves to llama.cpp in Phase 1
-               (pinned by TestSelectGenerationBackendFallsBackWhenNotCapable)
+  # Go↔C++ integration (skips when the host binary is not built)
+  go test -tags headless ./internal/native/engine/ \
+      -run 'TestRealCppHostEndToEnd|TestRealCppHostModelLifecycle'
+
+  # Frontend
+  npm ci && npm run typecheck && npm run lint && npm run build
+
+  # Release gates
+  go run ./scripts/stress-main stress
+  node scripts/release-version.mjs --check
+
+Test results (all verified on this exact tree, Linux x86_64,
+Go 1.26, g++ 14.2, CMake 4.4)
+-----------------------------
+  cmake configure + build                                PASS
+  ctest                                                  5/5 PASS
+      engine / protocol / host / gguf / model
+  C++ suite rebuilt with -fsanitize=address              5/5 PASS
+      (no leaks, no out-of-bounds access)
+  plain make + make test                                 PASS
+  go build -tags headless ./...                          PASS
+  go vet -tags headless ./...                            PASS
+  go test -tags headless ./internal/... -count=1         22 packages PASS
+  go test -race -tags headless (agent, llm, api,
+      native/engine)                                     PASS
+  TestRealCppHostEndToEnd                                PASS (real C++ host)
+  TestRealCppHostModelLifecycle                          PASS (real C++ host:
+      Go → native host → C++ → LoadModel → ModelInfo)
+  npm ci / typecheck / lint (0 warnings) / build         PASS (web/static
+      assets unchanged — no frontend edits in this phase)
+  go run ./scripts/stress-main stress                    30 pass / 0 fail
+  node scripts/release-version.mjs --check               PASS (all four
+      release surfaces 1.1.5)
+
+Native loader implementation summary
+------------------------------------
+  - GGUF reader (native/engine/src/gguf.*): magic + version validation
+    (v2/v3), metadata parsing with hostile-input bounds, tensor-table
+    parsing with overflow-checked element products and per-tensor offset
+    validation against the data section (exact byte-size checks for
+    known GGML types), alignment handling, file-size validation; model
+    metadata is never trusted; reads touch only header pages.
+  - Memory mapping: whole-file read-only mmap (POSIX) /
+    CreateFileMapping (Windows) — lazy access, no eager copy of tensor
+    data into RAM, no full-file reads.
+  - LoadModel/UnloadModel (native/engine/src/model.*, ABI v2):
+    all-or-nothing loading with replace semantics; idempotent unload;
+    clean release of mapping/handle on every failure path (verified
+    under AddressSanitizer); model states unloaded/loading/loaded/failed
+    mirrored on the Go side and reset on every host lifecycle boundary.
+  - Memory planning (computed, never allocated): model file / mapped /
+    weights (tensor-data span) / workspace estimate (ctx·vocab·4) /
+    KV-cache estimate (2·K/V·layers·ctx·emb·2 bytes f16) / fixed 64 MiB
+    runtime allowance / overflow-checked total / fit-vs-RAM verdict.
+  - Metadata extraction (only values actually read or derived):
+    architecture, name, parameter count (read or derived from the tensor
+    table), context length, vocabulary size, embedding length, layer
+    count, quantization (general.file_type), tensor count, file size.
+  - Go exposure: llm.ModelInfo gains additive optional fields
+    (State, FileSizeBytes, TensorCount, GGUFVersion, VocabSize,
+    EmbeddingLength, LayerCount, KV/workspace/total memory estimates);
+    the llama.cpp model path is untouched (leaves the new fields zero).
 
 Known limitations
 -----------------
-1. No native inference (by design in Phase 1) — see above.
-2. The shtn-engine-host binary is not shipped or auto-downloaded; build it
-   from native/engine/ (CMake or Make) into {DataDir}/bin/ (or configure
-   nativeEnginePath) to use engineBackend: "native".
-3. The C++ hardware probe detects CPU/RAM/architecture only; GPU and
-   NPU/accelerator entries come from the Go sysinfo merge (real detected
-   values) or stay empty until a C++ detector exists.
-4. The Wails/GTK desktop build cannot compile in this Linux environment
-   (no GTK4/WebKit dev libraries) — pre-existing v1.1.4Z limitation; the
-   Windows CI job builds the desktop binary (CGO_ENABLED=0 cross-compile
-   verified via go build; the desktop GUI itself is CI-built).
-5. The native engine watchdog uses a STRICTER episode policy than
-   llama.cpp (auto-restarts never reset the budget: 3 recoveries, then
-   terminal failed). llama.cpp's own watchdog semantics are intentionally
-   untouched.
-6. engineBackend has no Settings UI control in Phase 1 (opt-in is via
-   config.json or SHEYTAN_ENGINE_BACKEND) — deliberate: a toggle whose
-   only visible effect today is a supervised process would be feature
-   theater.
-7. Cross-platform C++ paths (Windows cpuid/GLPI/psapi, macOS sysctl/mach)
-   compile guarded but were executed only on Linux in this environment.
-
-Exclusions
-----------
-.git/, node_modules/, models/, sessions/, logs/, caches/, tmp/,
-machine-specific files, secrets — none are included. Build outputs
-(native/engine/build/, dist/, web/static) are excluded; web/static is
-byte-identical to v1.1.4Z (the api.ts change is types-only).
-
-Integrity
----------
-See REPLACEMENT-SHA256.txt for per-file SHA-256 hashes.
+  - Native generation is NOT implemented (this phase loads and plans,
+    nothing else): Generate/StreamGenerate return ErrNotImplemented,
+    GenerationCapable() stays false, every generation request runs on
+    llama.cpp. Loading a model does NOT enable generation.
+  - The memory plan is arithmetic on parsed metadata; real buffer
+    allocation arrives with the inference phase.
+  - GGUF v1 containers are rejected; GGML tensor types outside this
+    build's size table are validated leniently (offset-in-range only) —
+    never guessed.
+  - The contextLength load option plans memory only; no context buffers
+    exist yet.
+  - The native host binary is not shipped or auto-downloaded; build it
+    from native/engine/ and place it in {DataDir}/bin/ (or set
+    nativeEnginePath).
+  - As with any mmap consumer, a model file shrinking while mapped is an
+    OS-level hazard; SHEYTAN opens model files read-only and never
+    writes to them.

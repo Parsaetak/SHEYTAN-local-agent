@@ -45,11 +45,13 @@ func TestMain(m *testing.M) {
 // runFakeNativeHost speaks the REAL protocol implementation over
 // stdin/stdout. Modes (via SHEYTAN_FAKE_NATIVE_MODE):
 //
-//      ""       well-behaved host
-//      "crash"  dies 150 ms after becoming ready (watchdog target)
+//      ""         well-behaved host (model ops included)
+//      "crash"    dies 150 ms after becoming ready (watchdog target)
 //      "garbage" writes non-protocol bytes, then idles (broken host)
-//      "slow"   delays every response by 3 s (timeout target)
+//      "slow"     delays every response by 3 s (timeout target)
 //      "badping" answers ping with the wrong protocol version
+//      "loadfail" load_model always fails with a parse-style error
+//      "loadslow" load_model delays 3 s (bounded load timeout target)
 func runFakeNativeHost() {
         mode := os.Getenv("SHEYTAN_FAKE_NATIVE_MODE")
 
@@ -57,6 +59,12 @@ func runFakeNativeHost() {
         defer out.Flush()
 
         in := bufio.NewReader(os.Stdin)
+
+        // Model concern state of this fake host process (fresh per spawn,
+        // exactly like the real C++ engine).
+        var modelLoaded bool
+        var modelPath string
+        var modelError string
 
         ready := func() {
                 if mode == "crash" {
@@ -108,8 +116,8 @@ func runFakeNativeHost() {
 
                         result, _ := json.Marshal(PingResult{
                                 ProtocolVersion: proto,
-                                ABIVersion:       ABIVersionExpected,
-                                Engine:           "fake-native-host",
+                                ABIVersion:      ABIVersionExpected,
+                                Engine:          "fake-native-host",
                         })
                         resp.Result = result
 
@@ -140,6 +148,133 @@ func runFakeNativeHost() {
                                 Reason:    "no active generation requests (fake host)",
                         })
                         resp.Result = result
+
+                case OpLoadModel:
+                        if mode == "loadslow" {
+                                time.Sleep(3 * time.Second)
+                        }
+
+                        var payload LoadModelPayload
+                        if len(req.Payload) == 0 || json.Unmarshal(req.Payload, &payload) != nil || payload.Path == "" {
+                                resp.OK = false
+                                resp.Error = "malformed load_model payload"
+                                break
+                        }
+
+                        if mode == "loadfail" {
+                                modelLoaded = false
+                                modelPath = payload.Path
+                                modelError = "gguf: bad magic (not a GGUF file)"
+                                resp.OK = false
+                                resp.Error = modelError
+                                break
+                        }
+
+                        // The fake host cannot parse GGUF; it reports a canned
+                        // metadata card for the requested path (bounded, honest
+                        // about being fake in the engine name only).
+                        modelLoaded = true
+                        modelPath = payload.Path
+                        modelError = ""
+
+                        info := NativeModelInfo{
+                                Path:            modelPath,
+                                Architecture:    "llama",
+                                Name:            "fake-model",
+                                Quantization:    "Q4_K_M",
+                                State:           ModelStateLoaded,
+                                FileSizeBytes:   4096,
+                                ParameterCount:  123000,
+                                ContextLength:   256,
+                                VocabularySize:  96,
+                                EmbeddingLength: 64,
+                                LayerCount:      2,
+                                TensorCount:     3,
+                                GGUFVersion:     3,
+                                FileType:        15,
+                                HasFileType:     true,
+                                KVCacheBytes:    2 * 2 * 256 * 64 * 2,
+                                WorkspaceBytes:  256 * 96 * 4,
+                                TotalPlanBytes:  4096 + 2*2*256*64*2 + 256*96*4 + 64<<20,
+                        }
+                        plan := NativeMemoryPlan{
+                                ModelFileBytes:       4096,
+                                MappedBytes:          4096,
+                                WeightsBytes:         2048,
+                                WorkspaceBytes:       256 * 96 * 4,
+                                KVCacheBytes:         2 * 2 * 256 * 64 * 2,
+                                RuntimeOverheadBytes: 64 << 20,
+                                TotalBytes:           4096 + 2048 + 256*96*4 + 2*2*256*64*2 + 64<<20,
+                                AvailableRAMBytes:    8 << 30,
+                                FitsInRAM:            1,
+                        }
+
+                        result, _ := json.Marshal(ModelOpResult{
+                                Loaded: true,
+                                State:  ModelStateLoaded,
+                                Model:  &info,
+                                Memory: &plan,
+                        })
+                        resp.Result = result
+
+                case OpUnloadModel:
+                        modelLoaded = false
+                        modelPath = ""
+                        modelError = ""
+
+                        result, _ := json.Marshal(ModelOpResult{
+                                Loaded: false,
+                                State:  ModelStateUnloaded,
+                        })
+                        resp.Result = result
+
+                case OpModelInfo:
+                        result := ModelOpResult{
+                                Loaded: modelLoaded,
+                                State:  ModelStateUnloaded,
+                        }
+
+                        if modelLoaded {
+                                result.State = ModelStateLoaded
+                                result.Model = &NativeModelInfo{
+                                        Path:            modelPath,
+                                        Architecture:    "llama",
+                                        Name:            "fake-model",
+                                        Quantization:    "Q4_K_M",
+                                        State:           ModelStateLoaded,
+                                        FileSizeBytes:   4096,
+                                        ParameterCount:  123000,
+                                        ContextLength:   256,
+                                        VocabularySize:  96,
+                                        EmbeddingLength: 64,
+                                        LayerCount:      2,
+                                        TensorCount:     3,
+                                        GGUFVersion:     3,
+                                        FileType:        15,
+                                        HasFileType:     true,
+                                }
+                                result.Memory = &NativeMemoryPlan{
+                                        ModelFileBytes:       4096,
+                                        MappedBytes:          4096,
+                                        WeightsBytes:         2048,
+                                        WorkspaceBytes:       256 * 96 * 4,
+                                        KVCacheBytes:         2 * 2 * 256 * 64 * 2,
+                                        RuntimeOverheadBytes: 64 << 20,
+                                        TotalBytes:           4096 + 2048 + 256*96*4 + 2*2*256*64*2 + 64<<20,
+                                        AvailableRAMBytes:    8 << 30,
+                                        FitsInRAM:            1,
+                                }
+                        } else if modelError != "" {
+                                result.State = ModelStateFailed
+                                result.Model = &NativeModelInfo{
+                                        Path:  modelPath,
+                                        State: ModelStateFailed,
+                                        Error: modelError,
+                                }
+                        }
+
+                        data, _ := json.Marshal(result)
+                        resp.Result = data
 
                 case OpShutdown:
                         _ = EncodeResponse(out, &Response{ID: req.ID, OK: true, Result: json.RawMessage("{}")})
@@ -733,33 +868,63 @@ func TestBackendGenerationNotImplemented(t *testing.T) {
         }
 
         if b.GenerationCapable() {
-                t.Fatal("Phase 1 native backend must not claim generation capability")
+                t.Fatal("native backend must not claim generation capability (generation is a later phase)")
         }
 
         if _, err := b.Generate(context.Background(), &llm.ChatRequest{}); err == nil {
                 t.Fatal("Generate must return ErrNotImplemented")
+        } else if !strings.Contains(err.Error(), "not implemented") {
+                t.Fatalf("Generate error must name the fallback signal, got %v", err)
         }
 
         if _, err := b.StreamGenerate(context.Background(), &llm.ChatRequest{}, nil); err == nil {
                 t.Fatal("StreamGenerate must return ErrNotImplemented")
         }
-
-        if _, err := b.ModelInfo(context.Background()); err == nil {
-                t.Fatal("ModelInfo must return ErrNotImplemented")
-        }
-
-        if err := b.LoadModel(context.Background(), llm.ModelSpec{Path: "/x"}); err == nil {
-                t.Fatal("LoadModel must return ErrNotImplemented (after validation)")
-        }
 }
 
 func TestBackendLoadModelValidatesFirst(t *testing.T) {
+        // The engine under it has no running host: validation errors must
+        // fire before any attempt to reach the subprocess, and a valid file
+        // must fail with a lifecycle error (engine not running), never with
+        // a fake success.
+        dir := t.TempDir()
+        valid := filepath.Join(dir, "model.gguf")
+        if err := os.WriteFile(valid, []byte("placeholder"), 0o644); err != nil {
+                t.Fatal(err)
+        }
+
         b := NewBackend(New("/nonexistent"))
 
-        // Empty path: validation error, not ErrNotImplemented.
+        // Empty path: validation error.
         err := b.LoadModel(context.Background(), llm.ModelSpec{})
         if err == nil || strings.Contains(err.Error(), "not implemented") {
                 t.Fatalf("expected validation error for empty path, got %v", err)
+        }
+
+        // Missing file: validation error.
+        err = b.LoadModel(context.Background(), llm.ModelSpec{Path: filepath.Join(dir, "nope.gguf")})
+        if err == nil || strings.Contains(err.Error(), "not running") {
+                t.Fatalf("expected file validation error, got %v", err)
+        }
+
+        // Valid file but engine down: honest lifecycle error.
+        err = b.LoadModel(context.Background(), llm.ModelSpec{Path: valid})
+        if err == nil || !strings.Contains(err.Error(), "not running") {
+                t.Fatalf("expected engine-not-running error, got %v", err)
+        }
+
+        // Unload with no engine: honest idempotent no-op.
+        if err := b.UnloadModel(context.Background()); err != nil {
+                t.Fatalf("unload with engine down must be an idempotent no-op, got %v", err)
+        }
+
+        // ModelInfo with engine down: unloaded snapshot, no error.
+        info, err := b.ModelInfo(context.Background())
+        if err != nil {
+                t.Fatalf("ModelInfo with engine down: %v", err)
+        }
+        if info.Backend != "native" || info.Loaded {
+                t.Fatalf("unexpected ModelInfo with engine down: %+v", info)
         }
 }
 

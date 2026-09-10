@@ -52,7 +52,7 @@ type HardwareResult struct {
 // so diagnostics can tell exactly where each fact came from.
 func MergeHardware(native HardwareResult) llm.HardwareInfo {
 	hw := llm.HardwareInfo{
-		Backend:     "native",
+		Backend:      "native",
 		Architecture: native.Architecture,
 		CPU: llm.CPUHardware{
 			Name:          native.CPU.Name,

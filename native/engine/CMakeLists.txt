@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.16)
 
 project(shtn_native_engine
     VERSION 1.1.5
-    DESCRIPTION "SHEYTAN Native AI Engine — C++ engine core and IPC host (Phase 1 skeleton)"
+    DESCRIPTION "SHEYTAN Native AI Engine — C++ engine core and IPC host (Phase 2: GGUF model loading)"
     LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -18,15 +18,20 @@ option(SHTN_BUILD_SHARED "Build libshtn_engine as a shared library instead of st
 if(SHTN_BUILD_SHARED)
     add_library(shtn_engine SHARED
         src/engine.cpp
+        src/model.cpp
+        src/gguf.cpp
         src/hardware.cpp)
 else()
     add_library(shtn_engine STATIC
         src/engine.cpp
+        src/model.cpp
+        src/gguf.cpp
         src/hardware.cpp)
 endif()
 
 target_include_directories(shtn_engine PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
     $<INSTALL_INTERFACE:include>)
 
 # The engine core is dependency-free C++17 by design (no JSON, no network,
@@ -78,4 +83,12 @@ if(SHTN_BUILD_TESTS)
     add_executable(test_host tests/test_host.cpp)
     target_link_libraries(test_host PRIVATE shtn_engine shtn_protocol)
     add_test(NAME host COMMAND test_host)
+
+    add_executable(test_gguf tests/test_gguf.cpp)
+    target_link_libraries(test_gguf PRIVATE shtn_engine)
+    add_test(NAME gguf COMMAND test_gguf)
+
+    add_executable(test_model tests/test_model.cpp)
+    target_link_libraries(test_model PRIVATE shtn_engine)
+    add_test(NAME model COMMAND test_model)
 endif()

@@ -62,20 +62,31 @@ func (c *ModelCard) BitsPerWeight() float64 {
 	return float64(c.SizeBytes) * 8 / float64(c.ParamsCount)
 }
 
-// FormatParams renders "7.6B" / "472M" from ParamsCount.
-func (c *ModelCard) FormatParams() string {
-	if c == nil || c.ParamsCount == 0 {
+// FormatParameterCount renders "7.6B" / "472M" / "724K" from a raw
+// parameter count (0 renders as "—"). Shared by the llama model cards
+// and the native engine model info so both surfaces format identically.
+func FormatParameterCount(n uint64) string {
+	if n == 0 {
 		return "—"
 	}
-	n := float64(c.ParamsCount)
+
+	f := float64(n)
 	switch {
-	case n >= 1e9:
-		return fmt.Sprintf("%.1fB", n/1e9)
-	case n >= 1e6:
-		return fmt.Sprintf("%dM", int64(n/1e6))
+	case f >= 1e9:
+		return fmt.Sprintf("%.1fB", f/1e9)
+	case f >= 1e6:
+		return fmt.Sprintf("%dM", int64(f/1e6))
 	default:
-		return fmt.Sprintf("%dK", int64(n/1e3))
+		return fmt.Sprintf("%dK", int64(f/1e3))
 	}
+}
+
+// FormatParams renders "7.6B" / "472M" from ParamsCount.
+func (c *ModelCard) FormatParams() string {
+	if c == nil {
+		return "—"
+	}
+	return FormatParameterCount(c.ParamsCount)
 }
 
 // Meta renders the compact card meta line: "7.6B · Q4_K_M · 32K ctx · 4.4 GB".

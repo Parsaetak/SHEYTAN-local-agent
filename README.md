@@ -57,15 +57,15 @@ The model is never the authority on whether an engineering task succeeded — ob
 ┌───────────────────┐   ┌───────────────────────────────┐
 │  llama.cpp server │   │  SHEYTAN Native Engine (new)  │
 │  local inference  │   │  C++ core + supervised host   │
-│  (fallback path   │   │  (Phase 1: lifecycle, health, │
-│   and default     │   │  hardware, metrics — NO       │
-│   engine today)   │   │  inference yet)              │
+│  (fallback path   │   │  (Phase 2: lifecycle, health, │
+│   and default     │   │  hardware, metrics, GGUF model│
+│   engine today)   │   │  loading — NO inference yet)  │
 └───────────────────┘   └───────────────────────────────┘
 ```
 
 Critical execution logic belongs to Go. Presentation and interaction logic belong to React. The production desktop app embeds the built frontend (`web/static/`) via `go:embed` — no separate frontend server is needed.
 
-## SHEYTAN Native AI Engine (v1.1.5Z, Phase 1 — architecture foundation)
+## SHEYTAN Native AI Engine (v1.1.5Z, Phase 2 — native model loading)
 
 v1.1.5Z establishes the **SHEYTAN Native AI Engine architecture**: Go
 remains the main application/runtime engine, and a new C++ native engine
@@ -81,12 +81,20 @@ behind a narrow C ABI, supervised by Go as a subprocess
   selection with automatic fallback to llama.cpp, the supervised native
   engine lifecycle (start / health-check / mark ready / stop / detect
   failure / bounded restart), the platform-neutral hardware profile, the
-  native metrics snapshot, and a buildable C++ skeleton (engine core +
-  host + tests) whose create/destroy/health/hwinfo/metrics functions are
-  real.
+  native metrics snapshot, and — since Phase 2 — **native GGUF model
+  loading**: a bounds-checked, overflow-safe C++ GGUF reader
+  (header/version/metadata/tensor-table validation), memory-mapped model
+  access (lazy — tensor data is never copied into RAM), real metadata
+  extraction (architecture, parameter count, context length, vocabulary
+  size, embedding length, layer count, quantization, tensor count, file
+  size), a load-time memory plan (file/mapped/weights/workspace/KV-cache
+  estimates/runtime overhead — computed, never allocated), the model
+  lifecycle (`unloaded` / `loading` / `loaded` / `failed`) with
+  replace-semantics and clean unload, and the `ModelInfo` surface wired
+  through the shared `llm.Backend` contract.
 - **NOT implemented (future phases)**: native inference. The native
-  engine's Generate/StreamGenerate/LoadModel return "not implemented" —
-  honestly — and every generation request therefore runs on llama.cpp.
+  engine's Generate/StreamGenerate return "not implemented" — honestly —
+  and every generation request therefore runs on llama.cpp.
 - **llama.cpp remains fully functional as the fallback** (and the
   default engine). Nothing about v1.1.4Z runtime behavior changes unless
   you explicitly opt in via `engineBackend: "native"` in `config.json`
@@ -234,10 +242,10 @@ npm run typecheck
 npm run lint
 npm run build        # tsc + vite + sync into web/static
 
-# C++ native engine (optional in Phase 1; requires cmake or plain make)
+# C++ native engine (optional in Phase 2; requires cmake or plain make)
 cmake -S native/engine -B native/engine/build
 cmake --build native/engine/build
-ctest --test-dir native/engine/build   # engine + protocol + host tests
+ctest --test-dir native/engine/build   # engine + protocol + host + gguf + model tests
 
 # release stress suite (gate used by CI and build-and-zip.sh)
 go run ./scripts/stress-main stress

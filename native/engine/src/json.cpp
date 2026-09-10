@@ -7,249 +7,13 @@
 
 namespace shtn {
 namespace json {
-namespace {
-
-// Scanner walks the input with explicit bounds; it never throws and
-// never reads past end.
-class Scanner {
-public:
-    Scanner(const char* data, size_t size)
-        : data_(data), size_(size), pos_(0) {}
-
-    void skip_ws() {
-        while (pos_ < size_) {
-            const char c = data_[pos_];
-            if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
-                ++pos_;
-            } else {
-                break;
-            }
-        }
-    }
-
-    bool at_end() const { return pos_ >= size_; }
-    char peek() const { return pos_ < size_ ? data_[pos_] : '\0'; }
-
-    bool consume(char c) {
-        if (pos_ < size_ && data_[pos_] == c) {
-            ++pos_;
-            return true;
-        }
-        return false;
-    }
-
-    // read_string parses a JSON string literal (including escapes).
-    bool read_string(std::string& out) {
-        out.clear();
-
-        if (!consume('"')) {
-            return false;
-        }
-
-        while (pos_ < size_) {
-            const char c = data_[pos_++];
-
-            if (c == '"') {
-                return true;
-            }
-
-            if (static_cast<unsigned char>(c) < 0x20) {
-                return false; // raw control character: invalid JSON
-            }
-
-            if (c != '\\') {
-                out.push_back(c);
-                continue;
-            }
-
-            if (pos_ >= size_) {
-                return false;
-            }
-
-            const char esc = data_[pos_++];
-
-            switch (esc) {
-            case '"': out.push_back('"'); break;
-            case '\\': out.push_back('\\'); break;
-            case '/': out.push_back('/'); break;
-            case 'b': out.push_back('\b'); break;
-            case 'f': out.push_back('\f'); break;
-            case 'n': out.push_back('\n'); break;
-            case 'r': out.push_back('\r'); break;
-            case 't': out.push_back('\t'); break;
-            case 'u': {
-                if (pos_ + 4 > size_) {
-                    return false;
-                }
-
-                unsigned code = 0;
-                for (int i = 0; i < 4; ++i) {
-                    code <<= 4;
-                    const char h = data_[pos_++];
-                    if (h >= '0' && h <= '9') {
-                        code |= static_cast<unsigned>(h - '0');
-                    } else if (h >= 'a' && h <= 'f') {
-                        code |= static_cast<unsigned>(h - 'a' + 10);
-                    } else if (h >= 'A' && h <= 'F') {
-                        code |= static_cast<unsigned>(h - 'A' + 10);
-                    } else {
-                        return false;
-                    }
-                }
-
-                // Encode BMP scalar as UTF-8 (surrogates pass through
-                // paired; a lone surrogate is tolerated as replacement).
-                if (code >= 0xD800u && code <= 0xDFFFu) {
-                    out.push_back('\xEF'); out.push_back('\xBF'); out.push_back('\xBD');
-                } else if (code < 0x80u) {
-                    out.push_back(static_cast<char>(code));
-                } else if (code < 0x800u) {
-                    out.push_back(static_cast<char>(0xC0u | (code >> 6)));
-                    out.push_back(static_cast<char>(0x80u | (code & 0x3Fu)));
-                } else {
-                    out.push_back(static_cast<char>(0xE0u | (code >> 12)));
-                    out.push_back(static_cast<char>(0x80u | ((code >> 6) & 0x3Fu)));
-                    out.push_back(static_cast<char>(0x80u | (code & 0x3Fu)));
-                }
-                break;
-            }
-            default:
-                return false; // invalid escape
-            }
-        }
-
-        return false; // unterminated string
-    }
-
-    // skip_value skips any JSON value (object/array/string/number/bool/
-    // null) without retaining it. Objects are key:value sequences; arrays
-    // are bare value sequences — both handled recursively.
-    bool skip_value() {
-        skip_ws();
-
-        if (at_end()) {
-            return false;
-        }
-
-        const char c = peek();
-
-        if (c == '"') {
-            std::string sink;
-            return read_string(sink);
-        }
-
-        if (c == '{' || c == '[') {
-            const char open = c;
-            const char close = (open == '{') ? '}' : ']';
-            const bool is_object = (open == '{');
-
-            if (!consume(open)) {
-                return false;
-            }
-
-            skip_ws();
-
-            if (consume(close)) {
-                return true; // empty container
-            }
-
-            for (;;) {
-                if (is_object) {
-                    // object member: string key, ':', value
-                    std::string key;
-
-                    skip_ws();
-
-                    if (!read_string(key)) {
-                        return false;
-                    }
-
-                    skip_ws();
-
-                    if (!consume(':')) {
-                        return false;
-                    }
-                }
-
-                if (!skip_value()) {
-                    return false;
-                }
-
-                skip_ws();
-
-                if (consume(',')) {
-                    continue;
-                }
-
-                skip_ws();
-
-                if (consume(close)) {
-                    return true;
-                }
-
-                return false;
-            }
-        }
-
-        // number / true / false / null: consume a run of legal bytes.
-        size_t start = pos_;
-
-        while (pos_ < size_) {
-            const char b = data_[pos_];
-
-            const bool legal =
-                (b >= '0' && b <= '9') || b == '-' || b == '+' || b == '.' ||
-                b == 'e' || b == 'E' || b == 't' || b == 'r' || b == 'u' ||
-                b == 'f' || b == 'a' || b == 'l' || b == 's' || b == 'n';
-
-            if (!legal) {
-                break;
-            }
-            ++pos_;
-        }
-
-        return pos_ > start;
-    }
-
-    // read_number consumes a numeric literal into out.
-    bool read_number(double& out) {
-        skip_ws();
-
-        const size_t start = pos_;
-
-        while (pos_ < size_) {
-            const char b = data_[pos_];
-            const bool legal =
-                (b >= '0' && b <= '9') || b == '-' || b == '+' || b == '.' ||
-                b == 'e' || b == 'E';
-            if (!legal) {
-                break;
-            }
-            ++pos_;
-        }
-
-        if (pos_ == start) {
-            return false;
-        }
-
-        out = std::strtod(std::string(data_ + start, pos_ - start).c_str(), nullptr);
-        return true;
-    }
-
-private:
-    const char* data_;
-    size_t size_;
-    size_t pos_;
-};
-
-} // namespace
 
 Parsed parse_request(const std::string& bytes) {
     Parsed result;
     result.valid = false;
     result.id = 0;
 
-    Scanner scanner(bytes.data(), bytes.size());
+    detail::Scanner scanner(bytes.data(), bytes.size());
 
     scanner.skip_ws();
 
@@ -301,6 +65,17 @@ Parsed parse_request(const std::string& bytes) {
                 return result;
             }
             have_op = true;
+        } else if (key == "payload") {
+            // Capture the raw payload member so op handlers can parse
+            // their own shape with the same scanner machinery.
+            const size_t start = scanner.position();
+            if (!scanner.skip_value()) {
+                result.error = "malformed value for member 'payload'";
+                return result;
+            }
+            result.payload_raw.assign(bytes.data() + start,
+                                      scanner.position() - start);
+            result.has_payload = true;
         } else {
             if (!scanner.skip_value()) {
                 result.error = "malformed value for member '" + key + "'";
@@ -345,6 +120,93 @@ Parsed parse_request(const std::string& bytes) {
 
     result.valid = true;
     return result;
+}
+
+bool extract_load_payload(const std::string& bytes, std::string& path,
+                          uint32_t& context_length, std::string& error) {
+    path.clear();
+    context_length = 0;
+
+    detail::Scanner scanner(bytes.data(), bytes.size());
+
+    scanner.skip_ws();
+
+    if (!scanner.consume('{')) {
+        error = "payload is not a JSON object";
+        return false;
+    }
+
+    bool have_path = false;
+
+    scanner.skip_ws();
+
+    if (scanner.consume('}')) {
+        error = "payload has no path";
+        return false;
+    }
+
+    for (;;) {
+        scanner.skip_ws();
+
+        std::string key;
+
+        if (!scanner.read_string(key)) {
+            error = "malformed payload key";
+            return false;
+        }
+
+        scanner.skip_ws();
+
+        if (!scanner.consume(':')) {
+            error = "expected ':' after payload key";
+            return false;
+        }
+
+        scanner.skip_ws();
+
+        if (key == "path") {
+            if (!scanner.read_string(path)) {
+                error = "payload path is not a string";
+                return false;
+            }
+            have_path = true;
+        } else if (key == "contextLength") {
+            double value = 0;
+            if (!scanner.read_number(value) || value < 0 ||
+                value > static_cast<double>(UINT32_MAX)) {
+                error = "payload contextLength is not a uint32";
+                return false;
+            }
+            context_length = static_cast<uint32_t>(value);
+        } else {
+            if (!scanner.skip_value()) {
+                error = "malformed value for payload member '" + key + "'";
+                return false;
+            }
+        }
+
+        scanner.skip_ws();
+
+        if (scanner.consume(',')) {
+            continue;
+        }
+
+        scanner.skip_ws();
+
+        if (scanner.consume('}')) {
+            break;
+        }
+
+        error = "expected ',' or '}' in payload object";
+        return false;
+    }
+
+    if (!have_path || path.empty()) {
+        error = "payload has no path";
+        return false;
+    }
+
+    return true;
 }
 
 std::string quote(const std::string& src) {

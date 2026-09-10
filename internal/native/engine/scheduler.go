@@ -34,7 +34,7 @@ func DefaultSchedulerPolicy() SchedulerPolicy {
 // ActiveRequests and QueuedRequests are measured (zero in Phase 1);
 // MaxConcurrentRequests is the enforced policy constant.
 type SchedulerStats struct {
-	ActiveRequests     int `json:"activeRequests,omitempty"`
-	QueuedRequests     int `json:"queuedRequests,omitempty"`
-	MaxConcurrentReqs  int `json:"maxConcurrentRequests,omitempty"`
+	ActiveRequests    int `json:"activeRequests,omitempty"`
+	QueuedRequests    int `json:"queuedRequests,omitempty"`
+	MaxConcurrentReqs int `json:"maxConcurrentRequests,omitempty"`
 }

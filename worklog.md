@@ -18,11 +18,200 @@ Current release:
 v1.1.5Z
 ```
 
-v1.1.5Z is the **SHEYTAN Native AI Engine architecture foundation**
-release (Phase 1): it establishes the backend abstraction, the supervised
-native engine path and the C++ engine skeleton WITHOUT attempting to
-replace llama.cpp — llama.cpp remains fully functional as the fallback
-(and the default generation engine). Full Phase 1 log below.
+v1.1.5Z is the **SHEYTAN Native AI Engine** release line. Phase 1
+established the backend abstraction, the supervised native engine path
+and the C++ engine skeleton. Phase 2 (this log, first below) added
+**native GGUF model loading**: a hardened C++ GGUF reader, memory-mapped
+model access, real metadata extraction, load-time memory planning, the
+model lifecycle and the `ModelInfo` surface through Go. Native
+GENERATION is still NOT implemented — llama.cpp remains fully functional
+as the fallback (and the default generation engine). Full phase logs
+below.
+
+---
+
+# v1.1.5Z Phase 2 Implementation Log (2026-09-10)
+
+## Goal
+
+Make the SHEYTAN Native Engine load a real supported GGUF model in C++:
+read its metadata, validate it, plan its memory requirements and expose
+real model information to Go — WITHOUT redesigning the Phase 1 Go↔C++
+boundary. Generation stays on llama.cpp in this phase (explicitly).
+
+```text
+Go Core → SHEYTAN Native API → shtn-engine-host → C++ Native Engine → GGUF model
+```
+
+## Phase 1 verification (before any change)
+
+The Phase 1 implementation was verified FIRST on the base commit
+(`f4488d5`, v1.1.5Z-phase1): C++ build + 3/3 ctest, `go build`/`go vet`,
+22 Go packages pass, race tests pass, `TestRealCppHostEndToEnd` passes,
+npm typecheck/lint/build pass, stress 30/30, release-version --check
+PASS. Only then did Phase 2 work begin.
+
+## 1. Versioned protocol/ABI extension (no boundary redesign)
+
+Protocol v1 → **v2** and ABI v1 → **v2**, bumped together on both sides
+(`include/shtn/version.h` + `internal/native/engine/protocol.go` /
+`backend.go ABIVersionExpected`). The handshake still fails closed on
+mismatch. Pre-existing ops (ping/health/hwinfo/metrics/cancel/shutdown)
+kept their exact wire shapes — the change is purely additive:
+
+- wire ops `load_model` (payload `{path, contextLength?}`),
+  `unload_model`, `model_info`;
+- C ABI functions `shtn_engine_load_model` / `shtn_engine_unload_model` /
+  `shtn_engine_model_info` / `shtn_engine_memory_plan` with new fixed-size
+  structs (`shtn_model_load_options`, `shtn_model_info`,
+  `shtn_memory_plan`) and new error codes appended (never renumbered):
+  `SHTN_ERR_MODEL_FORMAT` / `SHTN_ERR_MODEL_STATE` / `SHTN_ERR_NO_MODEL`.
+
+## 2. Native GGUF reader (native/engine/src/gguf.*)
+
+Dependency-free, mmap-backed, hostile-input-hardened:
+
+- magic + version validation (v2/v3 — the llama.cpp-supported set; v1
+  and >3 rejected with a readable error);
+- metadata parsing with bounds on every count/length (KV count ≤ 16384,
+  string ≤ 16 MiB, array elements ≤ 100M, tensor count ≤ 1M, dims ≤ 8);
+  unknown value types rejected; `general.alignment` validated (power of
+  two, ≤ 4096) and honored for the data-section start;
+- array VALUES are never materialized (the tokenizer vocab array is
+  walked length-prefix-only; its element count feeds the vocab-size
+  fallback);
+- tensor table: per-tensor dims bounds, overflow-checked element
+  products (a dims product that overflows uint64 is a hard reject),
+  offsets validated against the data section, exact byte-size checks for
+  known GGML types (ggml_nbytes formula: last dim padded to block size),
+  lenient in-range checks only for types this build does not know;
+- every arithmetic that could overflow goes through checked_add/mul —
+  wrap-around is impossible by construction;
+- the reader touches ONLY header pages (no full-file reads, no copying).
+
+## 3. Model lifecycle + memory planning (native/engine/src/model.*)
+
+- state machine: `unloaded → loading → loaded | failed → unloaded`, one
+  mutex-protected model slot per engine; loads serialize, inspections
+  run concurrently against stable snapshots;
+- load = validate path → whole-file read-only mmap (POSIX mmap / Windows
+  CreateFileMapping; lazy, no eager copy) → parse + validate → metadata
+  extraction → memory plan → `loaded`. Replace semantics (load while
+  loaded unloads first), all-or-nothing (a failed load leaves NOTHING
+  loaded, mapping and handle released on every path);
+- caller-argument errors (empty path, reserved field) leave the state
+  unchanged (nothing was attempted); file-level failures (missing file,
+  parse errors, zero-tensor files) walk to `failed` with the reason
+  recorded;
+- unload is idempotent; engine destroy releases the mapping;
+- memory plan (computed, NOTHING allocated): model file / mapped bytes /
+  weights (tensor-data span = file − data start) / workspace estimate
+  (context·vocab·4 logits row) / KV-cache estimate
+  (2·K/V·layers·context·embedding·2 bytes f16) / fixed 64 MiB runtime
+  allowance / overflow-checked total / fit-vs-detected-RAM verdict
+  (1/0/-1). Inputs missing from the file → that component is an honest 0.
+
+## 4. Go side (internal/native/engine)
+
+- `model.go` is now REAL: `Engine.LoadModel` / `Engine.UnloadModel` /
+  `Engine.ModelInfo` drive the IPC ops with a dedicated model-state
+  machine (`unloaded/loading/loaded/failed`) — deliberately separate
+  from the engine states (`llm.State*`), no second engine-state system;
+- the model snapshot RESETS on every host lifecycle boundary (start,
+  restart, deliberate stop, death): a fresh host maps nothing, so stale
+  state cannot survive;
+- load ops use a bounded 30 s window (metadata-only parse, but cold
+  slow disks deserve headroom) plus the caller ctx;
+- `backend.go` maps the native card onto the shared `llm.ModelInfo`
+  contract — additive fields (`State`, `FileSizeBytes`, `TensorCount`,
+  `GGUFVersion`, `VocabSize`, `EmbeddingLength`, `LayerCount`,
+  KV/workspace/total memory estimates) that the llama path leaves zero;
+  `llm.FormatParameterCount` shared with the llama card formatter;
+- metrics op additionally reports `modelState` (observability only);
+- `GenerationCapable()` stays FALSE: loading is not generating.
+  Generate/StreamGenerate still return `llm.ErrNotImplemented` and
+  `llm.SelectGenerationBackend` still resolves to llama.cpp — pinned by
+  tests.
+
+## 5. Tests added
+
+C++ (`ctest`, 5 suites now):
+
+- `test_gguf` — valid v2/v3 files, custom alignment, malformed magic,
+  unsupported versions (1 and 4), truncated files (empty / magic-only /
+  counts cut / metadata cut / tensor-table cut / missing data section),
+  hostile counts/lengths/types/alignment, invalid tensor entries
+  (out-of-range offset, exact-size overflow, zero dim, dim-count bounds,
+  dims-product overflow), checked arithmetic, metadata helpers;
+- `test_model` — fresh-engine unloaded state, NULL/invalid-argument
+  rejection, load→info→plan correctness (exact KV/workspace/total
+  values), context-override planning, load A → load A again → load B
+  replace semantics, unload/reload/idempotent unload, failed-load
+  recovery (garbage file, zero-tensor file), destroy-with-loaded-model,
+  concurrent safe inspection (4 inspectors + load/unload churn thread);
+- `test_engine` / `test_host` extended: ABI v2 pins, model-surface NULL
+  checks, fresh-engine `model_info` op, load/unload round trips through
+  the dispatch loop, malformed-payload bounded errors, host-survives
+  checks.
+
+The whole C++ suite also passes under AddressSanitizer (no leaks, no
+out-of-bounds access in the reader or the lifecycle).
+
+Go:
+
+- `model_test.go` — fake-host lifecycle matrix (load A / load A again /
+  load B / unload / reload / failed load), validation ordering, bounded
+  caller-ctx load, state resets across stop/start, concurrent inspection
+  (race-detector target);
+- `cpp_integration_test.go` — `TestRealCppHostModelLifecycle`: a real
+  GGUF v3 file is built byte-by-byte in the test, loaded through the
+  REAL C++ reader via the real host, metadata + derived parameter count
+  + memory plan verified exactly, unload/reload/failed-load/recovery
+  exercised, and the `llm.ModelInfo` mapping checked end-to-end;
+- `engine_test.go` — fake host grew model ops (including loadfail /
+  loadslow modes) mirroring the v2 wire shapes.
+
+## 6. Validation performed (this release)
+
+```text
+cmake -S native/engine -B native/engine/build + build   PASS
+cmake --build + ctest                                   5/5 PASS
+                                                        (engine, protocol, host,
+                                                         gguf, model)
+plain make + make test                                  PASS
+C++ suite under AddressSanitizer                        5/5 PASS (no leaks)
+go build -tags headless ./...                          PASS
+go vet  -tags headless ./...                           PASS
+go test -tags headless ./internal/... -count=1         22 packages PASS
+go test -race -tags headless (agent, llm, api,
+                              native/engine)            PASS
+TestRealCppHostEndToEnd + TestRealCppHostModelLifecycle PASS (real C++ host)
+frontend: typecheck / lint (0 warnings) / build         PASS (assets unchanged:
+                                                         no frontend edits)
+stress suite (release gate)                             30 pass / 0 fail
+node scripts/release-version.mjs --check                PASS (all surfaces 1.1.5)
+version smoke: release stays v1.1.5Z                    PASS (no bump)
+```
+
+## Known limitations (Phase 2, by design)
+
+- **No native inference.** Loading a model does NOT enable generation:
+  Generate/StreamGenerate return `ErrNotImplemented`,
+  GenerationCapable() is false, and every generation request runs on
+  llama.cpp. Do not "fix" that by faking inference.
+- The memory plan is arithmetic on parsed metadata (weights span, f16 KV
+  estimate, logits-row workspace, fixed overhead allowance) — real
+  allocation behavior arrives with the inference phase.
+- GGUF v1 containers and GGML tensor types unknown to this build's size
+  table are rejected or validated leniently (offset-in-range only),
+  never guessed.
+- The context override plans memory only; no context buffers exist yet.
+- The native host binary is still not shipped or auto-downloaded; build
+  it from `native/engine/` and place it in `{DataDir}/bin/` (or
+  `nativeEnginePath`).
+- SIGBUS risk if a mapped file shrinks mid-flight is inherent to mmap
+  consumers (llama.cpp has the same property); files are opened
+  read-only and nothing in SHEYTAN writes to model files.
 
 ---
 
