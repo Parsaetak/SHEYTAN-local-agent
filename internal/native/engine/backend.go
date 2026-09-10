@@ -22,7 +22,7 @@ import (
 
 // ABIVersionExpected is the C ABI version the Go core expects from the
 // native engine (must match include/shtn/version.h).
-const ABIVersionExpected uint32 = 2
+const ABIVersionExpected uint32 = 3
 
 // Backend adapts an *Engine to the llm.Backend contract.
 type Backend struct {

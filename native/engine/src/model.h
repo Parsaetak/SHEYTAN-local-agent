@@ -13,6 +13,7 @@
 #include "shtn/types.h"
 
 #include "gguf.h"
+#include "tokenizer.h"
 
 #include <mutex>
 #include <string>
@@ -53,6 +54,24 @@ public:
     // Current state string (SHTN_MODEL_STATE_*).
     std::string state() const;
 
+    // --- Phase 4: tokenizer concern -------------------------------------
+    // init_tokenizer materializes the GGUF tokenizer arrays into the
+    // owned Vocab. Returns SHTN_OK, or a negative error code with
+    // `error` filled (SHTN_ERR_UNSUPPORTED is the common case for an
+    // unimplemented tokenizer model — the host reports it and the
+    // llama.cpp fallback remains the generation backend).
+    int32_t init_tokenizer(std::string& error);
+
+    // tokenizer_access returns a const pointer to the materialized vocab
+    // (nullptr when not initialized). The pointer is valid until the
+    // next model unload or model destroy; callers must not retain it
+    // across those boundaries.
+    const tokenizer::Vocab* tokenizer_vocab() const;
+
+    // tokenizer_initialized reports whether init_tokenizer has succeeded
+    // for the current model.
+    bool tokenizer_initialized() const;
+
 private:
     // Guards every field below. `load` holds the lock for the whole
     // attempt: loads are serialized (a load in flight rejects a second
@@ -68,6 +87,12 @@ private:
     gguf::GgufHeader header_;  // parsed + validated header facts
 
     shtn_memory_plan plan_{};  // last computed plan (0s before load)
+
+    // Phase 4: materialized tokenizer vocab (empty until init_tokenizer
+    // succeeds; cleared on unload). Owned here so its lifetime is bound
+    // to the model, not the host process.
+    tokenizer::Vocab vocab_;
+    bool vocab_initialized_ = false;
 };
 
 } // namespace model

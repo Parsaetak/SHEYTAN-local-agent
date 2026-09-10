@@ -198,6 +198,8 @@ int32_t Model::unload() {
     mapping_.close();
     header_ = gguf::GgufHeader{};
     plan_ = shtn_memory_plan{};
+    vocab_ = tokenizer::Vocab{};
+    vocab_initialized_ = false;
     error_.clear();
     path_.clear();
     state_ = SHTN_MODEL_STATE_UNLOADED;
@@ -264,6 +266,49 @@ void Model::fill_plan(shtn_memory_plan* out) const {
 std::string Model::state() const {
     std::lock_guard<std::mutex> lock(mu_);
     return state_;
+}
+
+// --- Phase 4: tokenizer concern -------------------------------------------
+
+int32_t Model::init_tokenizer(std::string& error) {
+    std::lock_guard<std::mutex> lock(mu_);
+
+    if (state_ != SHTN_MODEL_STATE_LOADED) {
+        error = "tokenizer: no model loaded";
+        return SHTN_ERR_NO_MODEL;
+    }
+
+    if (vocab_initialized_) {
+        // Idempotent: a second call is a no-op (the vocab is already
+        // materialized). Caller can re-query tokenizer_info cheaply.
+        return SHTN_OK;
+    }
+
+    const int32_t rc = tokenizer::init_with_mapping(
+        header_, mapping_.data(), mapping_.size(), vocab_, error);
+
+    if (rc != SHTN_OK) {
+        // A failed init leaves NO vocab (mirrors load's all-or-nothing).
+        vocab_ = tokenizer::Vocab{};
+        vocab_initialized_ = false;
+        return rc;
+    }
+
+    vocab_initialized_ = true;
+    return SHTN_OK;
+}
+
+const tokenizer::Vocab* Model::tokenizer_vocab() const {
+    std::lock_guard<std::mutex> lock(mu_);
+    if (!vocab_initialized_) {
+        return nullptr;
+    }
+    return &vocab_;
+}
+
+bool Model::tokenizer_initialized() const {
+    std::lock_guard<std::mutex> lock(mu_);
+    return vocab_initialized_;
 }
 
 } // namespace model

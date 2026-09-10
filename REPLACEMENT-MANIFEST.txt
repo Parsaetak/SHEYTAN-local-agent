@@ -1,183 +1,321 @@
-SHEYTAN-Local-Agent — v1.1.5Z Phase 3 Replacement Package
-=========================================================
+SHEYTAN-Local-Agent v1.1.5Z — Phase 4 Replacement Package
+===========================================================
 
-Contents
---------
-This package contains EVERY new and modified repository file required to
-replace the v1.1.5Z Phase 2 repository state with v1.1.5Z Phase 3, at
-repository-relative paths. No deleted files exist in this release. To
-apply: unzip over a v1.1.5Z Phase 2 checkout (or clean clone at the base
-commit), overwriting files; then run the verification commands below.
+This ZIP is a COMPLETE replacement package (not a diff). Extract over
+a clean clone of https://github.com/Parsaetak/SHEYTAN-local-agent
+(or replace the entire tree) to apply the Phase 4 state.
 
-Summary
--------
-Version:            1.1.5 (codename Zeta) — "v1.1.5Z" (unchanged — this
-                    phase does NOT create a new release number)
-Base commit:        dc4172c (v1.1.5Z-phase2)
-Target:             Local data pipeline + memory efficiency — unified
-                    loading, shared chunk engine, single-flight cache,
-                    streaming attachment staging, append-aware memory
-                    cache, allocation-free recall scoring, measured
-                    instrumentation, bounded resource policy
+Total files: 272
 
-What changed (honest scope)
----------------------------
-Structural improvements (all verified by the suites below):
+Phase 4 scope:
+  - C++ native engine: real GGUF tokenizer (BPE/Unigram/WPM),
+    real KV-cache (sized from model dims, GQA-aware, bounded),
+    real bounded scheduler (single-slot, cancel, drain),
+    real sampling primitives (greedy/temperature/top-k/top-p/
+    repetition penalty/seedable RNG).
+  - ABI/protocol bumped v2 -> v3 (additive — backward compatible).
+  - Go side: Engine.InitTokenizer / TokenizerInfo / TokenizerEncode /
+    TokenizerDecode / KVCacheInfo / SchedulerInfo wired through IPC.
+    Generate/StreamGenerate STILL return llm.ErrNotImplemented
+    (Phase 4 does NOT fake inference).
+  - Frontend: streaming coalescing (rAF-boundary batching of token
+    chunks); frame-budget diagnostic perf HUD (OFF by default,
+    Ctrl+Shift+P to toggle).
 
-  1. Unified loading pipeline. One owner per stage:
-     Source/Input → Loader → Normalizer → Chunker → Cache → Retriever →
-     Context Builder. The legacy attachments writeObjectAtomic /
-     buildChunks paths were removed after their last callers moved to
-     the shared flow. No duplicate loaders remain.
+NOT implemented (later phases — DO NOT claim otherwise):
+  - transformer forward pass (RMSNorm/GQA attention/RoPE/SwiGLU MLP)
+  - native token generation
+  - real measured TTFT / tokens-per-second (honestly 0)
 
-  2. Chunk engine (internal/chunking/chunker.go, processing version v2).
-     ChunkText: single interval pass (no rescanning, no repeated
-     copying), exact byte offsets recorded during the pass, configurable
-     overlap (rune-aligned, progress-guaranteed) and max-chunk count
-     without unbounded memory, UTF-8-rune-aligned hard splits,
-     deterministic chunk IDs from source content hash + processing
-     parameters + chunk content hash, full metadata per chunk (source
-     identity, byte range, estimated tokens, sequence index, total
-     chunks, processing version, preview). SplitParagraphs keeps its
-     public behaviour; with ASCII input its cuts are byte-identical to
-     the pre-Phase-3 algorithm (equivalence test pinned). Lossless
-     reconstruction preserved for Overlap=0.
-
-  3. Cache as a data-layer primitive (internal/contextcache, processing
-     version v4). GetOrCompute[T] single-flight coalescing (compute
-     outside the mutex, joiners share the result, panics propagate
-     without wedging the slot); oversized-entry guard — Put now returns
-     bool and rejects a single entry above the per-entry bound instead
-     of pinning the cache above its byte bound; exact insert
-     accounting; new measured counters (inserts, coalesced,
-     oversizedRejected). Content keys, version invalidation, config
-     fingerprints, LRU and both bounds unchanged.
-
-  4. Attachment loading (internal/attachments). Streaming staging:
-     Add spools to a temp object while hashing and keeps only a
-     16 KiB sniff head + one pooled 128 KiB buffer in RAM — binaries
-     and images are never fully buffered; oversize/empty rejects happen
-     during the copy and never touch the object store. Retrieval: each
-     attachment's object is read AT MOST ONCE per call (verified by
-     test); objects above the 32 MiB per-call retention cap degrade to
-     exact byte-range reads. NormalizeText zero-copy fast path.
-     Measured resource counters (ResourceUsage). Caps, content
-     addressing, symlink refusal, dedupe, provenance and error strings
-     unchanged.
-
-  5. Context construction instrumentation. contextplan.Plan gained
-     measured PromptBytes; the orchestrator logs a context-metrics line
-     per turn (bytes, tokens, pressure, elided, recalled, attachments);
-     the API server logs measured retrieval stats per turn
-     (attachments considered, chunks considered/selected, bytes,
-     object reads, cache hit). Wire/UI contracts unchanged (additive
-     JSON fields only).
-
-  6. Persistent memory (internal/memory). Append-aware parsed cache:
-     appends, deletes and clears fold into the cache and refresh the
-     stat key — remember→recall cycles no longer re-parse the file
-     (tests assert ZERO full re-parses after warmup). Search scores the
-     cached entries read-only and copies only matches. Trust rules
-     untouched: M1–M7, quarantine, external downgrade and
-     authoritative-user-fact logic are the same code paths, re-verified
-     by the full trust test suite.
-
-  7. Other loading paths. llm.ReadModelCard reads through a 64 KiB
-     buffered window (skipping a tokenizer array used to issue one
-     unbuffered syscall per string); the API model-card cache is keyed
-     by path+size+mtime and bounded (512 entries).
-
-  8. Concurrency. No new goroutines. The only new primitive is the
-     cache in-flight map (mutex + WaitGroup; compute runs without the
-     lock). Full race suite passes (see verification).
-
-Measured benchmark results (same inputs, 2-vCPU Linux container,
-Go 1.27.1, median of 5 runs; before = pre-Phase-3 algorithm on the
-base commit, after = this package):
-
-  chunk derivation (512×4 KiB chunks of a 5.5 MB source):
-    before 5.77 ms/op · 10.91 MB/op · 4880 allocs/op
-    after  3.64 ms/op ·  2.46 MB/op · 4880 allocs/op
-    → 1.6× faster, 4.4× fewer bytes allocated
-  memory.Search (5000-entry store):
-    before 7.40 ms/op · 7.67 MB/op · 172 allocs/op
-    after  3.24 ms/op · 1.53 MB/op ·  90 allocs/op
-    → 2.3× faster, 5× fewer bytes
-  recall.Search (5000-capsule corpus):
-    before 4.78 ms/op · 5.46 MB/op · 15160 allocs/op
-    after  2.37 ms/op · 3.17 MB/op ·   124 allocs/op
-    → 2.0× faster, 122× fewer allocations
-  contextcache hit path: 20.9 ns/op, 0 allocs/op
-
-Structural wins not visible in micro-benchmarks: per-retrieval object
-reads drop from N(selected chunks) to ≤1 per attachment; binary/image
-staging peak RAM drops from the full file size (≤64 MiB) to ≤16 KiB +
-one copy buffer; remember→recall no longer re-parses the memory file.
-
-Remaining bottlenecks (documented, not hidden): retrieval scoring still
-ranks on chunk previews (deliberate v1.1.3Z design); the sha256 of each
-chunk dominates the remaining chunking cost (content identity requires
-it); the memory store still stats the file on every read by design
-(cross-writer correctness).
-
-Explicit non-goals (NOT in this phase)
---------------------------------------
-  Native token generation / GPU inference / NPU inference  = NOT implemented
-  Scheduler / continuous batching                          = NOT implemented
-  Multi-agent redesign                                     = NOT implemented
-  Android port / major UI redesign                         = NOT implemented
-  Model-tier routing                                       = NOT implemented
-  Semantic or structural repository retrieval / embeddings = NOT implemented
-
-llama.cpp remains the working generation backend. Native GGUF loading
-from Phase 2 continues to work exactly as before (its real-host
-integration tests pass unchanged). All existing security controls and
-resource bounds remain intact.
-
-Files in this package (19)
---------------------------
-Modified:
-  ARCHITECTURE.md
-  agent.md
-  worklog.md
-  internal/agent/orchestrator.go
-  internal/api/server.go
-  internal/attachments/attachments.go
-  internal/chunking/chunking.go
-  internal/contextcache/contextcache.go
-  internal/contextplan/contextplan.go
-  internal/llm/gguf.go
-  internal/memory/memory.go
-  internal/recall/recall.go
-New:
-  internal/attachments/attachments_phase3_test.go
-  internal/chunking/bench_compare_test.go
-  internal/chunking/chunker.go
-  internal/chunking/chunker_test.go
-  internal/contextcache/contextcache_phase3_test.go
-  internal/memory/memory_phase3_test.go
-  internal/recall/recall_phase3_test.go
-
-Verification performed on the package state (all executed, all PASS)
---------------------------------------------------------------------
-  go build -tags headless ./...                                  PASS
-  go vet -tags headless ./...                                    PASS
-  go test -tags headless ./internal/... -count=1                 PASS (all 22 test packages)
-  go test -race -tags headless ./internal/agent/ ./internal/llm/
-         ./internal/api/ ./internal/native/engine/
-         ./internal/contextcache/ ./internal/memory/
-         ./internal/attachments/ ./internal/recall/              PASS
-  npm run typecheck                                              PASS
-  npm run lint                                                   PASS (0 warnings, 0 errors)
-  npm run build                                                  PASS
-  go run ./scripts/stress-main stress                            30 pass / 0 fail
-  node scripts/release-version.mjs --check                       PASS
-  cmake -S native/engine -B native/engine/build                  PASS
-  cmake --build native/engine/build                              PASS
-  ctest --test-dir native/engine/build                           5/5 PASS (engine, protocol, host, gguf, model)
+Validation gates (run before packaging):
+  go build -tags headless ./...                    PASS
+  go vet -tags headless ./...                      PASS
+  go test -tags headless ./internal/...            27 packages PASS
+  cmake -S native/engine -B native/engine/build    PASS
+  cmake --build native/engine/build                PASS
+  ctest --test-dir native/engine/build             9/9 PASS
+    (engine, protocol, host, gguf, model
+     + tokenizer, kv_cache, scheduler, sampler)
   go test -tags headless ./internal/native/engine/
-    -run 'TestRealCppHostEndToEnd|TestRealCppHostModelLifecycle' PASS (real shtn-engine-host binary)
+    -run TestRealCppHostPhase4                    3/3 PASS
+  npm run typecheck                                 PASS
+  npm run lint                                      0 warnings
+  npm run build                                     PASS
+  go run ./scripts/stress-main stress               30 pass / 0 fail
+  node scripts/release-version.mjs --check          PASS
 
-Note: "PASS" above reflects only commands actually executed on this
-exact package state on 2026-09-10. No documentation in this package
-claims functionality that is not implemented.
+Files (repository-relative paths):
+-----------------------------------
+
+.github/workflows/build-desktop.yml
+.gitignore
+.oxlintrc.json
+.prettierignore
+ARCHITECTURE.md
+FIX-README.md
+LICENSE
+README.md
+REPLACEMENT-MANIFEST.txt
+REPLACEMENT-SHA256.txt
+SIGNATURE
+agent.md
+build/config.yml
+cmd/ask.go
+cmd/context.go
+cmd/diagnostics.go
+cmd/license.go
+cmd/logs.go
+cmd/root.go
+cmd/serve.go
+cmd/setup.go
+cmd/stress.go
+cmd/stress_zeta.go
+cmd/update.go
+go.mod
+go.sum
+index.html
+internal/agent/orchestrator.go
+internal/agent/orchestrator_test.go
+internal/aicontext/AI-CONTEXT.md
+internal/aicontext/aicontext.go
+internal/aicontext/aicontext_test.go
+internal/api/attachments.go
+internal/api/engine.go
+internal/api/lab.go
+internal/api/lifecycle.go
+internal/api/research.go
+internal/api/server.go
+internal/api/server_native_test.go
+internal/api/server_test.go
+internal/api/server_v114_test.go
+internal/api/timeout_test.go
+internal/api/ws.go
+internal/artifacts/artifacts.go
+internal/attachments/attachments.go
+internal/attachments/attachments_phase3_test.go
+internal/attachments/attachments_test.go
+internal/brand/brand.go
+internal/browser/browser.go
+internal/chunking/bench_compare_test.go
+internal/chunking/chunker.go
+internal/chunking/chunker_test.go
+internal/chunking/chunking.go
+internal/chunking/chunking_test.go
+internal/config/config.go
+internal/config/source.go
+internal/config/source_test.go
+internal/contextcache/contextcache.go
+internal/contextcache/contextcache_phase3_test.go
+internal/contextcache/contextcache_test.go
+internal/contextplan/contextplan.go
+internal/contextplan/contextplan_test.go
+internal/continuum/continuum.go
+internal/continuum/continuum_test.go
+internal/continuum/rollover.go
+internal/desktop/desktop.go
+internal/desktop/headless.go
+internal/humanize/humanize.go
+internal/installer/installer.go
+internal/installer/lookpath.go
+internal/lab/api.go
+internal/lab/lab_test.go
+internal/lab/policy.go
+internal/lab/policy_v114_test.go
+internal/lab/repair.go
+internal/lab/repair_test.go
+internal/lab/runner.go
+internal/lab/runner_test.go
+internal/lab/session.go
+internal/lab/task.go
+internal/lab/tool.go
+internal/lab/verifier.go
+internal/lab/workspace.go
+internal/llm/backend.go
+internal/llm/backend_test.go
+internal/llm/client.go
+internal/llm/client_response_test.go
+internal/llm/client_v114_test.go
+internal/llm/gguf.go
+internal/llm/llama.go
+internal/llm/llama_test.go
+internal/llm/llamabackend.go
+internal/llm/models.go
+internal/llm/presets.go
+internal/llm/speed.go
+internal/logging/logging.go
+internal/memory/memory.go
+internal/memory/memory_phase3_test.go
+internal/memory/memory_test.go
+internal/memory/trust_test.go
+internal/multiagent/multiagent.go
+internal/native/engine/backend.go
+internal/native/engine/cpp_integration_test.go
+internal/native/engine/doc.go
+internal/native/engine/engine_test.go
+internal/native/engine/generation.go
+internal/native/engine/kv.go
+internal/native/engine/memory.go
+internal/native/engine/metrics.go
+internal/native/engine/model.go
+internal/native/engine/model_test.go
+internal/native/engine/phase4_integration_test.go
+internal/native/engine/platform.go
+internal/native/engine/protocol.go
+internal/native/engine/runtime.go
+internal/native/engine/scheduler.go
+internal/native/engine/tokenizer.go
+internal/native/filedialog_other.go
+internal/native/filedialog_windows.go
+internal/native/native.go
+internal/netcheck/netcheck.go
+internal/proc/env.go
+internal/proc/proc.go
+internal/proc/proc_other.go
+internal/proc/proc_windows.go
+internal/recall/recall.go
+internal/recall/recall_phase3_test.go
+internal/recall/recall_test.go
+internal/releasegate/releasegate_test.go
+internal/research/backend_alias_test.go
+internal/research/cache.go
+internal/research/cache_test.go
+internal/research/duckduckgo.go
+internal/research/github.go
+internal/research/github_test.go
+internal/research/provider.go
+internal/research/reddit.go
+internal/research/reddit_test.go
+internal/research/searxng.go
+internal/research/security_test.go
+internal/research/service.go
+internal/research/service_test.go
+internal/research/tool.go
+internal/research/tool_test.go
+internal/research/web_test.go
+internal/resources/resources.go
+internal/resources/resources_other.go
+internal/resources/resources_test.go
+internal/resources/resources_windows.go
+internal/runtime/runtime.go
+internal/sandbox/sandbox.go
+internal/sandbox/sandbox_other.go
+internal/sandbox/sandbox_windows.go
+internal/screen/screen_other.go
+internal/screen/screen_windows.go
+internal/sessions/sessions.go
+internal/sessions/sessions_test.go
+internal/sysinfo/sysinfo.go
+internal/termshell/termshell.go
+internal/termshell/termshell_test.go
+internal/tools/archive.go
+internal/tools/basedir.go
+internal/tools/browser.go
+internal/tools/data.go
+internal/tools/data_analysis.go
+internal/tools/data_tool.go
+internal/tools/datachart.go
+internal/tools/diff.go
+internal/tools/fetch.go
+internal/tools/json_tool.go
+internal/tools/linux.go
+internal/tools/parse_test.go
+internal/tools/screenshot.go
+internal/tools/testhooks.go
+internal/tools/tools.go
+internal/updater/updater.go
+internal/updater/zipsafe_test.go
+internal/vision/vision.go
+internal/vision/vision_test.go
+main.go
+main_headless.go
+main_other.go
+main_stderr.go
+main_windows.go
+native/engine/CMakeLists.txt
+native/engine/Makefile
+native/engine/README.md
+native/engine/include/shtn/engine.h
+native/engine/include/shtn/types.h
+native/engine/include/shtn/version.h
+native/engine/src/engine.cpp
+native/engine/src/gguf.cpp
+native/engine/src/gguf.h
+native/engine/src/hardware.cpp
+native/engine/src/hardware.h
+native/engine/src/host_main.cpp
+native/engine/src/json.cpp
+native/engine/src/json.h
+native/engine/src/kv_cache.cpp
+native/engine/src/kv_cache.h
+native/engine/src/model.cpp
+native/engine/src/model.h
+native/engine/src/protocol.cpp
+native/engine/src/protocol.h
+native/engine/src/sampler.cpp
+native/engine/src/sampler.h
+native/engine/src/scheduler.cpp
+native/engine/src/scheduler.h
+native/engine/src/tokenizer.cpp
+native/engine/src/tokenizer.h
+native/engine/src/util.h
+native/engine/tests/gguf_writer.h
+native/engine/tests/test_engine.cpp
+native/engine/tests/test_gguf.cpp
+native/engine/tests/test_host.cpp
+native/engine/tests/test_kv_cache.cpp
+native/engine/tests/test_model.cpp
+native/engine/tests/test_protocol.cpp
+native/engine/tests/test_sampler.cpp
+native/engine/tests/test_scheduler.cpp
+native/engine/tests/test_tokenizer.cpp
+package-lock.json
+package.json
+scripts/browser-smoke/main.go
+scripts/build-and-zip.sh
+scripts/data-smoke/main.go
+scripts/gen-license.go
+scripts/gen-signature.go
+scripts/gen-syso/logo-512.png
+scripts/gen-syso/main.go
+scripts/release-version.mjs
+scripts/stress-main/main.go
+scripts/sync-web.mjs
+scripts/ws-smoke/main.go
+sheytan-local-agent.bat
+src/ActivityStream.tsx
+src/AgentBody.tsx
+src/AgentHeader.tsx
+src/AgentSidebar.tsx
+src/App.tsx
+src/LabPanel.tsx
+src/MessageStream.tsx
+src/ResearchPanel.tsx
+src/SettingsPanel.tsx
+src/agent-init.ts
+src/api.ts
+src/config.ts
+src/layers.css
+src/main.tsx
+src/motion.css
+src/perf-hud.ts
+src/settings.css
+src/store.ts
+src/styles.css
+src/vite-env.d.ts
+src/workspace.ts
+tsconfig.app.json
+tsconfig.json
+tsconfig.node.json
+vite.config.ts
+web/embed.go
+web/static/.vite/manifest.json
+web/static/assets/AgentBody-2-br3YvV.js
+web/static/assets/AgentHeader-B8b76u9o.js
+web/static/assets/AgentSidebar-DJaBwMC5.js
+web/static/assets/LabPanel-CW_A6EcB.js
+web/static/assets/ResearchPanel-Qeb2hrAX.js
+web/static/assets/SettingsPanel-C5Hpkvys.js
+web/static/assets/index-C1xyllm1.js
+web/static/assets/index-n0UF0DI4.css
+web/static/index.html
+worklog.md

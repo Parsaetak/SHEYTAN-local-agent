@@ -5,15 +5,15 @@
 //
 // The target stack is:
 //
-//      React/TypeScript
-//            ↓
-//          Wails
-//            ↓
-//         Go Core
-//            ↓
-//      SHEYTAN Native API   ← this package (Go side)
-//            ↓
-//      C++ Native Engine    ← native/engine/ (C ABI + host subprocess)
+//	React/TypeScript
+//	      ↓
+//	    Wails
+//	      ↓
+//	   Go Core
+//	      ↓
+//	SHEYTAN Native API   ← this package (Go side)
+//	      ↓
+//	C++ Native Engine    ← native/engine/ (C ABI + host subprocess)
 //
 // Go remains the main application/runtime engine. In Phase 2 the native
 // engine implements the supervised lifecycle (start / health-check / mark
@@ -29,8 +29,8 @@
 //
 // Two candidate boundaries were evaluated:
 //
-//      A) cgo / shared native library
-//      B) supervised native subprocess + IPC
+//	A) cgo / shared native library
+//	B) supervised native subprocess + IPC
 //
 // Decision: **B — a supervised native subprocess (shtn-engine-host)
 // speaking a length-prefixed JSON protocol over stdin/stdout.**
@@ -60,19 +60,19 @@
 //
 // The package separates the engine's concerns as files:
 //
-//      protocol.go   wire protocol (framing, ops, validation; v2 includes
-//                    the model ops)
-//      runtime.go    subprocess supervision + authoritative native state
-//      backend.go    llm.Backend adapter (selection + fallback seam)
-//      platform.go   hardware profile assembly (native probe + sysinfo)
-//      metrics.go    native metrics snapshot
-//      model.go      model lifecycle (REAL in Phase 2: load/unload/info,
-//                    state machine, host-restart resets)
-//      memory.go     memory plan types (plan values flow through model.go;
-//                    the KV/compute detail types are for later phases)
-//      kv.go         KV-cache types (types only — later phases)
-//      generation.go generation request types (types only — later phases)
-//      scheduler.go  request scheduler types (types only — later phases)
+//	protocol.go   wire protocol (framing, ops, validation; v2 includes
+//	              the model ops)
+//	runtime.go    subprocess supervision + authoritative native state
+//	backend.go    llm.Backend adapter (selection + fallback seam)
+//	platform.go   hardware profile assembly (native probe + sysinfo)
+//	metrics.go    native metrics snapshot
+//	model.go      model lifecycle (REAL in Phase 2: load/unload/info,
+//	              state machine, host-restart resets)
+//	memory.go     memory plan types (plan values flow through model.go;
+//	              the KV/compute detail types are for later phases)
+//	kv.go         KV-cache types (types only — later phases)
+//	generation.go generation request types (types only — later phases)
+//	scheduler.go  request scheduler types (types only — later phases)
 //
 // The types-only files define the future data model so later phases extend
 // instead of invent; they are wired into the metrics result where honest

@@ -6,7 +6,7 @@ Repository: https://github.com/Parsaetak/SHEYTAN-local-agent
 
 Branch: `main`
 
-Current release: `v1.1.5Z` (SHEYTAN Native AI Engine — Phase 2: native GGUF model loading; see `worklog.md` for the full Phase 1 + Phase 2 logs).
+Current release: `v1.1.5Z` (SHEYTAN Native AI Engine — Phase 4 foundation: real native tokenizer, KV cache, scheduler, sampler; NO inference yet — see `worklog.md` for the full Phase 1 + Phase 2 + Phase 4 logs).
 
 **Read `worklog.md` before working.** It records the audit findings and the fixes this release shipped, including which subsystems were previously unwired and why.
 
@@ -67,11 +67,12 @@ inspect → verify → diagnose → fix → retest → continue
 
 Backend: Go 1.26, Wails v3 (desktop shell), Go HTTP API + WebSocket on `127.0.0.1:8765`.
 
-Engine stack (v1.1.5Z Phase 2 — the native engine loads GGUF models natively; llama.cpp is still the only generation engine):
+Engine stack (v1.1.5Z Phase 4 — the native engine implements REAL tokenizer, KV cache, scheduler and sampler primitives; llama.cpp is still the only generation backend because the transformer forward pass is not implemented yet):
 
 ```text
 React/TypeScript → Wails → Go Core → llm.Backend contract → llama.cpp (default + fallback)
-                                              ↘ internal/native/engine → shtn-engine-host (C++, lifecycle/metrics/GGUF model loading — no inference yet)
+                                              ↘ internal/native/engine → shtn-engine-host (C++, lifecycle/metrics/GGUF model loading +
+                                                  Phase 4: real tokenizer/KV cache/scheduler/sampler — NO inference yet)
 ```
 
 Frontend: React 19, TypeScript, Vite, Zustand; embedded via `web/static` (go:embed) — **`npm run build` must be re-run after any frontend change** so the embedded assets stay in sync.
@@ -82,10 +83,11 @@ Primary packages:
 internal/agent       orchestrator (per-run config snapshot, tool registry)
 internal/llm         LlamaServer (engine lifecycle) + OpenAI-compatible client
                      + Backend contract + LlamaBackend + selection (v1.1.5Z)
-internal/native/engine  SHEYTAN native engine: protocol (v2), supervised runtime,
-                     Backend adapter, hardware profile, metrics, model lifecycle
-                     (Phase 2: native GGUF loading + metadata + memory plan;
-                     NO inference — see doc.go for the boundary decision)
+internal/native/engine  SHEYTAN native engine: protocol (v3), supervised runtime,
+                     Backend adapter, hardware profile, metrics, model lifecycle,
+                     tokenizer, KV cache, scheduler (Phase 4: real foundation;
+                     NO inference — Generate/StreamGenerate return
+                     llm.ErrNotImplemented, llama.cpp remains the backend)
 internal/api         REST/WS surface, run registry, engine event bus
 internal/runtime     Stack wiring (single source for every subsystem)
 internal/config      Config + Source (copy-on-write live config)  ← READ THIS
@@ -151,7 +153,9 @@ separate from sources and bounded:
 - Engine downloads are context-bounded (10 min) and size-capped (2 GiB).
 - v1.1.5Z backend rules: generation is routed by `llm.SelectGenerationBackend` — the native engine only when selected (`engineBackend: "native"`) AND `GenerationCapable()`; otherwise llama.cpp. Native GENERATION is not implemented yet, so generation ALWAYS resolves to llama.cpp. The native backend's Generate/StreamGenerate return `llm.ErrNotImplemented` — that is the fallback signal, never a bug to "fix" by faking inference. Native engine failures never fail the llama path (best-effort, logged, visible in `native.state`).
 - Native MODEL loading (Phase 2) is real: `LoadModel` validates the file and loads it natively (GGUF validate → memory-map → metadata → memory plan). Model states use their own dedicated vocabulary — `unloaded/loading/loaded/failed` — separate from the engine states above; a host restart resets the model state (a fresh host maps nothing). Loading a model does NOT enable generation.
-- The native engine host (`shtn-engine-host`) runs with a sanitized environment, bounded op timeouts (10 s; model loads 30 s), a 1 MiB frame cap and a protocol/ABI handshake that fails closed (protocol/ABI v2 — both sides bumped together). Build it from `native/engine/` (CMake or Make); this phase does not ship or auto-download it.
+- v1.1.5Z Phase 4 native foundation primitives: the native engine implements REAL tokenizer init/encode/decode (BPE/unigram/WPM, special tokens, BOS/EOS, bounded), a REAL KV-cache data structure sized from model dims (capacity/usage/measured bytes, GQA-aware, bounded), a REAL bounded scheduler (single-slot, FIFO, cancel, drain, queue cap) and REAL sampling primitives (greedy, temperature, top-k, top-p, repetition penalty, seedable RNG). These are wired through the IPC protocol (ops: `tokenizer_init` / `tokenizer_info` / `tokenizer_encode` / `tokenizer_decode` / `kv_cache_info` / `scheduler_info`; ABI/protocol v3) and exposed via Engine.InitTokenizer / Engine.TokenizerInfo / Engine.TokenizerEncode / Engine.TokenizerDecode / Engine.KVCacheInfo / Engine.SchedulerInfo. They do NOT produce generated text — no transformer forward pass exists. The KV cache is NOT auto-allocated on model load (it reports the honest zero-state until a future op explicitly allocates it). The scheduler executes nothing in Phase 4 (active=0; the queue exists and is measurable, but no worker thread runs). Honest reporting: an unsupported tokenizer model kind returns `ErrUnsupportedTokenizer` and the llama.cpp fallback remains the generation backend.
+- The native engine host (`shtn-engine-host`) runs with a sanitized environment, bounded op timeouts (10 s; model loads 30 s), a 1 MiB frame cap and a protocol/ABI handshake that fails closed (protocol/ABI v3 — both sides bumped together; v3 adds the tokenizer/KV/scheduler surface to v2 additively, a v2-era host would still build against this header by ignoring the new functions). Build it from `native/engine/` (CMake or Make); this phase does not ship or auto-download it.
+- v1.1.5Z Phase 4 frontend perf contract: streaming model output is COALESCED through `flushStreaming` (rAF-boundary batching in `store.ts`). The UI updates at most once per frame regardless of token rate — a model emitting 200 tokens/sec no longer triggers 200 React renders/sec. Lifecycle events (done/error/session) bypass the coalescer and reset state immediately. A frame-budget diagnostic HUD (`src/perf-hud.ts`) is OFF by default — toggle with Ctrl+Shift+P or `window.__shtnTogglePerfHUD()`. The HUD measures real frame time, dropped frames, longtask count and coalesced stream-update frequency. The target budget is auto-detected from the display refresh rate (8.33 ms for 120 Hz, 16.67 ms for 60 Hz) — the HUD does NOT claim guaranteed 120 FPS; it reports `optimized for high-refresh displays / frame-budget aware / 120 Hz-capable presentation where hardware permits`.
 
 # 6. Bounded-resource invariants
 
@@ -219,9 +223,10 @@ go run ./scripts/stress-main stress          # release gate (0 fail required)
 node scripts/release-version.mjs --check     # version surfaces consistent
 # C++ native engine (when toolchain available):
 cmake -S native/engine -B native/engine/build && cmake --build native/engine/build
-ctest --test-dir native/engine/build         # 5 suites: engine, protocol, host, gguf, model
+ctest --test-dir native/engine/build         # 9 suites: engine, protocol, host, gguf, model
+                                              #          + Phase 4: tokenizer, kv_cache, scheduler, sampler
 # Go↔C++ integration (skips when the host binary is not built):
-go test -tags headless ./internal/native/engine/ -run 'TestRealCppHostEndToEnd|TestRealCppHostModelLifecycle'
+go test -tags headless ./internal/native/engine/ -run 'TestRealCppHostEndToEnd|TestRealCppHostModelLifecycle|TestRealCppHostPhase4'
 ```
 
 New runtime features need a regression test at the level where a real user would notice the failure (HTTP-level for API changes, request-shape tests for wire fields, behavioral tests for loop mechanics).

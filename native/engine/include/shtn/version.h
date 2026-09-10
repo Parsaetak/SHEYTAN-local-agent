@@ -14,12 +14,19 @@
 // shtn_engine_load_model / shtn_engine_unload_model /
 // shtn_engine_model_info / shtn_engine_memory_plan to the C ABI.
 // Pre-existing ops and structs kept their shapes (additive change).
+//
+// Phase 4 (v1.1.5Z): both are 3 — added the tokenizer / KV-cache /
+// scheduler surface to the wire protocol (tokenizer_init /
+// tokenizer_info / tokenizer_encode / tokenizer_decode / kv_cache_info /
+// scheduler_info) and the matching C ABI functions. Pre-existing ops
+// and structs keep their shapes (additive change — a v2 host can still
+// be built against this header by ignoring the new functions).
 
 #ifndef SHTN_VERSION_H
 #define SHTN_VERSION_H
 
-#define SHTN_ABI_VERSION 2u
-#define SHTN_PROTOCOL_VERSION 2
+#define SHTN_ABI_VERSION 3u
+#define SHTN_PROTOCOL_VERSION 3
 
 /* Engine identity reported by the ping op. */
 #define SHTN_ENGINE_NAME "shtn-native-engine"

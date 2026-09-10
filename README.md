@@ -57,15 +57,17 @@ The model is never the authority on whether an engineering task succeeded — ob
 ┌───────────────────┐   ┌───────────────────────────────┐
 │  llama.cpp server │   │  SHEYTAN Native Engine (new)  │
 │  local inference  │   │  C++ core + supervised host   │
-│  (fallback path   │   │  (Phase 2: lifecycle, health, │
+│  (fallback path   │   │  (Phase 4: lifecycle, health,│
 │   and default     │   │  hardware, metrics, GGUF model│
-│   engine today)   │   │  loading — NO inference yet)  │
+│   engine today)   │   │  loading, real tokenizer, KV │
+│                   │   │  cache, scheduler, sampler — │
+│                   │   │  NO forward pass yet)        │
 └───────────────────┘   └───────────────────────────────┘
 ```
 
 Critical execution logic belongs to Go. Presentation and interaction logic belong to React. The production desktop app embeds the built frontend (`web/static/`) via `go:embed` — no separate frontend server is needed.
 
-## SHEYTAN Native AI Engine (v1.1.5Z, Phase 2 — native model loading)
+## SHEYTAN Native AI Engine (v1.1.5Z, Phase 4 — foundation primitives)
 
 v1.1.5Z establishes the **SHEYTAN Native AI Engine architecture**: Go
 remains the main application/runtime engine, and a new C++ native engine
@@ -91,7 +93,21 @@ behind a narrow C ABI, supervised by Go as a subprocess
   estimates/runtime overhead — computed, never allocated), the model
   lifecycle (`unloaded` / `loading` / `loaded` / `failed`) with
   replace-semantics and clean unload, and the `ModelInfo` surface wired
-  through the shared `llm.Backend` contract.
+  through the shared `llm.Backend` contract. Phase 4 added **real
+  foundation primitives**: a real GGUF-backed tokenizer (BPE/Unigram/WPM
+  with merges, special tokens, BOS/EOS/UNK — materialized by re-walking
+  the memory map on demand), a real KV-cache data structure (sized from
+  real model dims, GQA-aware, contiguous K+V allocation, capacity/usage/
+  used-positions measured honestly — `used_positions` stays 0 until a
+  forward pass exists), a real bounded scheduler (single-slot, FIFO,
+  queue cap, cancel, drain, no busy poll), real sampling primitives
+  (greedy/temperature/top-k/top-p/repetition penalty/seedable RNG —
+  deterministic), streaming UI coalescing (rAF-boundary batching of token
+  chunks — one setState per frame regardless of token rate), and a
+  frame-budget diagnostic perf HUD (auto-detects the display refresh
+  rate; reports `optimized for high-refresh displays / frame-budget
+  aware / 120 Hz-capable presentation where hardware permits` — never a
+  guaranteed-120-FPS claim).
 - **NOT implemented (future phases)**: native inference. The native
   engine's Generate/StreamGenerate return "not implemented" — honestly —
   and every generation request therefore runs on llama.cpp.

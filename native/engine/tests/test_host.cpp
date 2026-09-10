@@ -109,8 +109,8 @@ int main() {
         const std::string resp = last_frame(out);
         CHECK(resp.find("\"id\":1") != std::string::npos);
         CHECK(resp.find("\"ok\":true") != std::string::npos);
-        CHECK(resp.find("\"protocolVersion\":2") != std::string::npos);
-        CHECK(resp.find("\"abiVersion\":2") != std::string::npos);
+        CHECK(resp.find("\"protocolVersion\":3") != std::string::npos);
+        CHECK(resp.find("\"abiVersion\":3") != std::string::npos);
     }
 
     {
@@ -387,6 +387,156 @@ int main() {
 
             const std::string resp = last_frame(out);
             CHECK(resp.find("\"id\":41") != std::string::npos); // host alive
+        }
+
+        // Phase 4: tokenizer end-to-end through the IPC protocol.
+        // Build a small BPE fixture, load_model → tokenizer_init →
+        // tokenizer_encode → tokenizer_decode, verifying the host
+        // correctly dispatches the new ops and the round-trips work.
+        {
+            // Build a tiny BPE GGUF in the test dir.
+            gguf_test::BuildOptions bo;
+            bo.version = 3;
+            bo.alignment = 32;
+
+            bo.extra_kv.push_back([](std::vector<uint8_t>& b) {
+                gguf_test::kv_str(b, "general.architecture", "llama");
+            });
+            bo.extra_kv.push_back([](std::vector<uint8_t>& b) {
+                gguf_test::kv_str(b, "tokenizer.ggml.model", "llama");
+            });
+            bo.extra_kv.push_back([](std::vector<uint8_t>& b) {
+                gguf_test::kv_string_array(b, "tokenizer.ggml.tokens",
+                    std::vector<std::string>{
+                        "<unk>", "<s>", "</s>",
+                        "\xE2\x96\x81", "h", "e",
+                        "\xE2\x96\x81""he", "llo",
+                    });
+            });
+            // token_type as int32 array (1=normal, 2=unknown, 3=control)
+            bo.extra_kv.push_back([](std::vector<uint8_t>& b) {
+                gguf_test::put_str(b, "tokenizer.ggml.token_type");
+                gguf_test::put_u32(b, 9); // array
+                gguf_test::put_u32(b, 5); // int32
+                gguf_test::put_u64(b, 8);
+                uint32_t types[8] = {2, 3, 3, 1, 1, 1, 1, 1};
+                for (uint32_t t : types) gguf_test::put_u32(b, t);
+            });
+            bo.extra_kv.push_back([](std::vector<uint8_t>& b) {
+                gguf_test::kv_string_array(b, "tokenizer.ggml.merges",
+                    std::vector<std::string>{
+                        "\xE2\x96\x81 h",
+                        "\xE2\x96\x81""h e",
+                        "l l",
+                        "ll o",
+                    });
+            });
+            bo.extra_kv.push_back([](std::vector<uint8_t>& b) {
+                gguf_test::kv_u32(b, "tokenizer.ggml.bos_token_id", 1);
+            });
+            bo.extra_kv.push_back([](std::vector<uint8_t>& b) {
+                gguf_test::kv_u32(b, "tokenizer.ggml.eos_token_id", 2);
+            });
+            bo.extra_kv.push_back([](std::vector<uint8_t>& b) {
+                gguf_test::kv_u32(b, "tokenizer.ggml.unknown_token_id", 0);
+            });
+            bo.extra_kv.push_back([](std::vector<uint8_t>& b) {
+                gguf_test::kv_u32(b, "llama.context_length", 64);
+            });
+            bo.extra_kv.push_back([](std::vector<uint8_t>& b) {
+                gguf_test::kv_u32(b, "llama.embedding_length", 8);
+            });
+            bo.extra_kv.push_back([](std::vector<uint8_t>& b) {
+                gguf_test::kv_u32(b, "llama.block_count", 1);
+            });
+            bo.extra_kv.push_back([](std::vector<uint8_t>& b) {
+                gguf_test::kv_u32(b, "llama.vocab_size", 8);
+            });
+            bo.tensors.push_back([](std::vector<uint8_t>& b) {
+                gguf_test::tensor_info(b, "token_embd.weight", {8, 8}, 0, 0);
+            });
+            bo.data_bytes = 8 * 8 * 4;
+
+            const std::string bpe_path = dir + "/bpe.gguf";
+            auto image = gguf_test::build(bo);
+            gguf_test::write_file(bpe_path, image);
+
+            std::string input;
+            // Load the model.
+            input += frame("{\"id\":50,\"op\":\"load_model\",\"payload\":{\"path\":" +
+                           gguf_test_quote(bpe_path) + "}}");
+            // Init the tokenizer.
+            input += frame("{\"id\":51,\"op\":\"tokenizer_init\"}");
+            // Query tokenizer_info.
+            input += frame("{\"id\":52,\"op\":\"tokenizer_info\"}");
+            // Encode "hello" with BOS+EOS.
+            input += frame("{\"id\":53,\"op\":\"tokenizer_encode\",\"payload\":"
+                           "{\"text\":\"hello\",\"addBos\":true,\"addEos\":true,"
+                           "\"maxTokens\":64}}");
+            // Decode [6,7] (▁he + llo) — should give " hello".
+            input += frame("{\"id\":54,\"op\":\"tokenizer_decode\",\"payload\":"
+                           "{\"ids\":[6,7],\"skipSpecial\":true,\"maxBytes\":1024}}");
+            // kv_cache_info — should report allocated=false (no auto-alloc).
+            input += frame("{\"id\":55,\"op\":\"kv_cache_info\"}");
+            // scheduler_info — should report queued=0, max_concurrent=1.
+            input += frame("{\"id\":56,\"op\":\"scheduler_info\"}");
+
+            const auto [out, rc] = run(input);
+            CHECK(rc == 0);
+
+            // Decode all frames.
+            std::vector<std::string> frames;
+            size_t off = 0;
+            while (off + 4 <= out.size()) {
+                const uint32_t size =
+                    static_cast<uint32_t>(static_cast<unsigned char>(out[off])) |
+                    (static_cast<uint32_t>(static_cast<unsigned char>(out[off + 1])) << 8) |
+                    (static_cast<uint32_t>(static_cast<unsigned char>(out[off + 2])) << 16) |
+                    (static_cast<uint32_t>(static_cast<unsigned char>(out[off + 3])) << 24);
+                if (off + 4 + size > out.size()) break;
+                frames.push_back(out.substr(off + 4, size));
+                off += 4 + size;
+            }
+
+            CHECK(frames.size() == 7);
+            if (frames.size() == 7) {
+                // load_model → ok, loaded.
+                CHECK(frames[0].find("\"id\":50") != std::string::npos);
+                CHECK(frames[0].find("\"ok\":true") != std::string::npos);
+                CHECK(frames[0].find("\"loaded\":true") != std::string::npos);
+
+                // tokenizer_init → ok, initialized=true, vocab_size=8.
+                CHECK(frames[1].find("\"id\":51") != std::string::npos);
+                CHECK(frames[1].find("\"ok\":true") != std::string::npos);
+                CHECK(frames[1].find("\"initialized\":true") != std::string::npos);
+                CHECK(frames[1].find("\"vocabSize\":8") != std::string::npos);
+                CHECK(frames[1].find("\"model\":\"bpe\"") != std::string::npos);
+
+                // tokenizer_info → initialized=true, bos/eos ids.
+                CHECK(frames[2].find("\"id\":52") != std::string::npos);
+                CHECK(frames[2].find("\"hasBos\":true") != std::string::npos);
+                CHECK(frames[2].find("\"bosId\":1") != std::string::npos);
+                CHECK(frames[2].find("\"eosId\":2") != std::string::npos);
+                CHECK(frames[2].find("\"mergeCount\":4") != std::string::npos);
+
+                // tokenizer_encode → ids [1, 6, 7, 2] (BOS, ▁he, llo, EOS).
+                CHECK(frames[3].find("\"id\":53") != std::string::npos);
+                CHECK(frames[3].find("\"ids\":[1,6,7,2]") != std::string::npos);
+                CHECK(frames[3].find("\"count\":4") != std::string::npos);
+
+                // tokenizer_decode → " hello" (▁he + llo → " hello").
+                CHECK(frames[4].find("\"id\":54") != std::string::npos);
+                CHECK(frames[4].find("\"text\":\" hello\"") != std::string::npos);
+
+                // kv_cache_info → allocated=false, capacity_bytes=0.
+                CHECK(frames[5].find("\"id\":55") != std::string::npos);
+                CHECK(frames[5].find("\"allocated\":false") != std::string::npos);
+
+                // scheduler_info → queued=0, max_concurrent=1.
+                CHECK(frames[6].find("\"id\":56") != std::string::npos);
+                CHECK(frames[6].find("\"queuedRequests\":0") != std::string::npos);
+                CHECK(frames[6].find("\"maxConcurrent\":1") != std::string::npos);
+            }
         }
     }
 

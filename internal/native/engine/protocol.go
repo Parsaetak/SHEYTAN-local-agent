@@ -1,6 +1,6 @@
 package engine
 
-// protocol.go — the SHEYTAN Native API wire protocol (v1.1.5Z Phase 2).
+// protocol.go — the SHEYTAN Native API wire protocol (v1.1.5Z Phase 4).
 //
 // Frame layout (both directions, binary-safe):
 //
@@ -19,15 +19,21 @@ package engine
 // Operations (coarse-grained by design — no tiny high-frequency calls
 // cross this boundary):
 //
-//      ping          handshake: protocol + ABI version negotiation
-//      health        active engine health probe
-//      hwinfo        hardware capability profile (detected values)
-//      metrics       engine metrics snapshot (measured values)
-//      cancel        request cooperative cancellation of one in-flight generation
-//      load_model    validate + memory-map a GGUF model, extract metadata, plan memory
-//      unload_model  release the loaded model (idempotent)
-//      model_info    snapshot of the model concern (state + metadata + plan)
-//      shutdown      graceful engine shutdown
+//      ping              handshake: protocol + ABI version negotiation
+//      health            active engine health probe
+//      hwinfo            hardware capability profile (detected values)
+//      metrics           engine metrics snapshot (measured values)
+//      cancel            request cooperative cancellation of one in-flight generation
+//      load_model        validate + memory-map a GGUF model, extract metadata, plan memory
+//      unload_model      release the loaded model (idempotent)
+//      model_info        snapshot of the model concern (state + metadata + plan)
+//      tokenizer_init    materialize the GGUF tokenizer (Phase 4)
+//      tokenizer_info    tokenizer snapshot (initialized, vocab size, specials)
+//      tokenizer_encode  UTF-8 text → token ids
+//      tokenizer_decode  token ids → UTF-8 text
+//      kv_cache_info     measured KV-cache snapshot (Phase 4)
+//      scheduler_info    measured scheduler snapshot (Phase 4)
+//      shutdown          graceful engine shutdown
 //
 // Unknown ops and malformed frames produce a bounded error response (or
 // are rejected as a protocol violation on the Go side); they NEVER crash
@@ -36,8 +42,9 @@ package engine
 //
 // Version history: v1 = Phase 1 (lifecycle/health/hardware/metrics);
 // v2 = Phase 2 (model loading surface added; pre-existing op shapes
-// unchanged). Both sides are bumped together — a mismatch is a hard
-// handshake failure (fail closed).
+// unchanged); v3 = Phase 4 (tokenizer/KV/scheduler surface added;
+// pre-existing op shapes unchanged). Both sides are bumped together — a
+// mismatch is a hard handshake failure (fail closed).
 
 import (
 	"encoding/binary"
@@ -50,7 +57,7 @@ import (
 // ProtocolVersion is the wire protocol version implemented here. The C++
 // host reports its own value in the ping result; a mismatch is a hard
 // handshake failure (fail closed).
-const ProtocolVersion = 2
+const ProtocolVersion = 3
 
 // MaxFrameBytes bounds one protocol frame (1 MiB). Anything larger is a
 // protocol violation, not a buffer to allocate.
@@ -58,28 +65,40 @@ const MaxFrameBytes = 1 << 20
 
 // Op names crossing the boundary.
 const (
-	OpPing        = "ping"
-	OpHealth      = "health"
-	OpHardware    = "hwinfo"
-	OpMetrics     = "metrics"
-	OpCancel      = "cancel"
-	OpLoadModel   = "load_model"
-	OpUnloadModel = "unload_model"
-	OpModelInfo   = "model_info"
-	OpShutdown    = "shutdown"
+	OpPing            = "ping"
+	OpHealth          = "health"
+	OpHardware        = "hwinfo"
+	OpMetrics         = "metrics"
+	OpCancel          = "cancel"
+	OpLoadModel       = "load_model"
+	OpUnloadModel     = "unload_model"
+	OpModelInfo       = "model_info"
+	OpTokenizerInit   = "tokenizer_init"
+	OpTokenizerInfo   = "tokenizer_info"
+	OpTokenizerEncode = "tokenizer_encode"
+	OpTokenizerDecode = "tokenizer_decode"
+	OpKVCacheInfo     = "kv_cache_info"
+	OpSchedulerInfo   = "scheduler_info"
+	OpShutdown        = "shutdown"
 )
 
 // ValidOps is the closed set of accepted operations (validation + tests).
 var ValidOps = map[string]bool{
-	OpPing:        true,
-	OpHealth:      true,
-	OpHardware:    true,
-	OpMetrics:     true,
-	OpCancel:      true,
-	OpLoadModel:   true,
-	OpUnloadModel: true,
-	OpModelInfo:   true,
-	OpShutdown:    true,
+	OpPing:            true,
+	OpHealth:          true,
+	OpHardware:        true,
+	OpMetrics:         true,
+	OpCancel:          true,
+	OpLoadModel:       true,
+	OpUnloadModel:     true,
+	OpModelInfo:       true,
+	OpTokenizerInit:   true,
+	OpTokenizerInfo:   true,
+	OpTokenizerEncode: true,
+	OpTokenizerDecode: true,
+	OpKVCacheInfo:     true,
+	OpSchedulerInfo:   true,
+	OpShutdown:        true,
 }
 
 // ErrFrameTooLarge reports a frame exceeding MaxFrameBytes.

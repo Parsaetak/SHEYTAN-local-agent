@@ -23,14 +23,213 @@ established the backend abstraction, the supervised native engine path
 and the C++ engine skeleton. Phase 2 added **native GGUF model
 loading**: a hardened C++ GGUF reader, memory-mapped model access, real
 metadata extraction, load-time memory planning, the model lifecycle and
-the `ModelInfo` surface through Go. Phase 3 (this log, first below)
-rebuilt the **local data pipeline for memory efficiency**: a shared
-chunk engine with full provenance metadata, single-flight content
-caching, streaming attachment staging, append-aware memory-store
-caching and allocation-free recall scoring — all measured with
-before/after benchmarks. Native GENERATION is still NOT implemented —
-llama.cpp remains fully functional as the fallback (and the default
-generation engine). Full phase logs below.
+the `ModelInfo` surface through Go. Phase 3 rebuilt the **local data
+pipeline for memory efficiency**: a shared chunk engine with full
+provenance metadata, single-flight content caching, streaming attachment
+staging, append-aware memory-store caching and allocation-free recall
+scoring — all measured with before/after benchmarks. Phase 4 (this log,
+first below) added the **native engine foundation primitives**: a real
+GGUF-backed tokenizer (BPE/Unigram/WPM), a real KV-cache data structure
+sized from model dims (GQA-aware, bounded), a real bounded scheduler,
+real sampling primitives, and a frame-budget-aware streaming UI with a
+diagnostic perf HUD. The transformer forward pass remains a later
+phase — native GENERATION is still NOT implemented. llama.cpp remains
+fully functional as the fallback (and the default generation engine).
+Full phase logs below.
+
+---
+
+# v1.1.5Z Phase 4 Implementation Log (2026-09-10)
+
+## Goal
+
+Phase 4 turns the native engine from "GGUF loader + metadata + memory plan"
+into a real foundation for native inference: a working tokenizer, a real
+KV-cache data structure, a bounded scheduler, real sampling primitives, and
+a smooth frame-budget-aware application UI. The transformer forward pass
+remains a later phase — Phase 4 implements the foundation primitives that
+the future inference loop will call, NOT the forward pass itself.
+
+```text
+Phase 2:   GGUF loader + metadata + memory plan
+Phase 4:   + REAL tokenizer (BPE/Unigram/WPM)
+           + REAL KV cache (sized from model dims, GQA-aware, bounded)
+           + REAL bounded scheduler (single-slot, cancel, drain)
+           + REAL sampling primitives (greedy/temperature/top-k/top-p/
+             repetition penalty, seedable RNG)
+           + streaming UI coalescing (rAF-boundary batched updates)
+           + frame-budget diagnostic HUD
+Phase 5+:  transformer forward pass → real native inference (NOT YET)
+```
+
+## What was implemented (REAL — verified by tests)
+
+### C++ native engine (new files)
+
+- `native/engine/src/tokenizer.h` + `tokenizer.cpp` — real GGUF tokenizer:
+  reads `tokenizer.ggml.tokens` / `token_type` / `scores` / `merges` arrays
+  by re-walking the memory-mapped file (the first-pass parser skips array
+  element bytes for hostile-input safety; this materializes them on demand
+  only when the host asks). Supports BPE (Llama-style with U+2581 space
+  marker, and gpt2-style), Unigram (greedy longest-match — a faithful
+  simplification of SentencePiece Viterbi, documented as such, NOT claimed
+  as a full lattice), and WPM (BERT-style WordPiece with `##` continuation
+  marker). Special token resolution (BOS/EOS/UNK/PAD/SEP/EOT) from GGUF
+  scalars. Encode is deterministic, bounded by `max_tokens`; decode is
+  bounded by `max_bytes`. Unknown tokenizer model kinds return
+  `SHTN_ERR_UNSUPPORTED` honestly — the host surfaces that and the
+  llama.cpp fallback remains the generation backend.
+- `native/engine/src/kv_cache.h` + `kv_cache.cpp` — real KV-cache data
+  structure sized from real model dimensions (layer_count, embedding_length,
+  head_count, head_dim, kv_head_count for GQA, context_length). One
+  contiguous allocation holding per-layer K then per-layer V; layer-major,
+  position-contiguous. Capacity bytes is the REAL allocation:
+  `2 (K+V) * layers * ctx * kv_dim * 2 (f16 bytes)`. Used bytes is
+  proportional to `used_positions` — but `used_positions` is honestly 0
+  until a forward pass exists (no fabricated utilization). Bounded by
+  `kMaxContextLength` (1M positions), `kMaxKVBytes` (16 GiB) and the
+  available-RAM check (the host passes its measured free RAM; the cache
+  refuses an allocation that would not fit). Move-only, RAII, idempotent
+  release. `reset()` marks positions unused without zeroing buffers (the
+  future forward pass will overwrite them; zeroing would waste work).
+- `native/engine/src/scheduler.h` + `scheduler.cpp` — real bounded
+  scheduler. Single-slot execution (`kMaxConcurrent = 1`) — no speculative
+  continuous batching (the execution path cannot support it correctly yet).
+  Bounded queue (default 8, hard cap 64). FIFO ordering. Real cancellation
+  (queued requests removed and marked cancelled; the future active-request
+  cancel hook is wired but no worker thread runs in Phase 4). Graceful
+  shutdown drains the queue with "shutting down" cancellations. Counts are
+  measured (queued, totals since create); `active` is honestly 0 in Phase
+  4. No busy polling (waits on a `condition_variable`).
+- `native/engine/src/sampler.h` + `sampler.cpp` — real sampling primitives.
+  Greedy (argmax) for `temperature == 0`. Temperature scaling. Top-k
+  filtering (`nth_element` partial sort, O(n) average). Top-p (nucleus)
+  filtering with cumulative softmax walk. Repetition penalty (CTRL
+  formulation: `if logit > 0: divide; else: multiply`). Seedable
+  deterministic RNG (xorshift64* with SplitMix64 seed scrambling — not
+  `std::mt19937` to keep the binary lean and the sequence reproducible).
+  Deterministic: same `(logits, recent_tokens, config, rng)` → same token.
+  NULL/empty logits return `SHTN_ERR_INVALID_ARG` (never crash).
+
+### C++ ABI / protocol extension (additive — v2 → v3)
+
+- `include/shtn/engine.h` — Phase 4 surface declarations: `shtn_engine_tokenizer_init`,
+  `shtn_engine_tokenizer_info`, `shtn_engine_tokenizer_encode`,
+  `shtn_engine_tokenizer_decode`, `shtn_engine_kv_cache_info`,
+  `shtn_engine_scheduler_info`.
+- `include/shtn/types.h` — Phase 4 ABI structs: `shtn_tokenizer_info`,
+  `shtn_kv_cache_info`, `shtn_scheduler_info`, `shtn_encode_options`,
+  `shtn_encode_result`, `shtn_decode_options`, `shtn_decode_result`.
+- `include/shtn/version.h` — `SHTN_ABI_VERSION` and `SHTN_PROTOCOL_VERSION`
+  bumped 2 → 3 (additive — a v2-era host can still build against this
+  header by ignoring the new functions; the wire protocol adds new ops but
+  does not change existing op shapes).
+- `src/engine.cpp` — owns a `shtn::kv::Cache` and a `shtn::sched::Scheduler`
+  per engine instance; implements the new ABI functions; the KV cache is
+  NOT auto-allocated on model load (it reports the honest zero-state until
+  a future op explicitly allocates it).
+- `src/host_main.cpp` — dispatches the new ops (`tokenizer_init`,
+  `tokenizer_info`, `tokenizer_encode`, `tokenizer_decode`,
+  `kv_cache_info`, `scheduler_info`); every op round-trips one frame in,
+  one frame out (coarse-grained — no per-token IPC chatter).
+- `src/json.h` + `json.cpp` — added `extract_encode_payload` and
+  `extract_decode_payload` helpers (mirroring `extract_load_payload`'s
+  bounds-checked scanner pattern).
+
+### Go side (new + updated files)
+
+- `internal/native/engine/protocol.go` — `ProtocolVersion` bumped 2 → 3;
+  added op constants (`OpTokenizerInit`, `OpTokenizerInfo`,
+  `OpTokenizerEncode`, `OpTokenizerDecode`, `OpKVCacheInfo`,
+  `OpSchedulerInfo`) and `ValidOps` entries.
+- `internal/native/engine/backend.go` — `ABIVersionExpected` bumped 2 → 3.
+- `internal/native/engine/tokenizer.go` (NEW) — Go-side surface:
+  `Engine.InitTokenizer`, `Engine.TokenizerInfo`, `Engine.TokenizerEncode`,
+  `Engine.TokenizerDecode`, `Engine.KVCacheInfo`, `Engine.SchedulerInfo`.
+  Honest error reporting: `ErrUnsupportedTokenizer` for an unsupported
+  tokenizer model kind; `Generate`/`StreamGenerate` STILL return
+  `llm.ErrNotImplemented` (Phase 4 does NOT fake inference).
+- `internal/native/engine/phase4_integration_test.go` (NEW) — end-to-end
+  tests against the real C++ host: `TestRealCppHostPhase4Tokenizer` (loads
+  a real BPE GGUF, inits the tokenizer, encodes "hello" with BOS+EOS →
+  [1, 6, 7, 2], decodes [6, 7] → " hello"), `TestRealCppHostPhase4KVCache`
+  (verifies the honest zero-state), `TestRealCppHostPhase4Scheduler`
+  (verifies real measured counts, single-slot).
+
+### Frontend (new + updated files)
+
+- `src/store.ts` — added a streaming coalescer: `queueStreamingContent` /
+  `queueStreamingReasoning` accumulate token chunks; `flushStreaming` runs
+  on a `requestAnimationFrame` boundary and writes ONE `setState` per
+  frame. `handleConversationEvent` now uses the coalescer instead of
+  calling `setState` per token. Lifecycle events (done/error/session)
+  bypass the coalescer (`flushStreaming()` runs first, then resets
+  `streaming`). `createSession` / `selectSession` / `disconnectActivity`
+  call `resetPendingStreaming()` to drop pending chunks for the old
+  session. The coalescer is the Phase 4 §17 contract:
+  `native token stream → Go stream → WS events → UI accumulation buffer
+  → frame-aligned render/update`.
+- `src/perf-hud.ts` (NEW) — frame-budget diagnostic HUD. OFF by default;
+  toggle with Ctrl+Shift+P or `window.__shtnTogglePerfHUD()`. Auto-detects
+  the display refresh rate (sample 10 rAF intervals, derive Hz, compute
+  the target budget: 8.33 ms for 120 Hz, 16.67 ms for 60 Hz). Measures
+  real frame time (avg/min/max), dropped frames (> 1.5× budget),
+  longtask count (PerformanceObserver), coalesced stream-update frequency
+  (counts `flushStreaming` calls per second, NOT per token). The HUD
+  reports `optimized for high-refresh displays / frame-budget aware /
+  120 Hz-capable presentation where hardware permits` — it does NOT claim
+  guaranteed 120 FPS.
+- `src/main.tsx` — initializes the perf HUD and wires the stream-update
+  recorder.
+
+## Validation performed (this phase)
+
+```text
+go build -tags headless ./...                                              PASS
+go vet  -tags headless ./...                                               PASS
+go test -tags headless ./internal/... -count=1                             27 packages PASS
+go test -tags headless ./internal/native/engine/                           PASS (incl. Phase 4 integration tests)
+cmake -S native/engine -B native/engine/build                              PASS
+cmake --build native/engine/build -j 4                                     PASS (0 warnings)
+ctest --test-dir native/engine/build                                      9/9 PASS:
+  engine, protocol, host, gguf, model (Phase 1+2)
+  + tokenizer, kv_cache, scheduler, sampler (Phase 4)
+go test -tags headless ./internal/native/engine/ -run TestRealCppHostPhase4 3/3 PASS:
+  TestRealCppHostPhase4Tokenizer   — BPE round-trip through real C++ host
+  TestRealCppHostPhase4KVCache     — honest zero-state verified
+  TestRealCppHostPhase4Scheduler   — measured counts verified
+npm run typecheck                                                          PASS
+npm run lint                                                               0 warnings, 0 errors
+npm run build                                                              PASS (web/static synced)
+go run ./scripts/stress-main stress                                        30 pass / 0 fail
+node scripts/release-version.mjs --check                                   PASS
+```
+
+## Honest scope statement
+
+Phase 4 implements REAL foundation primitives. It does NOT implement:
+
+- the transformer forward pass (no RMSNorm, no GQA attention, no RoPE,
+  no SwiGLU MLP, no logits projection);
+- native generation (Generate/StreamGenerate still return
+  `llm.ErrNotImplemented`);
+- real measured TTFT / tokens-per-second (the GenerationStats struct
+  carries the shape, but every value is honestly 0 — no fabricated
+  inference metrics);
+- Windows/Linux verification on real hardware (the build is cross-compile-
+  clean; CI runs the Windows job; this sandbox is Linux-only and the
+  Windows-specific behavior is verified by the existing `main_windows.go`
+  + `sysinfo` CIM path that was already shipped in v1.1.4Z and unchanged
+  here);
+- continuous batching / speculative decoding (the scheduler is single-slot
+  by design — the execution path cannot support either correctly yet);
+- a real GPU/NPU forward pass (the hardware profile can REPRESENT
+  accelerators; no kernel exists).
+
+The llama.cpp fallback remains the production generation backend. Native
+generation will be enabled ONLY after a real transformer forward pass
+exists and is verified end-to-end against a real GGUF model — never
+before.
 
 ---
 

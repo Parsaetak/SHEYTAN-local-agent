@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.16)
 
 project(shtn_native_engine
     VERSION 1.1.5
-    DESCRIPTION "SHEYTAN Native AI Engine — C++ engine core and IPC host (Phase 2: GGUF model loading)"
+    DESCRIPTION "SHEYTAN Native AI Engine — C++ engine core and IPC host (Phase 4: tokenizer, KV cache, scheduler, sampler foundation)"
     LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -20,13 +20,21 @@ if(SHTN_BUILD_SHARED)
         src/engine.cpp
         src/model.cpp
         src/gguf.cpp
-        src/hardware.cpp)
+        src/hardware.cpp
+        src/tokenizer.cpp
+        src/kv_cache.cpp
+        src/scheduler.cpp
+        src/sampler.cpp)
 else()
     add_library(shtn_engine STATIC
         src/engine.cpp
         src/model.cpp
         src/gguf.cpp
-        src/hardware.cpp)
+        src/hardware.cpp
+        src/tokenizer.cpp
+        src/kv_cache.cpp
+        src/scheduler.cpp
+        src/sampler.cpp)
 endif()
 
 target_include_directories(shtn_engine PUBLIC
@@ -91,4 +99,21 @@ if(SHTN_BUILD_TESTS)
     add_executable(test_model tests/test_model.cpp)
     target_link_libraries(test_model PRIVATE shtn_engine)
     add_test(NAME model COMMAND test_model)
+
+    # Phase 4 test binaries.
+    add_executable(test_tokenizer tests/test_tokenizer.cpp)
+    target_link_libraries(test_tokenizer PRIVATE shtn_engine)
+    add_test(NAME tokenizer COMMAND test_tokenizer)
+
+    add_executable(test_kv_cache tests/test_kv_cache.cpp)
+    target_link_libraries(test_kv_cache PRIVATE shtn_engine)
+    add_test(NAME kv_cache COMMAND test_kv_cache)
+
+    add_executable(test_scheduler tests/test_scheduler.cpp)
+    target_link_libraries(test_scheduler PRIVATE shtn_engine)
+    add_test(NAME scheduler COMMAND test_scheduler)
+
+    add_executable(test_sampler tests/test_sampler.cpp)
+    target_link_libraries(test_sampler PRIVATE shtn_engine)
+    add_test(NAME sampler COMMAND test_sampler)
 endif()

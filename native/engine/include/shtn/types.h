@@ -146,6 +146,89 @@ typedef struct shtn_memory_plan {
     int32_t  reserved;       /* always 0 */
 } shtn_memory_plan;
 
+/* --- Phase 4: tokenizer / KV / scheduler surfaces ------------------------ */
+
+/* shtn_tokenizer_info is the materialized tokenizer snapshot. Fields
+ * are filled ONLY with values actually read from the GGUF header; a
+ * tokenizer that failed to initialize leaves initialized=0. */
+typedef struct shtn_tokenizer_info {
+    int32_t  initialized;          /* 0 or 1 */
+    char     model[32];            /* "bpe", "unigram", "wpm", "unsupported" */
+    char     model_name[64];       /* raw tokenizer.ggml.model string */
+    uint32_t vocab_size;           /* number of tokens materialized */
+    uint32_t merge_count;          /* BPE merges (0 for non-BPE) */
+    int32_t  has_bos;              /* 0 or 1 */
+    int32_t  has_eos;              /* 0 or 1 */
+    int32_t  has_unknown;          /* 0 or 1 */
+    uint32_t bos_id;               /* 0 when has_bos == 0 */
+    uint32_t eos_id;               /* 0 when has_eos == 0 */
+    uint32_t unknown_id;           /* 0 when has_unknown == 0 */
+    char     error[256];           /* last init failure detail */
+} shtn_tokenizer_info;
+
+/* shtn_kv_cache_info is the measured KV-cache snapshot. Every byte
+ * count is the REAL allocation; used_positions is 0 until a forward
+ * pass exists (Phase 4 reports the honest 0 — never a fabricated
+ * utilization). */
+typedef struct shtn_kv_cache_info {
+    int32_t  allocated;            /* 0 or 1 */
+    char     quantization[16];     /* "f16" when allocated */
+    uint64_t capacity_bytes;       /* total K+V bytes allocated */
+    uint64_t used_bytes;           /* bytes for written positions */
+    uint64_t capacity_positions;   /* context_length */
+    uint64_t used_positions;       /* 0 until a forward pass exists */
+    uint32_t layer_count;
+    uint32_t kv_dim;
+} shtn_kv_cache_info;
+
+/* shtn_scheduler_info is the measured scheduler snapshot. Counts are
+ * real (queued requests, totals since create); active is 0 in Phase 4
+ * (no worker thread — the scheduler exists and is measurable, but
+ * executes nothing). */
+typedef struct shtn_scheduler_info {
+    uint32_t active_requests;       /* 0 in Phase 4 */
+    uint32_t queued_requests;       /* current queue depth */
+    uint32_t max_concurrent;        /* 1 (single-slot) */
+    uint32_t queue_depth_limit;     /* bounded queue cap */
+    uint64_t total_submitted;       /* since scheduler create */
+    uint64_t total_completed;
+    uint64_t total_cancelled;
+    uint64_t total_failed;
+    int32_t  shutting_down;         /* 0 or 1 */
+} shtn_scheduler_info;
+
+/* shtn_encode_options configures one tokenizer encode call. */
+typedef struct shtn_encode_options {
+    int32_t  add_bos;              /* 0 or 1 (only when vocab has BOS) */
+    int32_t  add_eos;              /* 0 or 1 (only when vocab has EOS) */
+    uint32_t max_tokens;           /* hard cap on output */
+    uint32_t reserved;             /* must be 0 */
+} shtn_encode_options;
+
+/* shtn_encode_result holds the encode outcome. ids_count is the number
+ * of valid ids in the ids buffer (caller-allocated). */
+typedef struct shtn_encode_result {
+    uint32_t* ids;                 /* caller-allocated, max_tokens capacity */
+    uint32_t  ids_count;           /* number of ids written */
+    int32_t   truncated;           /* 0 or 1 */
+} shtn_encode_result;
+
+/* shtn_decode_options configures one tokenizer decode call. */
+typedef struct shtn_decode_options {
+    int32_t  skip_special;         /* 0 or 1 */
+    uint32_t max_bytes;            /* hard cap on output */
+    uint32_t reserved;             /* must be 0 */
+} shtn_decode_options;
+
+/* shtn_decode_result holds the decode outcome. text is caller-allocated
+ * with max_bytes capacity; text_count is the number of bytes written
+ * (excluding the NUL terminator). */
+typedef struct shtn_decode_result {
+    char*     text;                /* caller-allocated, max_bytes capacity */
+    uint32_t  text_count;          /* bytes written (excl. NUL) */
+    int32_t   truncated;           /* 0 or 1 */
+} shtn_decode_result;
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif

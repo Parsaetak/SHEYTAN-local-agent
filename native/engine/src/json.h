@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <string>
+#include <vector>
 
 namespace shtn {
 namespace json {
@@ -47,6 +48,20 @@ Parsed parse_request(const std::string& bytes);
 // `error` filled on any structural problem.
 bool extract_load_payload(const std::string& bytes, std::string& path,
                           uint32_t& context_length, std::string& error);
+
+// ExtractEncodePayload parses the tokenizer_encode payload:
+// {"text": "...", "addBos": bool, "addEos": bool, "maxTokens": uint}.
+// text is required; the rest optional (defaults: false/false/256).
+bool extract_encode_payload(const std::string& bytes, std::string& text,
+                            int32_t& add_bos, int32_t& add_eos,
+                            uint32_t& max_tokens, std::string& error);
+
+// ExtractDecodePayload parses the tokenizer_decode payload:
+// {"ids": [int,...], "skipSpecial": bool, "maxBytes": uint}.
+bool extract_decode_payload(const std::string& bytes,
+                            std::vector<uint32_t>& ids,
+                            int32_t& skip_special, uint32_t& max_bytes,
+                            std::string& error);
 
 // Escape returns src quoted and escaped as a JSON string literal
 // (control characters, quotes, backslashes, and invalid UTF-8 bytes).

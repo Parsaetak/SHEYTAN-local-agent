@@ -1,4 +1,4 @@
-// engine.h — the SHEYTAN Native Engine C ABI (v1.1.5Z Phase 2).
+// engine.h — the SHEYTAN Native Engine C ABI (v1.1.5Z Phase 4).
 //
 // This is the NARROW boundary the Go core sees. Only C types, only
 // coarse operations — no C++ classes, templates or exceptions cross this
@@ -20,8 +20,22 @@
 //   shtn_engine_model_info                      real metadata snapshot
 //   shtn_engine_memory_plan                     load-time budget
 //
+// Phase 4 surface (implemented — foundation primitives; NO inference):
+//   shtn_engine_tokenizer_init                  materialize GGUF tokenizer
+//   shtn_engine_tokenizer_info                  vocab snapshot
+//   shtn_engine_tokenizer_encode                UTF-8 → token ids
+//   shtn_engine_tokenizer_decode                token ids → UTF-8
+//   shtn_engine_kv_cache_info                   measured KV cache snapshot
+//   shtn_engine_scheduler_info                  measured scheduler snapshot
+//
 // NOT implemented (later phases — the honest answer is an error code):
-//   inference / token generation / GPU kernels / KV-cache allocation.
+//   inference / token generation / GPU kernels / forward pass.
+//
+// The Phase 4 surface is real but does NOT produce generated text:
+// the tokenizer, KV cache, scheduler and sampler are implemented and
+// measured, but the transformer forward pass is not. Generation requests
+// still return SHTN_ERR_UNSUPPORTED and the llama.cpp fallback remains
+// the production generation backend.
 //
 // Conventions:
 //   - every call returns int32_t: 0 = success, negative = error code;
@@ -40,7 +54,7 @@
 extern "C" {
 #endif
 
-/* Error codes (stable ABI values; Phase 2 additions are appended —
+/* Error codes (stable ABI values; Phase 4 additions are appended —
  * existing values are never renumbered). */
 enum {
     SHTN_OK = 0,
@@ -50,7 +64,8 @@ enum {
     SHTN_ERR_INTERNAL = -4,      /* unexpected internal failure */
     SHTN_ERR_MODEL_FORMAT = -5,  /* malformed / unsupported GGUF file */
     SHTN_ERR_MODEL_STATE = -6,   /* model state rejects the operation */
-    SHTN_ERR_NO_MODEL = -7       /* operation requires a loaded model */
+    SHTN_ERR_NO_MODEL = -7,      /* operation requires a loaded model */
+    SHTN_ERR_QUEUE_FULL = -8     /* Phase 4: scheduler queue is full */
 };
 
 /* Opaque engine handle. */
@@ -113,6 +128,57 @@ int32_t shtn_engine_model_info(const shtn_engine* engine, shtn_model_info* out);
  * finished load keeps the last computed plan for inspection; before any
  * load attempt every field is 0). Does not allocate. */
 int32_t shtn_engine_memory_plan(const shtn_engine* engine, shtn_memory_plan* out);
+
+/* --- Phase 4: tokenizer / KV / scheduler surface ----------------------- *
+ *
+ * These functions expose the Phase 4 foundation primitives to the host.
+ * They are REAL: the tokenizer reads GGUF arrays, the KV cache is a real
+ * allocation sized from model dims, the scheduler is a real bounded
+ * queue. They are NOT inference — no forward pass exists, no token is
+ * ever generated. The llama.cpp fallback remains the generation backend.
+ */
+
+/* Materialize the GGUF tokenizer for the currently loaded model. Safe
+ * to call repeatedly (idempotent — a second call returns SHTN_OK with
+ * the existing vocab). Returns SHTN_ERR_UNSUPPORTED for an
+ * unimplemented tokenizer model kind; SHTN_ERR_NO_MODEL when no model
+ * is loaded. */
+int32_t shtn_engine_tokenizer_init(shtn_engine* engine, shtn_tokenizer_info* out);
+
+/* Fill out with the tokenizer snapshot (initialized flag, vocab size,
+ * special token ids, model kind). Always succeeds for a valid engine;
+ * an uninitialized tokenizer leaves initialized=0. */
+int32_t shtn_engine_tokenizer_info(const shtn_engine* engine,
+                                   shtn_tokenizer_info* out);
+
+/* Encode UTF-8 text to token ids. The caller allocates result->ids with
+ * capacity opts->max_tokens. Returns SHTN_OK or a negative error code;
+ * result->ids_count holds the number of ids written. */
+int32_t shtn_engine_tokenizer_encode(const shtn_engine* engine,
+                                     const char* text, uint64_t text_len,
+                                     const shtn_encode_options* opts,
+                                     shtn_encode_result* result);
+
+/* Decode token ids to UTF-8 text. The caller allocates result->text with
+ * capacity opts->max_bytes. Returns SHTN_OK or a negative error code;
+ * result->text_count holds the number of bytes written (excl. NUL). */
+int32_t shtn_engine_tokenizer_decode(const shtn_engine* engine,
+                                     const uint32_t* ids, uint64_t ids_count,
+                                     const shtn_decode_options* opts,
+                                     shtn_decode_result* result);
+
+/* Fill out with the measured KV-cache snapshot. In Phase 4 the cache is
+ * NOT allocated automatically — it exists as a data structure sized
+ * from model dims but is not populated until a forward pass exists.
+ * This op reports the honest zero-state (allocated=0) unless a future
+ * op explicitly allocates the cache. */
+int32_t shtn_engine_kv_cache_info(const shtn_engine* engine,
+                                  shtn_kv_cache_info* out);
+
+/* Fill out with the measured scheduler snapshot. Counts are real
+ * (queued requests, totals since create); active is 0 in Phase 4. */
+int32_t shtn_engine_scheduler_info(const shtn_engine* engine,
+                                   shtn_scheduler_info* out);
 
 /* Report the ABI version this engine was built with. */
 uint32_t shtn_abi_version(void);

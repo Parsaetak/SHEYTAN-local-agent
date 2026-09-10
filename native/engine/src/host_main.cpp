@@ -14,8 +14,13 @@
 //   - every op is coarse-grained; there is no per-token traffic.
 //
 // Phase 2 ops: load_model / unload_model / model_info — the native GGUF
-// loading surface (validate + memory-map + metadata + memory plan; no
-// inference in this phase).
+// loading surface (validate + memory-map + metadata + memory plan).
+//
+// Phase 4 ops: tokenizer_init / tokenizer_info / tokenizer_encode /
+// tokenizer_decode / kv_cache_info / scheduler_info — the foundation
+// primitives surface (real tokenizer, real KV cache struct, real
+// scheduler; NO inference — the forward pass is a later phase, and
+// llama.cpp remains the generation backend).
 
 #include "shtn/engine.h"
 #include "shtn/types.h"
@@ -29,6 +34,7 @@
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <vector>
 
 #if defined(_WIN32)
 #include <fcntl.h>
@@ -297,6 +303,202 @@ std::string op_model_info(shtn_engine* engine) {
     return oss.str();
 }
 
+// --- Phase 4: tokenizer / KV / scheduler ops ------------------------------
+
+// tokenizer_info_json renders one shtn_tokenizer_info snapshot.
+std::string tokenizer_info_json(const shtn_tokenizer_info& ti) {
+    std::ostringstream oss;
+    oss << "{"
+        << "\"initialized\":" << (ti.initialized ? "true" : "false")
+        << ",\"model\":" << quote(ti.model)
+        << ",\"modelName\":" << quote(ti.model_name)
+        << ",\"vocabSize\":" << ti.vocab_size
+        << ",\"mergeCount\":" << ti.merge_count
+        << ",\"hasBos\":" << (ti.has_bos ? "true" : "false")
+        << ",\"hasEos\":" << (ti.has_eos ? "true" : "false")
+        << ",\"hasUnknown\":" << (ti.has_unknown ? "true" : "false")
+        << ",\"bosId\":" << ti.bos_id
+        << ",\"eosId\":" << ti.eos_id
+        << ",\"unknownId\":" << ti.unknown_id
+        << ",\"error\":" << quote(ti.error)
+        << "}";
+    return oss.str();
+}
+
+std::string op_tokenizer_init(shtn_engine* engine) {
+    shtn_tokenizer_info ti{};
+    const int32_t rc = shtn_engine_tokenizer_init(engine, &ti);
+
+    std::ostringstream oss;
+    oss << "{";
+    if (rc == SHTN_OK) {
+        oss << "\"initialized\":" << (ti.initialized ? "true" : "false")
+            << ",\"info\":" << tokenizer_info_json(ti);
+    } else {
+        oss << "\"initialized\":false"
+            << ",\"info\":" << tokenizer_info_json(ti)
+            << ",\"error\":" << quote(rc == SHTN_ERR_UNSUPPORTED
+                ? std::string("tokenizer model not supported (llama.cpp fallback remains the generation backend)")
+                : std::string("tokenizer init failed (error code ") +
+                  std::to_string(rc) + ")");
+    }
+    oss << "}";
+    return oss.str();
+}
+
+std::string op_tokenizer_info(shtn_engine* engine) {
+    shtn_tokenizer_info ti{};
+    const int32_t rc = shtn_engine_tokenizer_info(engine, &ti);
+    if (rc != SHTN_OK) {
+        throw std::string("tokenizer_info failed (error code ") +
+            std::to_string(rc) + ")";
+    }
+    return tokenizer_info_json(ti);
+}
+
+std::string op_tokenizer_encode(shtn_engine* engine,
+                                const std::string& payload_raw,
+                                bool has_payload) {
+    if (!has_payload) {
+        throw std::string("tokenizer_encode requires a payload");
+    }
+
+    std::string text;
+    int32_t add_bos = 0, add_eos = 0;
+    uint32_t max_tokens = 256;
+    std::string err;
+
+    if (!shtn::json::extract_encode_payload(payload_raw, text,
+                                            add_bos, add_eos, max_tokens, err)) {
+        throw std::string("malformed tokenizer_encode payload: ") + err;
+    }
+
+    std::vector<uint32_t> ids(max_tokens, 0);
+
+    shtn_encode_options opts{};
+    opts.add_bos = add_bos;
+    opts.add_eos = add_eos;
+    opts.max_tokens = max_tokens;
+    opts.reserved = 0;
+
+    shtn_encode_result result{};
+    result.ids = ids.data();
+    result.ids_count = 0;
+    result.truncated = 0;
+
+    const int32_t rc = shtn_engine_tokenizer_encode(
+        engine, text.c_str(), text.size(), &opts, &result);
+
+    if (rc != SHTN_OK) {
+        throw std::string("tokenizer_encode failed (error code ") +
+            std::to_string(rc) + ")";
+    }
+
+    std::ostringstream oss;
+    oss << "{"
+        << "\"ids\":[";
+    for (uint32_t i = 0; i < result.ids_count; ++i) {
+        if (i > 0) oss << ",";
+        oss << result.ids[i];
+    }
+    oss << "]"
+        << ",\"count\":" << result.ids_count
+        << ",\"truncated\":" << (result.truncated ? "true" : "false")
+        << "}";
+    return oss.str();
+}
+
+std::string op_tokenizer_decode(shtn_engine* engine,
+                                const std::string& payload_raw,
+                                bool has_payload) {
+    if (!has_payload) {
+        throw std::string("tokenizer_decode requires a payload");
+    }
+
+    std::vector<uint32_t> ids;
+    int32_t skip_special = 1;
+    uint32_t max_bytes = 1u << 20;
+    std::string err;
+
+    if (!shtn::json::extract_decode_payload(payload_raw, ids,
+                                            skip_special, max_bytes, err)) {
+        throw std::string("malformed tokenizer_decode payload: ") + err;
+    }
+
+    std::vector<char> text(max_bytes, 0);
+
+    shtn_decode_options opts{};
+    opts.skip_special = skip_special;
+    opts.max_bytes = max_bytes;
+    opts.reserved = 0;
+
+    shtn_decode_result result{};
+    result.text = text.data();
+    result.text_count = 0;
+    result.truncated = 0;
+
+    const int32_t rc = shtn_engine_tokenizer_decode(
+        engine, ids.empty() ? nullptr : ids.data(), ids.size(), &opts, &result);
+
+    if (rc != SHTN_OK) {
+        throw std::string("tokenizer_decode failed (error code ") +
+            std::to_string(rc) + ")";
+    }
+
+    std::ostringstream oss;
+    oss << "{"
+        << "\"text\":" << quote(std::string(text.data(), result.text_count))
+        << ",\"count\":" << result.text_count
+        << ",\"truncated\":" << (result.truncated ? "true" : "false")
+        << "}";
+    return oss.str();
+}
+
+std::string op_kv_cache_info(shtn_engine* engine) {
+    shtn_kv_cache_info info{};
+    const int32_t rc = shtn_engine_kv_cache_info(engine, &info);
+    if (rc != SHTN_OK) {
+        throw std::string("kv_cache_info failed (error code ") +
+            std::to_string(rc) + ")";
+    }
+
+    std::ostringstream oss;
+    oss << "{"
+        << "\"allocated\":" << (info.allocated ? "true" : "false")
+        << ",\"quantization\":" << quote(info.quantization)
+        << ",\"capacityBytes\":" << json_uint(info.capacity_bytes)
+        << ",\"usedBytes\":" << json_uint(info.used_bytes)
+        << ",\"capacityPositions\":" << json_uint(info.capacity_positions)
+        << ",\"usedPositions\":" << json_uint(info.used_positions)
+        << ",\"layerCount\":" << info.layer_count
+        << ",\"kvDim\":" << info.kv_dim
+        << "}";
+    return oss.str();
+}
+
+std::string op_scheduler_info(shtn_engine* engine) {
+    shtn_scheduler_info info{};
+    const int32_t rc = shtn_engine_scheduler_info(engine, &info);
+    if (rc != SHTN_OK) {
+        throw std::string("scheduler_info failed (error code ") +
+            std::to_string(rc) + ")";
+    }
+
+    std::ostringstream oss;
+    oss << "{"
+        << "\"activeRequests\":" << info.active_requests
+        << ",\"queuedRequests\":" << info.queued_requests
+        << ",\"maxConcurrent\":" << info.max_concurrent
+        << ",\"queueDepthLimit\":" << info.queue_depth_limit
+        << ",\"totalSubmitted\":" << json_uint(info.total_submitted)
+        << ",\"totalCompleted\":" << json_uint(info.total_completed)
+        << ",\"totalCancelled\":" << json_uint(info.total_cancelled)
+        << ",\"totalFailed\":" << json_uint(info.total_failed)
+        << ",\"shuttingDown\":" << (info.shutting_down ? "true" : "false")
+        << "}";
+    return oss.str();
+}
+
 // --- dispatch ----------------------------------------------------------------
 
 // handle_request processes one parsed request and returns the RESULT JSON
@@ -325,6 +527,24 @@ std::string handle_request(shtn_engine* engine, const shtn::json::Parsed& req) {
     }
     if (req.op == "model_info") {
         return op_model_info(engine);
+    }
+    if (req.op == "tokenizer_init") {
+        return op_tokenizer_init(engine);
+    }
+    if (req.op == "tokenizer_info") {
+        return op_tokenizer_info(engine);
+    }
+    if (req.op == "tokenizer_encode") {
+        return op_tokenizer_encode(engine, req.payload_raw, req.has_payload);
+    }
+    if (req.op == "tokenizer_decode") {
+        return op_tokenizer_decode(engine, req.payload_raw, req.has_payload);
+    }
+    if (req.op == "kv_cache_info") {
+        return op_kv_cache_info(engine);
+    }
+    if (req.op == "scheduler_info") {
+        return op_scheduler_info(engine);
     }
     if (req.op == "shutdown") {
         // Acknowledged by the caller specially (respond, then exit).

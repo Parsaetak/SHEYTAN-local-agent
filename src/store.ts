@@ -146,6 +146,130 @@ let pendingActivity: ActivityEvent[] = [];
 let flushingActivity: ActivityEvent[] = [];
 let pendingRunning: boolean | undefined;
 
+// --- Phase 4: streaming coalescing ---------------------------------------
+//
+// High token rates (100+ tokens/sec) can swamp React with one setState
+// per token, each re-rendering the whole message tree. The streaming
+// coalescer accumulates response/reasoning chunks into a single buffer
+// and flushes on the next animation frame — so no matter how fast the
+// model emits, the UI updates at most once per frame (capped by the
+// display's refresh rate, naturally degrading to 60 Hz on a 60 Hz
+// display without wasting CPU on 120 meaningless updates).
+//
+// Coalescing only batches the CONTENT payload; lifecycle events
+// (done/error/session) are still delivered immediately because they
+// close the streaming bubble and must reset `running`.
+let streamingFlushFrame: number | null = null;
+let pendingStreamingContent = "";
+let pendingStreamingReasoning = "";
+let pendingStreamingHadContent = false;
+let pendingStreamingHadReasoning = false;
+
+function resetPendingStreaming(): void {
+  if (streamingFlushFrame !== null) {
+    cancelAnimationFrame(streamingFlushFrame);
+
+    streamingFlushFrame = null;
+  }
+
+  pendingStreamingContent = "";
+  pendingStreamingReasoning = "";
+  pendingStreamingHadContent = false;
+  pendingStreamingHadReasoning = false;
+}
+
+// flushStreaming writes the accumulated content/reasoning to the store
+// in ONE setState, then resets the buffers. Runs on a rAF boundary so
+// multiple token chunks arriving within one frame coalesce into a
+// single render.
+function flushStreaming(): void {
+  streamingFlushFrame = null;
+
+  if (!pendingStreamingHadContent && !pendingStreamingHadReasoning) {
+    return;
+  }
+
+  // Read the current streaming state ONCE (cheap; no re-render), merge
+  // the pending deltas, and write back in a single setState.
+  const current = useRuntimeStore.getState().streaming;
+
+  const nextContent = pendingStreamingHadContent
+    ? (current?.content ?? "") + pendingStreamingContent
+    : (current?.content ?? "");
+
+  const nextReasoning = pendingStreamingHadReasoning
+    ? (current?.reasoning ?? "") + pendingStreamingReasoning
+    : (current?.reasoning ?? "");
+
+  useRuntimeStore.setState({
+    streaming: {
+      content: nextContent,
+      reasoning: nextReasoning,
+    },
+  });
+
+  // Phase 4 perf HUD: count this as one coalesced stream update so the
+  // HUD can measure update frequency (should be <= display refresh rate,
+  // never one-per-token). The recordStreamUpdate import is dynamic so
+  // this file stays decoupled from perf-hud.ts when the HUD is disabled.
+  recordStreamUpdateSafe();
+
+  pendingStreamingContent = "";
+  pendingStreamingReasoning = "";
+  pendingStreamingHadContent = false;
+  pendingStreamingHadReasoning = false;
+}
+
+// recordStreamUpdateSafe is a thin wrapper around perf-hud's counter.
+// Kept as a separate function so the store never throws if the perf-hud
+// module fails to load (it's a diagnostic; never let it break the app).
+let recordStreamUpdateFn: (() => void) | null = null;
+
+// setStreamUpdateRecorder is exported so main.tsx can wire the perf-hud
+// counter into the store after both modules load (avoids a circular
+// import: store.ts ↔ perf-hud.ts).
+export function setStreamUpdateRecorder(fn: (() => void) | null): void {
+  recordStreamUpdateFn = fn;
+}
+
+function recordStreamUpdateSafe(): void {
+  if (recordStreamUpdateFn !== null) {
+    try {
+      recordStreamUpdateFn();
+    } catch {
+      // Swallow — the HUD is diagnostic only.
+    }
+  }
+}
+
+function scheduleStreamingFlush(): void {
+  if (streamingFlushFrame !== null) {
+    return;
+  }
+
+  streamingFlushFrame = requestAnimationFrame(flushStreaming);
+}
+
+// queueStreamingContent appends one response chunk to the content buffer
+// and schedules a frame-aligned flush.
+function queueStreamingContent(chunk: string): void {
+  if (!chunk) return;
+
+  pendingStreamingContent += chunk;
+  pendingStreamingHadContent = true;
+  scheduleStreamingFlush();
+}
+
+// queueStreamingReasoning appends one reasoning chunk to the reasoning
+// buffer and schedules a frame-aligned flush.
+function queueStreamingReasoning(chunk: string): void {
+  if (!chunk) return;
+
+  pendingStreamingReasoning += chunk;
+  pendingStreamingHadReasoning = true;
+  scheduleStreamingFlush();
+}
+
 function createActivityID(): string {
   activitySequence += 1;
 
@@ -301,21 +425,22 @@ function setActivityBatch(
 
 // handleConversationEvent mirrors activity stream events into the real
 // conversation view and repairs the run state machine.
+//
+// Phase 4: streaming response/reasoning chunks are COALESCED through
+// queueStreamingContent / queueStreamingReasoning and flushed on a rAF
+// boundary. This means a model emitting 200 tokens/sec no longer
+// triggers 200 React renders/sec — the UI updates at most once per
+// frame, naturally capped by the display's refresh rate. Lifecycle
+// events (done/error/session) bypass the coalescer and reset state
+// immediately so `running` clears without delay.
 function handleConversationEvent(event: ActivityEvent): void {
-  const store = useRuntimeStore.getState();
-
   switch (event.type) {
     case "response": {
       const content =
         typeof event.data.caption === "string" ? event.data.caption : "";
 
       if (content) {
-        useRuntimeStore.setState({
-          streaming: {
-            content,
-            reasoning: store.streaming?.reasoning ?? "",
-          },
-        });
+        queueStreamingContent(content);
       }
 
       break;
@@ -326,12 +451,7 @@ function handleConversationEvent(event: ActivityEvent): void {
         typeof event.data.caption === "string" ? event.data.caption : "";
 
       if (reasoning) {
-        useRuntimeStore.setState({
-          streaming: {
-            content: store.streaming?.content ?? "",
-            reasoning,
-          },
-        });
+        queueStreamingReasoning(reasoning);
       }
 
       break;
@@ -346,6 +466,9 @@ function handleConversationEvent(event: ActivityEvent): void {
       const currentId = useRuntimeStore.getState().activeSessionId;
 
       if (nextSessionId && nextSessionId !== currentId) {
+        // Drop any pending streaming chunks — the chapter is closing.
+        resetPendingStreaming();
+
         useRuntimeStore.setState({ running: false, streaming: null });
         void useRuntimeStore.getState().selectSession(nextSessionId);
         void useRuntimeStore.getState().refreshSessions();
@@ -359,6 +482,12 @@ function handleConversationEvent(event: ActivityEvent): void {
       // THE v1.1.2Z dead-composer fix: a finished or failed run must
       // always release the composer. The old code only reset `running`
       // on error paths, so a successful reply left it disabled forever.
+      //
+      // Phase 4: flush any pending streaming chunks FIRST so the final
+      // content is visible before the streaming bubble closes. Then
+      // reset running + streaming.
+      flushStreaming();
+
       useRuntimeStore.setState({ running: false });
 
       // Reload the persisted conversation so the final assistant message
@@ -653,6 +782,9 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
     // a fresh session never streamed and the composer stuck "running".
     get().disconnectActivity();
 
+    // Phase 4: drop any pending streaming chunks for the OLD session.
+    resetPendingStreaming();
+
     set((state) => ({
       sessions: [session, ...state.sessions],
       activeSessionId: session.id,
@@ -685,6 +817,9 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
       running: false,
       pendingAttachments: [],
     });
+
+    // Phase 4: drop any pending streaming chunks for the OLD session.
+    resetPendingStreaming();
 
     if (id) {
       get().connectActivity();
