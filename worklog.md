@@ -2,7 +2,7 @@
 
 ## Current State
 
-Date: 2026-09-07
+Date: 2026-09-10
 
 Repository:
 
@@ -15,10 +15,200 @@ Branch: `main`
 Current release:
 
 ```text
-v1.1.4Z
+v1.1.5Z
 ```
 
-v1.1.4Z is a **functional-maturity and remediation release**: a full-repository audit followed by targeted fixes for every defect class the audit surfaced — concurrency, functional completion of documented-but-unwired subsystems, security hardening, error visibility, dead-code removal and release-engineering traps.
+v1.1.5Z is the **SHEYTAN Native AI Engine architecture foundation**
+release (Phase 1): it establishes the backend abstraction, the supervised
+native engine path and the C++ engine skeleton WITHOUT attempting to
+replace llama.cpp — llama.cpp remains fully functional as the fallback
+(and the default generation engine). Full Phase 1 log below.
+
+---
+
+# v1.1.5Z Phase 1 Implementation Log (2026-09-10)
+
+## Goal
+
+Establish the SHEYTAN Native AI Engine architecture:
+
+```text
+React/TypeScript → Wails → Go Core → SHEYTAN Native API → C++ Native Engine
+```
+
+Go remains the main application/runtime engine; the C++ engine becomes
+the future heavy-compute/AI execution engine. llama.cpp stays functional
+as the fallback throughout.
+
+## 1. LLM backend abstraction (internal/llm)
+
+`llm.Backend` formalizes the engine surface the rest of SHEYTAN depends
+on: `Start / Stop / Health / LoadModel / UnloadModel / Generate /
+StreamGenerate / Cancel / ModelInfo / HardwareInfo / Metrics`, plus
+shared contract types (`HealthReport`, `ModelSpec`, `ModelInfo`,
+`HardwareInfo` — the platform-neutral hardware profile —, `Metrics`) and
+the error vocabulary (`ErrNotImplemented`, `ErrCancelContextBased`).
+
+`llm.LlamaBackend` adapts the EXISTING pieces (LlamaServer + Client) to
+the contract — a delegation layer, not a second engine: streaming,
+retries, the stall watchdog, cancellation, busy reporting, engine events
+and the config snapshot contract are untouched. Additive surface on
+LlamaServer: `StartedAt()`, `Restarts()` (measured values for metrics)
+and `ProbeHealth()` (a real bounded `/health` GET — the same endpoint the
+startup ladder polls).
+
+`llm.SelectGenerationBackend` is the single routing point: the native
+engine serves generation only when selected AND
+`GenerationCapable()`; otherwise llama.cpp. In Phase 1 the native backend
+reports generation-incapable, so generation always resolves to llama.cpp
+— pinned by tests so Phase 2 flips routing by implementing generation,
+not by editing call sites.
+
+## 2. Native engine package (internal/native/engine)
+
+Concern layout (files): `protocol.go` (framing + ops + validation),
+`runtime.go` (supervision), `backend.go` (`llm.Backend` adapter),
+`platform.go` (hardware profile assembly), `metrics.go`,
+`model.go`/`memory.go`/`kv.go`/`generation.go`/`scheduler.go` (Phase 1
+concern types — the future data model, no fake inference).
+
+- **Protocol**: 4-byte LE length-prefixed JSON over the host's
+  stdin/stdout; 1 MiB frame cap; ops `ping/health/hwinfo/metrics/cancel/
+  shutdown`; malformed frames rejected as protocol violations; request/
+  response multiplexer with per-op timeouts (10 s) and serialized writers.
+- **Supervision**: spawn (sanitized environment — no secrets cross the
+  boundary) → protocol+ABI handshake (fails closed on mismatch) → health
+  → ready; event-driven exit watcher (no polling, no busy loops); bounded
+  auto-restart (3 recoveries per supervision episode, 1/2/4 s backoff,
+  deliberate stops suppressed, terminal failure visible). Native engine
+  state uses the SAME vocabulary and event shape as llama.cpp
+  (`llm.State*`, `llm.EngineEvent`) — no second state system.
+- **Hardware profile**: native probe (C++ detected values) merged with
+  the sysinfo probe (GPU/VRAM); `DetectedBy` records each source; NPU/
+  accelerator and shared-memory GPU fields are representable but stay
+  empty until a detector exists.
+- **Metrics**: only measured values — engine state, pid, uptime, restarts
+  (Go side) + the C++ engine's own process RSS and uptime; generation
+  metrics (TTFT, prompt/decode speed) are OMITTED until a backend
+  actually serves generation.
+
+## 3. C++ native engine skeleton (native/engine/)
+
+Buildable independently (CMake ≥ 3.16 or plain make; C++17; ZERO
+third-party dependencies):
+
+- `include/shtn/{engine,types,version}.h` — the narrow C ABI: engine
+  create/destroy, health, hardware info, metrics, ABI version. Opaque
+  handle, fixed-size C structs, error codes instead of exceptions.
+- `src/engine.cpp` — the engine core (state, uptime, hardware cache,
+  measured metrics).
+- `src/hardware.cpp` — real platform detection (Linux /proc + sysconf,
+  Windows cpuid + GLPI + GlobalMemoryStatusEx + psapi, macOS sysctl +
+  mach) with per-platform #ifdef paths.
+- `src/{protocol,json}.cpp` — framing + a careful minimal JSON
+  parser/serializer (escape-safe, nesting-aware, hostile-input-safe).
+- `src/host_main.cpp` — `shtn-engine-host`: the supervised subprocess;
+  one request frame in → one response frame out; malformed input gets a
+  bounded error response (never a crash, never an exit); `shutdown`
+  acknowledges and exits cleanly; stdin EOF exits cleanly.
+- `tests/` — `test_engine` (ABI contract: create/destroy, NULL
+  rejection, ABI mismatch, health, hwinfo, metrics monotonicity),
+  `test_protocol` (framing, caps, truncation, JSON edge cases),
+  `test_host` (dispatch: valid ops, unknown ops, garbage inputs, oversized
+  frames, shutdown, EOF).
+
+## 4. Go↔C++ boundary decision
+
+**B) supervised native subprocess + IPC** (documented in
+`internal/native/engine/doc.go` and ARCHITECTURE.md §I.9): crash
+isolation (a native crash cannot kill the app; the bounded watchdog
+restarts it), preserved `CGO_ENABLED=0` Windows cross-build, future
+Android maps to a service process, explicit versioned protocol, and
+coarse-grained ops only (the boundary never carries tiny high-frequency
+calls). Verified end-to-end by `TestRealCppHostEndToEnd` (Go Engine ↔
+real C++ host: handshake, health, hardware, metrics, cancel, clean stop).
+
+## 5. llama.cpp preserved (fallback contract)
+
+- llama.cpp remains the DEFAULT engine (`engineBackend: "llama"`) — the
+  entire v1.1.4Z behavior is unchanged unless the user explicitly opts in.
+- With `engineBackend: "native"`: the native engine is supervised
+  (lifecycle real), generation still runs on llama.cpp (native reports
+  generation-incapable), and native failures NEVER fail the llama path
+  (best-effort, logged, visible in the engine snapshot).
+- The engine toggle (POST /api/llama start/stop) drives both engines when
+  native is enabled; llama's state stays the authoritative action result.
+- `/api/engine` snapshot gains `backend` (effective generation backend)
+  and a `native` status block (local reads only — the poll path performs
+  NO engine IPC); native transitions broadcast into the existing WS
+  pipeline with "Native engine …" captions; the UI badge keeps reading
+  the llama snapshot state.
+- Config: `engineBackend` (exact-match opt-in, fail-closed to llama on
+  malformed values; normalized on load), `nativeEnginePath` (optional
+  override). Consumed by runtime wiring + selection; no Settings UI
+  control in Phase 1 (config.json / `SHEYTAN_ENGINE_BACKEND` env are the
+  opt-in paths — a toggle whose only visible effect would be a process in
+  Task Manager is feature theater).
+
+## 6. Validation performed (this release)
+
+```text
+go build -tags headless ./...                          PASS
+go vet  -tags headless ./...                           PASS
+go test -tags headless ./internal/... -count=1         22 packages PASS
+go test -race -tags headless (agent, llm, api,
+                              native/engine, config)   PASS
+frontend: npm ci / typecheck / lint (0 warnings) / build
+         + sync into web/static                       PASS (assets unchanged:
+                                                         types-only api.ts edit)
+stress suite (release gate)                            30 pass / 0 fail
+node scripts/release-version.mjs (sync + --check)      PASS (all surfaces 1.1.5)
+C++ (cmake 3.30 + g++ 14, C++17): build                PASS
+C++ ctest: engine + protocol + host                    3/3 PASS
+Go↔C++ integration (TestRealCppHostEndToEnd)           PASS
+version smoke: "SHEYTAN-Local-Agent v1.1.5"            PASS
+```
+
+New tests added:
+
+- `internal/llm/backend_test.go` — selection matrix (default llama /
+  native-incapable fallback / native-capable (Phase 2 shape) / native
+  absent / malformed values fail closed / no-probe backends), llama
+  backend delegation, cancel semantics, metrics (measured values only),
+  hardware from sysinfo, model validation, contract constants.
+- `internal/native/engine/engine_test.go` — protocol framing/validation;
+  lifecycle (start→ready, stop walk, events, missing binary → failed);
+  failure (crash → bounded restart ladder → terminal failed, garbage
+  host → connection loss detection, slow host → bounded teardown);
+  cancellation (cancel round-trip miss with reason, op timeouts);
+  concurrent lifecycle (race-clean); hardware merge; measured metrics;
+  backend contract (ErrNotImplemented for generation, GenerationCapable
+  false, LoadModel validates first); model spec path jail.
+- `internal/native/engine/cpp_integration_test.go` — end-to-end against
+  the real C++ host binary (skips when not built).
+- `internal/api/server_native_test.go` — engine snapshot (default: no
+  native block; native selected: honest unavailable status, backend stays
+  llama), engine toggle behavior unchanged (500 on missing binary exactly
+  as v1.1.4Z).
+
+## Known limitations (Phase 1, by design)
+
+- **No native inference.** Generate/StreamGenerate/LoadModel/ModelInfo
+  return `ErrNotImplemented` on the native backend; every generation
+  request runs on llama.cpp. This is the honest fallback signal — do not
+  "fix" it by faking inference.
+- The native host binary is not shipped or auto-downloaded; it must be
+  built from `native/engine/` (CMake or Make) and placed in
+  `{DataDir}/bin/` (or `nativeEnginePath`).
+- The C++ hardware probe does not enumerate GPUs/accelerators (the Go
+  side merges sysinfo for real GPU facts; the profile fields exist and
+  stay empty until a detector does).
+- The Wails/GTK desktop build still cannot compile in the Linux CI-less
+  environment (pre-existing; Windows CI builds it).
+- llama.cpp watchdog semantics (budget resets after a successful
+  restart) are intentionally UNTOUCHED; the native engine uses a stricter
+  episode policy (auto-restarts never reset the budget — a persistently
+  crashing native host gives up after 3 recoveries).
 
 ---
 

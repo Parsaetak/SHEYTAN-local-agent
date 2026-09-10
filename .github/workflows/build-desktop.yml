@@ -21,7 +21,7 @@ permissions:
 env:
   GO_VERSION: "1.26"
   NODE_VERSION: "24"
-  APP_VERSION: "1.1.4"
+  APP_VERSION: "1.1.5"
   APP_CODENAME: "Zeta"
 
 jobs:
@@ -90,6 +90,22 @@ jobs:
           grep -q '<div id="root"></div>' web/static/index.html
 
           echo "Embedded frontend verification passed."
+
+      # v1.1.5Z Phase 1: the C++ native engine skeleton builds and its
+      # dependency-free test suites pass on the same runner the Go build
+      # uses. Ubuntu-24.04 images ship cmake (>= 3.28) and g++.
+      - name: Native engine (C++) build and tests
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cmake --version
+          cmake -S native/engine -B native/engine/build
+          cmake --build native/engine/build
+          ctest --test-dir native/engine/build --output-on-failure
+
+          test -x native/engine/build/shtn-engine-host
+          echo "Native engine verification passed."
 
   build-windows:
     name: Windows x64

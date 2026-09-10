@@ -56,6 +56,10 @@ Thumbs.db
 # Vite build output (synced into web/static at build time)
 /dist/
 
+# v1.1.5Z: C++ native engine build artifacts (CMake/Make output — the
+# shtn-engine-host binary is a build product, never a source file)
+/native/engine/build/
+
 # Node frontend dependencies (npm install — root only, never commit)
 /node_modules/
 

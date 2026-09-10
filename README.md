@@ -12,7 +12,7 @@ Licensed under the **Parsaetak Proprietary License v1.1** (see `LICENSE`).
 
 ```text
 Application:      SHEYTAN-Local-Agent
-Current release:  v1.1.4Z
+Current release:  v1.1.5Z
 Codename:         Zeta
 Branch:           main
 ```
@@ -46,19 +46,56 @@ The model is never the authority on whether an engineering task succeeded — ob
 ┌─────────────────────────────────────────────┐
 │                 Go Runtime                  │
 │  agent orchestrator · tool registry (17)   │
-│  llama.cpp lifecycle · sandbox governor    │
-│  attachments · chunking · context cache     │
-│  context plan · memory · recall · continuum │
-│  research · sessions · browser · vision     │
-└──────────────────────┬──────────────────────┘
-                       ▼
-┌─────────────────────────────────────────────┐
-│             llama.cpp server                │
-│          local model inference              │
-└─────────────────────────────────────────────┘
+│  engine backend contract · llama.cpp      │
+│  lifecycle · sandbox governor ·           │
+│  attachments · chunking · context cache    │
+│  context plan · memory · recall · continuum│
+│  research · sessions · browser · vision    │
+└──────────┬──────────────────────┬─────────┘
+            │                      │
+            ▼                      ▼
+┌───────────────────┐   ┌───────────────────────────────┐
+│  llama.cpp server │   │  SHEYTAN Native Engine (new)  │
+│  local inference  │   │  C++ core + supervised host   │
+│  (fallback path   │   │  (Phase 1: lifecycle, health, │
+│   and default     │   │  hardware, metrics — NO       │
+│   engine today)   │   │  inference yet)              │
+└───────────────────┘   └───────────────────────────────┘
 ```
 
 Critical execution logic belongs to Go. Presentation and interaction logic belong to React. The production desktop app embeds the built frontend (`web/static/`) via `go:embed` — no separate frontend server is needed.
+
+## SHEYTAN Native AI Engine (v1.1.5Z, Phase 1 — architecture foundation)
+
+v1.1.5Z establishes the **SHEYTAN Native AI Engine architecture**: Go
+remains the main application/runtime engine, and a new C++ native engine
+(`native/engine/`) becomes the future heavy-compute/AI execution engine
+behind a narrow C ABI, supervised by Go as a subprocess
+(`shtn-engine-host`) over a length-prefixed JSON IPC protocol.
+
+**Status — read this literally:**
+
+- **IMPLEMENTED**: the backend abstraction (`internal/llm` `Backend`
+  contract with Start/Stop/Health/LoadModel/UnloadModel/Generate/
+  StreamGenerate/Cancel/ModelInfo/HardwareInfo/Metrics), backend
+  selection with automatic fallback to llama.cpp, the supervised native
+  engine lifecycle (start / health-check / mark ready / stop / detect
+  failure / bounded restart), the platform-neutral hardware profile, the
+  native metrics snapshot, and a buildable C++ skeleton (engine core +
+  host + tests) whose create/destroy/health/hwinfo/metrics functions are
+  real.
+- **NOT implemented (future phases)**: native inference. The native
+  engine's Generate/StreamGenerate/LoadModel return "not implemented" —
+  honestly — and every generation request therefore runs on llama.cpp.
+- **llama.cpp remains fully functional as the fallback** (and the
+  default engine). Nothing about v1.1.4Z runtime behavior changes unless
+  you explicitly opt in via `engineBackend: "native"` in `config.json`
+  (or `SHEYTAN_ENGINE_BACKEND=native`), which additionally requires
+  building the host binary from `native/engine/` with CMake/Make.
+
+The Go↔C++ boundary decision (supervised subprocess + IPC instead of
+cgo) and the full rationale are documented in
+`internal/native/engine/doc.go` and `ARCHITECTURE.md`.
 
 # Major capabilities (all implemented and tested)
 
@@ -91,7 +128,7 @@ Critical execution logic belongs to Go. Presentation and interaction logic belon
 # Installation
 
 ```text
-SHEYTAN-Local-Agent-Windows-x64-v1.1.4Z.zip
+SHEYTAN-Local-Agent-Windows-x64-v1.1.5Z.zip
 └── SHEYTAN-Local-Agent/
     ├── SHEYTAN-Local-Agent.exe   (GUI app + embedded UI + HTTP/WS API)
     ├── sheytan-local-agent.bat   (portable launcher)
@@ -123,6 +160,8 @@ Settings are edited in the UI (`Settings` view) or by patching `config.json` (th
 | Key | Default | Meaning |
 |---|---|---|
 | `provider` | `local` | `local` (managed llama.cpp) or `remote` (OpenAI-compatible endpoint) |
+| `engineBackend` | `llama` | v1.1.5Z: `llama` (default, full engine) or `native` (opt-in: supervised native engine runs alongside; generation still served by llama.cpp until later phases) |
+| `nativeEnginePath` | (auto) | v1.1.5Z: override for the `shtn-engine-host` binary location (default `{dataDir}/bin/`) |
 | `model` | first `.gguf` | active local model |
 | `llamaPort` | 8080 | managed engine port |
 | `llamaAutoStart` | true | prewarm engine at launch |
@@ -195,6 +234,11 @@ npm run typecheck
 npm run lint
 npm run build        # tsc + vite + sync into web/static
 
+# C++ native engine (optional in Phase 1; requires cmake or plain make)
+cmake -S native/engine -B native/engine/build
+cmake --build native/engine/build
+ctest --test-dir native/engine/build   # engine + protocol + host tests
+
 # release stress suite (gate used by CI and build-and-zip.sh)
 go run ./scripts/stress-main stress
 
@@ -251,7 +295,7 @@ yet; the list below is design intent, not shipped capability:
 
 # Version
 
-`v1.1.4Z` — see `worklog.md` for the complete remediation history and `agent.md` for the engineering handoff context.
+`v1.1.5Z` — see `worklog.md` for the complete remediation history and `agent.md` for the engineering handoff context.
 
 # License
 

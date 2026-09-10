@@ -6,72 +6,84 @@
 package runtime
 
 import (
-	"context"
-	"fmt"
-	"net/http"
-	"path/filepath"
-	"sync"
-	"time"
+        "context"
+        "fmt"
+        "net/http"
+        "path/filepath"
+        "sync"
+        "time"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/agent"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/aicontext"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/attachments"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/contextcache"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/lab"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/logging"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/memory"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/multiagent"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/recall"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/research"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/sandbox"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/sessions"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/tools"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/agent"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/aicontext"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/attachments"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/contextcache"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/lab"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/logging"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/memory"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/multiagent"
+        nativeengine "github.com/Parsaetak/SHEYTAN-local-agent/internal/native/engine"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/recall"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/research"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/sandbox"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/sessions"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/tools"
 )
 
 // Stack is the fully-wired agent runtime.
 type Stack struct {
-	// Src is the live, concurrency-safe configuration source shared by
-	// every component that reads config at runtime (client, orchestrator,
-	// engine, API handlers). Values obtained from Load() are immutable.
-	Src *config.Source
+        // Src is the live, concurrency-safe configuration source shared by
+        // every component that reads config at runtime (client, orchestrator,
+        // engine, API handlers). Values obtained from Load() are immutable.
+        Src *config.Source
 
-	// Cfg is the configuration the stack was CONSTRUCTED with (v1.1.4Z:
-	// historical field kept for construction-time consumers; live reads
-	// must go through Src).
-	Cfg     *config.Config
-	Client  *llm.Client
-	Orch    *agent.Orchestrator
-	Multi   *multiagent.MultiAgent
-	Mem     *memory.Store
-	Llama   *llm.LlamaServer
-	Browser *tools.BrowserTool
-	Sandbox *sandbox.CodeExecSandbox
-	Recall  *recall.Engine
+        // Cfg is the configuration the stack was CONSTRUCTED with (v1.1.4Z:
+        // historical field kept for construction-time consumers; live reads
+        // must go through Src).
+        Cfg     *config.Config
+        Client  *llm.Client
+        Orch    *agent.Orchestrator
+        Multi   *multiagent.MultiAgent
+        Mem     *memory.Store
+        Llama   *llm.LlamaServer
+        Browser *tools.BrowserTool
+        Sandbox *sandbox.CodeExecSandbox
+        Recall  *recall.Engine
 
-	// Lab is the autonomous Coding Lab tool.
-	Lab *lab.Tool
+        // Native (v1.1.5Z Phase 1) is the supervised SHEYTAN native engine.
+        // nil unless cfg.EngineBackend == "native" at construction: the
+        // native path is an explicit opt-in, and llama.cpp remains the
+        // engine for generation (native generation is future work).
+        Native *nativeengine.Engine
 
-	// Research is the unified external research service.
-	Research *research.Service
+        // llamaBackend / nativeBackend adapt the engines to the
+        // llm.Backend contract (selection seam).
+        llamaBackend  *llm.LlamaBackend
+        nativeBackend *nativeengine.Backend
 
-	// ResearchTool is the agent-facing research tool backed by Research.
-	ResearchTool *research.Tool
+        // Lab is the autonomous Coding Lab tool.
+        Lab *lab.Tool
 
-	// Attachments is the staged-file store backing real file uploads.
-	Attachments *attachments.Manager
+        // Research is the unified external research service.
+        Research *research.Service
 
-	// Cache is the process-wide content-aware context cache.
-	Cache *contextcache.Cache
+        // ResearchTool is the agent-facing research tool backed by Research.
+        ResearchTool *research.Tool
 
-	// Linux (v1.0.6) is the built-in Linux-like shell used by BOTH the agent
-	// (the `linux` tool) and the Terminal view — one shared instance so the
-	// user sees (and can replay) exactly what the agent did.
-	Linux *tools.LinuxSim
+        // Attachments is the staged-file store backing real file uploads.
+        Attachments *attachments.Manager
 
-	// browserMu guards the lazy BrowserTool cache.
-	browserMu sync.Mutex
+        // Cache is the process-wide content-aware context cache.
+        Cache *contextcache.Cache
+
+        // Linux (v1.0.6) is the built-in Linux-like shell used by BOTH the agent
+        // (the `linux` tool) and the Terminal view — one shared instance so the
+        // user sees (and can replay) exactly what the agent did.
+        Linux *tools.LinuxSim
+
+        // browserMu guards the lazy BrowserTool cache.
+        browserMu sync.Mutex
 }
 
 // NewStack wires every tool into the orchestrator. The sandbox is optional —
@@ -79,493 +91,584 @@ type Stack struct {
 // registered. SandboxEnabled (v1.1.4Z, default true) gates the override: the
 // setting was previously stored but never read — a meaningless toggle.
 func NewStack(cfg *config.Config) *Stack {
-	src := config.NewSource(cfg)
+        src := config.NewSource(cfg)
 
-	client := llm.NewClient(src)
-	orch := agent.New(src, client)
+        client := llm.NewClient(src)
+        orch := agent.New(src, client)
 
-	// v1.1.3Z: content-aware context cache shared by attachments, chunking
-	// pipelines and retrieval.
-	cache := contextcache.New()
+        // v1.1.3Z: content-aware context cache shared by attachments, chunking
+        // pipelines and retrieval.
+        cache := contextcache.New()
 
-	// v1.1.3Z: real attachment staging under the app's private data dir.
-	attMgr, attErr := attachments.NewManager(
-		filepath.Join(cfg.DataDir, "attachments"),
-		attachments.Options{Cache: cache},
-	)
+        // v1.1.3Z: real attachment staging under the app's private data dir.
+        attMgr, attErr := attachments.NewManager(
+                filepath.Join(cfg.DataDir, "attachments"),
+                attachments.Options{Cache: cache},
+        )
 
-	if attErr != nil {
-		logging.Default().Warn(
-			"runtime",
-			"attachment store unavailable: %v",
-			attErr,
-		)
-	}
+        if attErr != nil {
+                logging.Default().Warn(
+                        "runtime",
+                        "attachment store unavailable: %v",
+                        attErr,
+                )
+        }
 
-	// v1.0.1: materialize AI-CONTEXT.md in the app folder.
-	if path, err := aicontext.EnsureFile(
-		cfg.DataDir,
-	); err != nil {
-		logging.Default().Warn(
-			"runtime",
-			"AI context file: %v",
-			err,
-		)
-	} else {
-		logging.Default().Info(
-			"runtime",
-			"AI context file: %s",
-			path,
-		)
-	}
+        // v1.0.1: materialize AI-CONTEXT.md in the app folder.
+        if path, err := aicontext.EnsureFile(
+                cfg.DataDir,
+        ); err != nil {
+                logging.Default().Warn(
+                        "runtime",
+                        "AI context file: %v",
+                        err,
+                )
+        } else {
+                logging.Default().Info(
+                        "runtime",
+                        "AI context file: %s",
+                        path,
+                )
+        }
 
-	// Canonical base dir for every tool.
-	tools.SetBaseDir(cfg.DataDir)
+        // Canonical base dir for every tool.
+        tools.SetBaseDir(cfg.DataDir)
 
-	// Core tools.
-	orch.Register(tools.Shell{})
-	orch.Register(tools.Files{})
-	orch.Register(tools.CodeExec{})
-	orch.Register(tools.WebSearch{})
-	orch.Register(tools.Git{})
-	orch.Register(tools.NewBrowserTool(cfg))
-	orch.Register(tools.NewDataTool(cfg))
+        // Core tools.
+        orch.Register(tools.Shell{})
+        orch.Register(tools.Files{})
+        orch.Register(tools.CodeExec{})
+        orch.Register(tools.WebSearch{})
+        orch.Register(tools.Git{})
+        orch.Register(tools.NewBrowserTool(cfg))
+        orch.Register(tools.NewDataTool(cfg))
 
-	// v1.0.10 (PRISM): structured data, archives, URLs, verification.
-	orch.Register(tools.JSONTool{})
-	orch.Register(tools.ArchiveTool{})
-	orch.Register(tools.NewFetchTool())
-	orch.Register(tools.DiffTool{})
+        // v1.0.10 (PRISM): structured data, archives, URLs, verification.
+        orch.Register(tools.JSONTool{})
+        orch.Register(tools.ArchiveTool{})
+        orch.Register(tools.NewFetchTool())
+        orch.Register(tools.DiffTool{})
 
-	// v1.0.6: vision + terminal.
-	llamaSrv := llm.NewLlamaServer(src)
+        // v1.0.6: vision + terminal.
+        llamaSrv := llm.NewLlamaServer(src)
 
-	orch.Register(tools.Screenshot{})
+        // v1.1.5Z Phase 1: SHEYTAN Native Engine architecture. The native
+        // engine exists ONLY behind the explicit "native" opt-in; the
+        // default ("llama") preserves v1.1.4Z behavior byte-for-byte.
+        // Even when selected, generation still runs on llama.cpp until
+        // the native engine implements it (see Stack.Engine).
+        var nativeEng *nativeengine.Engine
+        var nativeBack *nativeengine.Backend
 
-	linuxSim := tools.NewLinuxSim(
-		cfg.DataDir,
-	)
+        if cfg.NativeBackendEnabled() {
+                hostPath := nativeengine.DefaultHostPath(
+                        cfg.DataDir,
+                        cfg.NativeEnginePath,
+                )
 
-	orch.Register(linuxSim)
+                nativeEng = nativeengine.New(hostPath)
+                nativeBack = nativeengine.NewBackend(nativeEng)
 
-	// Version Zeta: autonomous Coding Lab.
-	var labTool *lab.Tool
+                if !nativeEng.Available() {
+                        logging.Default().Warn(
+                                "runtime",
+                                "native engine selected but host binary not found at %s — build native/engine (CMake) or set nativeEnginePath; llama.cpp remains the engine",
+                                hostPath,
+                        )
+                }
+        }
 
-	if cfg.LabEnabled {
-		var err error
+        llamaBack := llm.NewLlamaBackend(llamaSrv, client)
 
-		labTool, err = lab.NewTool(cfg)
+        orch.Register(tools.Screenshot{})
 
-		if err != nil {
-			logging.Default().Warn(
-				"runtime",
-				"Coding Lab unavailable: %v",
-				err,
-			)
-		} else {
-			orch.Register(labTool)
+        linuxSim := tools.NewLinuxSim(
+                cfg.DataDir,
+        )
 
-			logging.Default().Info(
-				"runtime",
-				"Coding Lab registered: workspace=%s network=%t",
-				cfg.LabWorkspaceRoot,
-				cfg.LabAllowNetwork,
-			)
-		}
-	}
+        orch.Register(linuxSim)
 
-	// Version Zeta: unified external research.
-	var researchService *research.Service
-	var researchTool *research.Tool
+        // Version Zeta: autonomous Coding Lab.
+        var labTool *lab.Tool
 
-	if cfg.ResearchEnabled {
-		researchConfig := research.ServiceConfig{
-			Backend:    cfg.ResearchBackend,
-			MaxResults: cfg.ResearchMaxResults,
-			Timeout: researchTimeout(
-				cfg.ResearchTimeoutSec,
-			),
-		}
+        if cfg.LabEnabled {
+                var err error
 
-		researchService = research.NewService(
-			researchConfig,
-		)
+                labTool, err = lab.NewTool(cfg)
 
-		researchHTTPClient := &http.Client{
-			Timeout: researchTimeout(
-				cfg.ResearchTimeoutSec,
-			),
-		}
+                if err != nil {
+                        logging.Default().Warn(
+                                "runtime",
+                                "Coding Lab unavailable: %v",
+                                err,
+                        )
+                } else {
+                        orch.Register(labTool)
 
-		researchCacheTTL := researchCacheTTL(
-			cfg.ResearchCacheTTLMin,
-		)
+                        logging.Default().Info(
+                                "runtime",
+                                "Coding Lab registered: workspace=%s network=%t",
+                                cfg.LabWorkspaceRoot,
+                                cfg.LabAllowNetwork,
+                        )
+                }
+        }
 
-		if cfg.ResearchGitHub {
-			var githubProvider research.Provider
+        // Version Zeta: unified external research.
+        var researchService *research.Service
+        var researchTool *research.Tool
 
-			githubProvider = research.NewGitHubProvider(
-				researchHTTPClient,
-				"",
-				"",
-			)
+        if cfg.ResearchEnabled {
+                researchConfig := research.ServiceConfig{
+                        Backend:    cfg.ResearchBackend,
+                        MaxResults: cfg.ResearchMaxResults,
+                        Timeout: researchTimeout(
+                                cfg.ResearchTimeoutSec,
+                        ),
+                }
 
-			githubProvider = research.NewCachedProvider(
-				githubProvider,
-				researchCacheTTL,
-			)
+                researchService = research.NewService(
+                        researchConfig,
+                )
 
-			if err := researchService.Register(
-				githubProvider,
-			); err != nil {
-				logging.Default().Warn(
-					"research",
-					"GitHub provider unavailable: %v",
-					err,
-				)
-			} else {
-				logging.Default().Info(
-					"research",
-					"GitHub provider registered",
-				)
-			}
-		}
+                researchHTTPClient := &http.Client{
+                        Timeout: researchTimeout(
+                                cfg.ResearchTimeoutSec,
+                        ),
+                }
 
-		if cfg.ResearchReddit {
-			var redditProvider research.Provider
+                researchCacheTTL := researchCacheTTL(
+                        cfg.ResearchCacheTTLMin,
+                )
 
-			redditProvider = research.NewRedditProvider(
-				researchHTTPClient,
-				"",
-				"",
-				cfg.ResearchUserAgent,
-			)
+                if cfg.ResearchGitHub {
+                        var githubProvider research.Provider
 
-			redditProvider = research.NewCachedProvider(
-				redditProvider,
-				researchCacheTTL,
-			)
+                        githubProvider = research.NewGitHubProvider(
+                                researchHTTPClient,
+                                "",
+                                "",
+                        )
 
-			if err := researchService.Register(
-				redditProvider,
-			); err != nil {
-				logging.Default().Warn(
-					"research",
-					"Reddit provider unavailable: %v",
-					err,
-				)
-			} else {
-				logging.Default().Info(
-					"research",
-					"Reddit provider registered",
-				)
-			}
-		}
+                        githubProvider = research.NewCachedProvider(
+                                githubProvider,
+                                researchCacheTTL,
+                        )
 
-		if cfg.ResearchWeb {
-			var duckDuckGoProvider research.Provider
+                        if err := researchService.Register(
+                                githubProvider,
+                        ); err != nil {
+                                logging.Default().Warn(
+                                        "research",
+                                        "GitHub provider unavailable: %v",
+                                        err,
+                                )
+                        } else {
+                                logging.Default().Info(
+                                        "research",
+                                        "GitHub provider registered",
+                                )
+                        }
+                }
 
-			duckDuckGoProvider =
-				research.NewDuckDuckGoProvider(
-					researchHTTPClient,
-					"",
-				)
+                if cfg.ResearchReddit {
+                        var redditProvider research.Provider
 
-			duckDuckGoProvider = research.NewCachedProvider(
-				duckDuckGoProvider,
-				researchCacheTTL,
-			)
+                        redditProvider = research.NewRedditProvider(
+                                researchHTTPClient,
+                                "",
+                                "",
+                                cfg.ResearchUserAgent,
+                        )
 
-			if err := researchService.Register(
-				duckDuckGoProvider,
-			); err != nil {
-				logging.Default().Warn(
-					"research",
-					"DuckDuckGo provider unavailable: %v",
-					err,
-				)
-			} else {
-				logging.Default().Info(
-					"research",
-					"DuckDuckGo provider registered",
-				)
-			}
-		}
+                        redditProvider = research.NewCachedProvider(
+                                redditProvider,
+                                researchCacheTTL,
+                        )
 
-		if cfg.ResearchSearXNGURL != "" {
-			var searxngProvider research.Provider
+                        if err := researchService.Register(
+                                redditProvider,
+                        ); err != nil {
+                                logging.Default().Warn(
+                                        "research",
+                                        "Reddit provider unavailable: %v",
+                                        err,
+                                )
+                        } else {
+                                logging.Default().Info(
+                                        "research",
+                                        "Reddit provider registered",
+                                )
+                        }
+                }
 
-			searxngProvider =
-				research.NewSearXNGProvider(
-					researchHTTPClient,
-					cfg.ResearchSearXNGURL,
-				)
+                if cfg.ResearchWeb {
+                        var duckDuckGoProvider research.Provider
 
-			searxngProvider = research.NewCachedProvider(
-				searxngProvider,
-				researchCacheTTL,
-			)
+                        duckDuckGoProvider =
+                                research.NewDuckDuckGoProvider(
+                                        researchHTTPClient,
+                                        "",
+                                )
 
-			if err := researchService.Register(
-				searxngProvider,
-			); err != nil {
-				logging.Default().Warn(
-					"research",
-					"SearXNG provider unavailable: %v",
-					err,
-				)
-			} else {
-				logging.Default().Info(
-					"research",
-					"SearXNG provider registered: %s",
-					cfg.ResearchSearXNGURL,
-				)
-			}
-		}
+                        duckDuckGoProvider = research.NewCachedProvider(
+                                duckDuckGoProvider,
+                                researchCacheTTL,
+                        )
 
-		tool, err := research.NewTool(
-			researchService,
-		)
+                        if err := researchService.Register(
+                                duckDuckGoProvider,
+                        ); err != nil {
+                                logging.Default().Warn(
+                                        "research",
+                                        "DuckDuckGo provider unavailable: %v",
+                                        err,
+                                )
+                        } else {
+                                logging.Default().Info(
+                                        "research",
+                                        "DuckDuckGo provider registered",
+                                )
+                        }
+                }
 
-		if err != nil {
-			logging.Default().Warn(
-				"research",
-				"research tool unavailable: %v",
-				err,
-			)
-		} else {
-			researchTool = tool
+                if cfg.ResearchSearXNGURL != "" {
+                        var searxngProvider research.Provider
 
-			orch.Register(researchTool)
+                        searxngProvider =
+                                research.NewSearXNGProvider(
+                                        researchHTTPClient,
+                                        cfg.ResearchSearXNGURL,
+                                )
 
-			logging.Default().Info(
-				"research",
-				"unified research tool registered: backend=%s results=%d timeout=%s cache=%s providers=%v",
-				researchService.Backend(),
-				cfg.ResearchMaxResults,
-				researchTimeout(
-					cfg.ResearchTimeoutSec,
-				),
-				researchCacheTTL,
-				researchService.ProviderNames(),
-			)
-		}
-	}
+                        searxngProvider = research.NewCachedProvider(
+                                searxngProvider,
+                                researchCacheTTL,
+                        )
 
-	// Vision gate: the screenshot tool refuses politely when the engine
-	// cannot see images.
-	tools.VisionCheck = func() error {
-		if cfg.IsRemote() {
-			return fmt.Errorf(
-				"the remote provider does not accept tool-result images — switch to the local engine with an mmproj projector, or attach the image to your message instead",
-			)
-		}
+                        if err := researchService.Register(
+                                searxngProvider,
+                        ); err != nil {
+                                logging.Default().Warn(
+                                        "research",
+                                        "SearXNG provider unavailable: %v",
+                                        err,
+                                )
+                        } else {
+                                logging.Default().Info(
+                                        "research",
+                                        "SearXNG provider registered: %s",
+                                        cfg.ResearchSearXNGURL,
+                                )
+                        }
+                }
 
-		if !llamaSrv.VisionActive() {
-			if !cfg.VisionEnabled {
-				return fmt.Errorf(
-					"vision is disabled in Settings — enable it and add an mmproj-*.gguf projector to the models folder",
-				)
-			}
+                tool, err := research.NewTool(
+                        researchService,
+                )
 
-			return fmt.Errorf(
-				"no multimodal projector paired with the current model — drop a matching mmproj-*.gguf (e.g. mmproj-gemma-4-E2B-it-BF16.gguf) into the models folder and restart the engine",
-			)
-		}
+                if err != nil {
+                        logging.Default().Warn(
+                                "research",
+                                "research tool unavailable: %v",
+                                err,
+                        )
+                } else {
+                        researchTool = tool
 
-		return nil
-	}
+                        orch.Register(researchTool)
 
-	// Memory + persistent recall.
-	mem := memory.New(
-		cfg.DataDir + "/memory.jsonl",
-	)
+                        logging.Default().Info(
+                                "research",
+                                "unified research tool registered: backend=%s results=%d timeout=%s cache=%s providers=%v",
+                                researchService.Backend(),
+                                cfg.ResearchMaxResults,
+                                researchTimeout(
+                                        cfg.ResearchTimeoutSec,
+                                ),
+                                researchCacheTTL,
+                                researchService.ProviderNames(),
+                        )
+                }
+        }
 
-	engine := recall.New(
-		cfg.DataDir,
-	)
+        // Vision gate: the screenshot tool refuses politely when the engine
+        // cannot see images.
+        tools.VisionCheck = func() error {
+                if cfg.IsRemote() {
+                        return fmt.Errorf(
+                                "the remote provider does not accept tool-result images — switch to the local engine with an mmproj projector, or attach the image to your message instead",
+                        )
+                }
 
-	orch.Register(memory.Tool{
-		Store: mem,
-		RecallSearch: func(
-			query string,
-			k int,
-		) []string {
-			var lines []string
+                if !llamaSrv.VisionActive() {
+                        if !cfg.VisionEnabled {
+                                return fmt.Errorf(
+                                        "vision is disabled in Settings — enable it and add an mmproj-*.gguf projector to the models folder",
+                                )
+                        }
 
-			for _, c := range engine.Search(
-				query,
-				k,
-			) {
-				lines = append(
-					lines,
-					formatCapsuleLine(c),
-				)
-			}
+                        return fmt.Errorf(
+                                "no multimodal projector paired with the current model — drop a matching mmproj-*.gguf (e.g. mmproj-gemma-4-E2B-it-BF16.gguf) into the models folder and restart the engine",
+                        )
+                }
 
-			return lines
-		},
-	})
+                return nil
+        }
 
-	if cfg.RecallEnabled {
-		orch.SetRecaller(engine)
+        // Memory + persistent recall.
+        mem := memory.New(
+                cfg.DataDir + "/memory.jsonl",
+        )
 
-		go func() {
-			store := sessions.New(
-				cfg.SessionsDir,
-			)
+        engine := recall.New(
+                cfg.DataDir,
+        )
 
-			if err := engine.Backfill(
-				store,
-			); err != nil {
-				logging.Default().Warn(
-					"recall",
-					"backfill: %v",
-					err,
-				)
-			} else if n := engine.Count(); n > 0 {
-				logging.Default().Info(
-					"recall",
-					"index ready: %d past exchanges",
-					n,
-				)
-			}
-		}()
-	}
+        orch.Register(memory.Tool{
+                Store: mem,
+                RecallSearch: func(
+                        query string,
+                        k int,
+                ) []string {
+                        var lines []string
 
-	// Job-Object sandbox (overrides plain codeExec when available).
-	// v1.1.4Z: the config's sandbox controls actually apply now —
-	// SandboxEnabled gates registration, SandboxMemory/SandboxCPU feed the
-	// governor (previously hardcoded 512 MB / 25% and the settings card did
-	// nothing).
-	var sb *sandbox.CodeExecSandbox
+                        for _, c := range engine.Search(
+                                query,
+                                k,
+                        ) {
+                                lines = append(
+                                        lines,
+                                        formatCapsuleLine(c),
+                                )
+                        }
 
-	if cfg.SandboxEnabled {
-		var sbErr error
+                        return lines
+                },
+        })
 
-		sb, sbErr = sandbox.NewCodeExecSandbox(
-			cfg.EffectiveSandboxMemoryMB(),
-			cfg.EffectiveSandboxCPUPercent(),
-			cfg.SandboxDir(),
-		)
+        if cfg.RecallEnabled {
+                orch.SetRecaller(engine)
 
-		if sbErr == nil {
-			orch.Register(sb)
-		} else {
-			logging.Default().Warn(
-				"runtime",
-				"Job-Object sandbox unavailable, using plain codeExec: %v",
-				sbErr,
-			)
-		}
-	} else {
-		logging.Default().Info(
-			"runtime",
-			"Job-Object sandbox disabled by configuration — plain codeExec in use",
-		)
-	}
+                go func() {
+                        store := sessions.New(
+                                cfg.SessionsDir,
+                        )
 
-	multi := multiagent.NewMultiAgent(
-		client,
-		orch,
-		mem,
-		func() string { return src.Load().EffectiveModel() },
-		cfg.EffectiveMultiAgentDepth(),
-	)
+                        if err := engine.Backfill(
+                                store,
+                        ); err != nil {
+                                logging.Default().Warn(
+                                        "recall",
+                                        "backfill: %v",
+                                        err,
+                                )
+                        } else if n := engine.Count(); n > 0 {
+                                logging.Default().Info(
+                                        "recall",
+                                        "index ready: %d past exchanges",
+                                        n,
+                                )
+                        }
+                }()
+        }
 
-	// v1.1.3Z: inference traffic reports engine busy state to the
-	// authoritative state machine (no-op unless the local engine is
-	// alive, so remote providers are unaffected).
-	client.SetBusyHook(llamaSrv.MarkBusy)
+        // Job-Object sandbox (overrides plain codeExec when available).
+        // v1.1.4Z: the config's sandbox controls actually apply now —
+        // SandboxEnabled gates registration, SandboxMemory/SandboxCPU feed the
+        // governor (previously hardcoded 512 MB / 25% and the settings card did
+        // nothing).
+        var sb *sandbox.CodeExecSandbox
 
-	return &Stack{
-		Src:          src,
-		Cfg:          cfg,
-		Client:       client,
-		Orch:         orch,
-		Multi:        multi,
-		Mem:          mem,
-		Llama:        llamaSrv,
-		Browser:      nil,
-		Sandbox:      sb,
-		Recall:       engine,
-		Lab:          labTool,
-		Research:     researchService,
-		ResearchTool: researchTool,
-		Attachments:  attMgr,
-		Cache:        cache,
-		Linux:        linuxSim,
-	}
+        if cfg.SandboxEnabled {
+                var sbErr error
+
+                sb, sbErr = sandbox.NewCodeExecSandbox(
+                        cfg.EffectiveSandboxMemoryMB(),
+                        cfg.EffectiveSandboxCPUPercent(),
+                        cfg.SandboxDir(),
+                )
+
+                if sbErr == nil {
+                        orch.Register(sb)
+                } else {
+                        logging.Default().Warn(
+                                "runtime",
+                                "Job-Object sandbox unavailable, using plain codeExec: %v",
+                                sbErr,
+                        )
+                }
+        } else {
+                logging.Default().Info(
+                        "runtime",
+                        "Job-Object sandbox disabled by configuration — plain codeExec in use",
+                )
+        }
+
+        multi := multiagent.NewMultiAgent(
+                client,
+                orch,
+                mem,
+                func() string { return src.Load().EffectiveModel() },
+                cfg.EffectiveMultiAgentDepth(),
+        )
+
+        // v1.1.3Z: inference traffic reports engine busy state to the
+        // authoritative state machine (no-op unless the local engine is
+        // alive, so remote providers are unaffected).
+        client.SetBusyHook(llamaSrv.MarkBusy)
+
+        return &Stack{
+                Src:           src,
+                Cfg:           cfg,
+                Client:        client,
+                Orch:          orch,
+                Multi:         multi,
+                Mem:           mem,
+                Llama:         llamaSrv,
+                Native:        nativeEng,
+                llamaBackend:  llamaBack,
+                nativeBackend: nativeBack,
+                Browser:       nil,
+                Sandbox:       sb,
+                Recall:        engine,
+                Lab:           labTool,
+                Research:      researchService,
+                ResearchTool:  researchTool,
+                Attachments:   attMgr,
+                Cache:         cache,
+                Linux:         linuxSim,
+        }
 }
 
 // researchTimeout converts the configuration's seconds value
 // into a safe service/client timeout.
 func researchTimeout(seconds int) time.Duration {
-	if seconds <= 0 {
-		seconds = 20
-	}
+        if seconds <= 0 {
+                seconds = 20
+        }
 
-	return time.Duration(seconds) *
-		time.Second
+        return time.Duration(seconds) *
+                time.Second
 }
 
 // researchCacheTTL converts the configured cache lifetime in minutes.
 // Zero or negative values disable caching.
 func researchCacheTTL(minutes int) time.Duration {
-	if minutes <= 0 {
-		return 0
-	}
+        if minutes <= 0 {
+                return 0
+        }
 
-	return time.Duration(minutes) *
-		time.Minute
+        return time.Duration(minutes) *
+                time.Minute
 }
 
 // formatCapsuleLine renders one recall capsule for the memory
 // tool's history action.
 func formatCapsuleLine(
-	c recall.Capsule,
+        c recall.Capsule,
 ) string {
-	line := c.TS.Format(
-		"2006-01-02",
-	) +
-		" [" +
-		c.SessionID +
-		"]"
+        line := c.TS.Format(
+                "2006-01-02",
+        ) +
+                " [" +
+                c.SessionID +
+                "]"
 
-	if c.Title != "" {
-		line += " " + c.Title
-	}
+        if c.Title != "" {
+                line += " " + c.Title
+        }
 
-	if c.Query != "" {
-		line += "\n  asked: " + c.Query
-	}
+        if c.Query != "" {
+                line += "\n  asked: " + c.Query
+        }
 
-	if c.Answer != "" {
-		line += "\n  outcome: " + c.Answer
-	}
+        if c.Answer != "" {
+                line += "\n  outcome: " + c.Answer
+        }
 
-	return line
+        return line
 }
 
 // BrowserTool returns the shared browser tool registered in the stack.
 // (v1.1.4Z: the lazy cache is mutex-guarded — two concurrent callers could
 // previously race the field write.)
 func (s *Stack) BrowserTool() *tools.BrowserTool {
-	s.browserMu.Lock()
-	defer s.browserMu.Unlock()
+        s.browserMu.Lock()
+        defer s.browserMu.Unlock()
 
-	if s.Browser != nil {
-		return s.Browser
-	}
+        if s.Browser != nil {
+                return s.Browser
+        }
 
-	for _, t := range s.Orch.Tools() {
-		if bt, ok := t.(*tools.BrowserTool); ok {
-			s.Browser = bt
-			return bt
-		}
-	}
+        for _, t := range s.Orch.Tools() {
+                if bt, ok := t.(*tools.BrowserTool); ok {
+                        s.Browser = bt
+                        return bt
+                }
+        }
 
-	return nil
+        return nil
+}
+
+// Engine (v1.1.5Z) returns the backend that must serve a generation
+// request, applying the single selection policy (llm.SelectGenerationBackend):
+// the native engine when the user selected it AND it can actually generate,
+// otherwise the llama.cpp fallback. Phase 1 always resolves to the llama
+// backend (native reports GenerationCapable() == false); the seam exists
+// so Phase 2 flips routing by implementing generation, not by editing
+// call sites.
+func (s *Stack) Engine() llm.Backend {
+        return llm.SelectGenerationBackend(
+                s.Src.Load(),
+                s.nativeBackend,
+                s.llamaBackend,
+        )
+}
+
+// LlamaBackend exposes the llama.cpp backend adapter (contract access for
+// diagnostics and tests).
+func (s *Stack) LlamaBackend() llm.Backend { return s.llamaBackend }
+
+// NativeBackend exposes the native engine backend adapter (nil unless the
+// native path is enabled).
+func (s *Stack) NativeBackend() llm.Backend {
+        if s.nativeBackend == nil {
+                return nil
+        }
+        return s.nativeBackend
+}
+
+// prewarmNative starts the native engine in the background when enabled.
+// Best-effort by design: native engine failures NEVER block or fail the
+// llama.cpp path (Phase 1 fallback contract) — they surface in the native
+// engine state and logs instead.
+func (s *Stack) prewarmNative() {
+        if s.Native == nil {
+                return
+        }
+
+        go func() {
+                ctx, cancel := context.WithTimeout(
+                        context.Background(),
+                        30*time.Second,
+                )
+                defer cancel()
+
+                if err := s.Native.Start(ctx); err != nil {
+                        logging.Default().Warn(
+                                "native-engine",
+                                "native engine did not start (llama.cpp remains the engine): %v",
+                                err,
+                        )
+                        return
+                }
+
+                logging.Default().Info(
+                        "native-engine",
+                        "native engine ready (supervised; generation still served by llama.cpp in Phase 1)",
+                )
+        }()
 }
 
 // EnsureLLM makes sure an LLM backend is reachable and ready:
@@ -577,22 +680,28 @@ func (s *Stack) BrowserTool() *tools.BrowserTool {
 // This is the ONE canonical engine gate: every inference path (desktop,
 // serve, ask) funnels through it.
 func (s *Stack) EnsureLLM() error {
-	if s.Src.Load().IsRemote() {
-		logging.Default().Info(
-			"runtime",
-			"remote provider active: %s (model %s)",
-			remoteBaseURL(s.Src.Load()),
-			s.Src.Load().EffectiveModel(),
-		)
+        if s.Src.Load().IsRemote() {
+                logging.Default().Info(
+                        "runtime",
+                        "remote provider active: %s (model %s)",
+                        remoteBaseURL(s.Src.Load()),
+                        s.Src.Load().EffectiveModel(),
+                )
 
-		return nil
-	}
+                return nil
+        }
 
-	if err := s.Llama.Start(); err != nil {
-		return err
-	}
+        // v1.1.5Z: bring the native engine up too when enabled (best-effort
+        // — never blocks or fails the generation path).
+        if s.Src.Load().NativeBackendEnabled() && s.Native != nil && !s.Native.IsAlive() {
+                s.prewarmNative()
+        }
 
-	return nil
+        if err := s.Llama.Start(); err != nil {
+                return err
+        }
+
+        return nil
 }
 
 // PrewarmLLM boots the local engine in the background so a freshly
@@ -602,34 +711,38 @@ func (s *Stack) EnsureLLM() error {
 // because the user may only be browsing settings; a later explicit start
 // or the first message retries through EnsureLLM.
 func (s *Stack) PrewarmLLM() {
-	if s.Src.Load().IsRemote() {
-		logging.Default().Info(
-			"runtime",
-			"remote provider active: %s (model %s) — local engine not started",
-			remoteBaseURL(s.Src.Load()),
-			s.Src.Load().EffectiveModel(),
-		)
+        if s.Src.Load().IsRemote() {
+                logging.Default().Info(
+                        "runtime",
+                        "remote provider active: %s (model %s) — local engine not started",
+                        remoteBaseURL(s.Src.Load()),
+                        s.Src.Load().EffectiveModel(),
+                )
 
-		return
-	}
+                return
+        }
 
-	go func() {
-		if err := s.Llama.Start(); err != nil {
-			logging.Default().Warn(
-				"engine",
-				"automatic startup failed (the agent will retry on first use): %v",
-				err,
-			)
+        // v1.1.5Z: supervised native engine (opt-in) — started alongside,
+        // never fatal.
+        s.prewarmNative()
 
-			return
-		}
+        go func() {
+                if err := s.Llama.Start(); err != nil {
+                        logging.Default().Warn(
+                                "engine",
+                                "automatic startup failed (the agent will retry on first use): %v",
+                                err,
+                        )
 
-		logging.Default().Info(
-			"engine",
-			"local engine ready automatically (model %s)",
-			s.Src.Load().EffectiveModel(),
-		)
-	}()
+                        return
+                }
+
+                logging.Default().Info(
+                        "engine",
+                        "local engine ready automatically (model %s)",
+                        s.Src.Load().EffectiveModel(),
+                )
+        }()
 }
 
 // EnsureLLMContext is EnsureLLM with a deadline: the run path uses it so a
@@ -637,48 +750,59 @@ func (s *Stack) PrewarmLLM() {
 // ready within the timeout or the request fails with a clear, visible
 // error while the startup keeps progressing in the background.
 func (s *Stack) EnsureLLMContext(ctx context.Context) error {
-	if s.Src.Load().IsRemote() {
-		return nil
-	}
+        if s.Src.Load().IsRemote() {
+                return nil
+        }
 
-	if s.Llama.IsRunning() {
-		return nil
-	}
+        if s.Llama.IsRunning() {
+                return nil
+        }
 
-	errCh := make(chan error, 1)
+        errCh := make(chan error, 1)
 
-	go func() {
-		errCh <- s.Llama.Start()
-	}()
+        go func() {
+                errCh <- s.Llama.Start()
+        }()
 
-	select {
-	case err := <-errCh:
-		return err
-	case <-ctx.Done():
-		return fmt.Errorf(
-			"engine startup still in progress: %w",
-			ctx.Err(),
-		)
-	}
+        select {
+        case err := <-errCh:
+                return err
+        case <-ctx.Done():
+                return fmt.Errorf(
+                        "engine startup still in progress: %w",
+                        ctx.Err(),
+                )
+        }
 }
 
 // remoteBaseURL renders the remote endpoint for logs (empty-safe).
 func remoteBaseURL(cfg *config.Config) string {
-	if cfg.RemoteBaseURL == "" {
-		return "(unset)"
-	}
-	return cfg.RemoteBaseURL
+        if cfg.RemoteBaseURL == "" {
+                return "(unset)"
+        }
+        return cfg.RemoteBaseURL
 }
 
 // Close tears down every owned subprocess/handle.
 func (s *Stack) Close() {
-	if s.BrowserTool() != nil {
-		s.BrowserTool().Close()
-	}
+        if s.BrowserTool() != nil {
+                s.BrowserTool().Close()
+        }
 
-	if s.Sandbox != nil {
-		_ = s.Sandbox.Close()
-	}
+        if s.Sandbox != nil {
+                _ = s.Sandbox.Close()
+        }
 
-	_ = s.Llama.Stop()
+        // v1.1.5Z: stop the native engine FIRST (bounded) so its teardown
+        // never waits behind the llama.cpp stop.
+        if s.Native != nil {
+                stopCtx, cancel := context.WithTimeout(
+                        context.Background(),
+                        10*time.Second,
+                )
+                _ = s.Native.Stop(stopCtx)
+                cancel()
+        }
+
+        _ = s.Llama.Stop()
 }

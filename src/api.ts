@@ -408,6 +408,14 @@ export interface EngineSnapshot {
   pid?: number;
   vision: boolean;
   provider: string;
+  // v1.1.5Z: the backend that serves generation ("llama" in Phase 1 —
+  // the native engine reports generation-incapable and selection falls
+  // back). Informational; the badge keeps reading `state`.
+  backend: string;
+  // v1.1.5Z: supervised native engine status when the native path is
+  // enabled (engineBackend: "native"). Absent by default. Local status
+  // reads only — the poll never performs engine IPC.
+  native?: NativeEngineStatus;
   logs?: string[];
   cacheStats?: {
     entries: number;
@@ -419,6 +427,20 @@ export interface EngineSnapshot {
     hitRatio: number;
   };
   timestamp: string;
+}
+
+// v1.1.5Z Phase 1: native engine status block. The state vocabulary is
+// the same engine state union above; the UI badge must keep following
+// the llama.cpp snapshot state until the native engine serves generation.
+export interface NativeEngineStatus {
+  selected: boolean;
+  available: boolean;
+  path?: string;
+  state: EngineState;
+  detail?: string;
+  pid?: number;
+  uptimeSeconds?: number;
+  restarts?: number;
 }
 
 // v1.1.3Z: staged attachment metadata returned by the backend.
