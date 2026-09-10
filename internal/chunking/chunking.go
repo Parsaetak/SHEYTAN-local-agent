@@ -140,28 +140,28 @@ func IsKnownTextExt(path string) bool {
 
 // SplitParagraphs splits text into chunks of at most maxBytes bytes each,
 // breaking on blank lines first, then on single newlines, then hard-splitting
-// any line longer than maxBytes. Returns nil for empty input. Chunks keep
+// any run longer than maxBytes. Returns nil for empty input. Chunks keep
 // their trailing newline so re-joining is lossless.
+//
+// v1.1.5Z Phase 3: the split runs as one interval pass shared with
+// ChunkText (no rescanning, chunk strings share the source backing array,
+// hard splits are UTF-8-rune-aligned). With no multi-byte runes the cut
+// points are byte-identical to the pre-Phase-3 primitive.
 func SplitParagraphs(text string, maxBytes int) []string {
-	if maxBytes < 64 {
-		maxBytes = 64
-	}
 	if text == "" {
 		return nil
 	}
-	var out []string
-	rest := text
-	for len(rest) > maxBytes {
-		cut := boundary(rest, maxBytes)
-		if cut <= 0 {
-			cut = maxBytes
-		}
-		out = append(out, rest[:cut])
-		rest = rest[cut:]
+
+	intervals := chunkIntervals(text, ChunkerConfig{MaxBytes: maxBytes})
+	if len(intervals) == 0 {
+		return nil
 	}
-	if rest != "" {
-		out = append(out, rest)
+
+	out := make([]string, 0, len(intervals))
+	for _, iv := range intervals {
+		out = append(out, text[iv[0]:iv[1]])
 	}
+
 	return out
 }
 

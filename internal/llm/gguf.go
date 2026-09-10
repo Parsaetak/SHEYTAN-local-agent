@@ -12,6 +12,7 @@ package llm
 // Format reference: https://github.com/ggml-org/ggml/blob/master/docs/gguf.md
 
 import (
+	"bufio"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -167,7 +168,11 @@ func ReadModelCard(path string) (*ModelCard, error) {
 	if err != nil {
 		return nil, err
 	}
-	r := io.LimitReader(f, 8<<20) // metadata lives at the head; 8MB is generous
+	// v1.1.5Z Phase 3: the metadata read is BUFFERED. Skipping a tokenizer
+	// array used to issue one unbuffered CopyN syscall per vocab string
+	// (up to ~150k syscalls for a single header); a 64 KiB bufio window
+	// reduces that to a handful of reads. Parsing semantics unchanged.
+	r := bufio.NewReaderSize(io.LimitReader(f, 8<<20), 64<<10) // metadata lives at the head; 8MB is generous
 
 	// magic
 	var magic [4]byte

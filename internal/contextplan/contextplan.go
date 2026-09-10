@@ -104,6 +104,12 @@ type Plan struct {
 
 	// Attachments counts attachments represented in the prompt.
 	Attachments int `json:"attachments,omitempty"`
+
+	// PromptBytes is the MEASURED size of the final prompt content in
+	// bytes (sum of message content + tool-call arguments). Phase 3
+	// instrumentation: a real measurement, set after assembly — never an
+	// estimate.
+	PromptBytes int64 `json:"promptBytes,omitempty"`
 }
 
 // SetSectionTokens overrides the measured token count of one section
@@ -116,6 +122,12 @@ func (p *Plan) SetSectionTokens(name string, tokens int) {
 			return
 		}
 	}
+}
+
+// SetPromptBytes records the measured final prompt size (Phase 3
+// instrumentation; measured values only).
+func (p *Plan) SetPromptBytes(b int64) {
+	p.PromptBytes = b
 }
 
 // TotalTokens sums the measured sections.

@@ -34,7 +34,11 @@ import (
 // Version is the global processing version baked into every key the
 // helpers build. Bump it when the processing pipeline changes shape so
 // stale entries can never be served to new code.
-const Version = 3
+//
+// v4 (v1.1.5Z Phase 3): chunk derivation moved to the shared chunking
+// engine (chunk metadata + byte-range addressing changed shape) and the
+// cache gained single-flight coalescing plus an oversized-entry guard.
+const Version = 4
 
 // entry is one cached value.
 type entry struct {
@@ -48,8 +52,9 @@ type entry struct {
 type Cache struct {
 	mu sync.Mutex
 
-	maxEntries int
-	maxBytes   int64
+	maxEntries    int
+	maxBytes      int64
+	maxEntryBytes int64 // 0 = unlimited (bound is maxBytes)
 
 	ll    *list.List               // front = most recent
 	items map[string]*list.Element // key -> element holding *entry
@@ -57,8 +62,38 @@ type Cache struct {
 	hits      uint64
 	misses    uint64
 	evictions uint64
+	inserts   uint64 // successful Put of a NEW key (updates don't count)
+	oversized uint64 // Put rejected: single entry above maxEntryBytes
+	coalesced uint64 // GetOrCompute waiters that joined an in-flight compute
 
 	bytes int64
+
+	// inflight tracks duplicate-computation coalescing. The map holds a
+	// *inflightCall only while a compute is running OUTSIDE mu — waiters
+	// block on the call, never on the cache mutex, so expensive work never
+	// serializes behind the lock.
+	inflight map[string]*inflightCall
+}
+
+// inflightCall is one in-flight GetOrCompute computation. value/panicked
+// are written before wg.Done() and read only after wg.Wait(), which gives
+// joiners a happens-before guarantee without touching the cache mutex.
+type inflightCall struct {
+	wg       sync.WaitGroup
+	value    any
+	panicked any // propagated panic value, if the compute panicked
+}
+
+// runCompute runs compute(), converting a panic into a shared value so the
+// in-flight slot can always be released and joiners never deadlock.
+func runCompute[T any](compute func() T) (value T, panicked any) {
+	defer func() {
+		if r := recover(); r != nil {
+			var zero T
+			value, panicked = zero, r
+		}
+	}()
+	return compute(), nil
 }
 
 // Option configures a Cache at construction time.
@@ -82,6 +117,19 @@ func WithMaxBytes(n int64) Option {
 	}
 }
 
+// WithMaxEntryBytes rejects any single Put whose tracked size exceeds n.
+// Without it a value larger than maxBytes would still be stored (the
+// eviction loop keeps at least one entry), letting one oversized value pin
+// the cache above its byte bound forever. Default: 0 = unlimited (the
+// total-bytes bound applies).
+func WithMaxEntryBytes(n int64) Option {
+	return func(c *Cache) {
+		if n > 0 {
+			c.maxEntryBytes = n
+		}
+	}
+}
+
 // New returns a Cache with the given options.
 func New(opts ...Option) *Cache {
 	c := &Cache{
@@ -89,6 +137,7 @@ func New(opts ...Option) *Cache {
 		maxBytes:   256 << 20,
 		ll:         list.New(),
 		items:      make(map[string]*list.Element),
+		inflight:   make(map[string]*inflightCall),
 	}
 
 	for _, opt := range opts {
@@ -153,7 +202,10 @@ func (c *Cache) Get(key string) (any, bool) {
 // Put stores value under key with an optional TTL (ttl <= 0 = no expiry).
 // The size hint lets the bounds track heterogeneous values; callers that
 // cannot estimate cheaply may pass 0 (then only the entry count applies).
-func (c *Cache) Put(key string, value any, sizeHint int64, ttl time.Duration) {
+// Returns false when the entry was REJECTED — today that only happens when
+// the tracked size exceeds the max-entry bound. Callers may ignore the
+// result; rejection is also visible in Stats.OversizedRejected.
+func (c *Cache) Put(key string, value any, sizeHint int64, ttl time.Duration) bool {
 	if sizeHint < 0 {
 		sizeHint = 0
 	}
@@ -167,6 +219,14 @@ func (c *Cache) Put(key string, value any, sizeHint int64, ttl time.Duration) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	// Oversized-entry guard: a single entry above the per-entry bound is
+	// refused outright instead of being stored and then permanently pinning
+	// the cache above its byte bound (eviction always keeps one entry).
+	if c.maxEntryBytes > 0 && sizeHint > c.maxEntryBytes {
+		c.oversized++
+		return false
+	}
+
 	if el, ok := c.items[key]; ok {
 		e := el.Value.(*entry)
 		c.bytes -= e.bytes
@@ -176,7 +236,7 @@ func (c *Cache) Put(key string, value any, sizeHint int64, ttl time.Duration) {
 		c.bytes += sizeHint
 		c.ll.MoveToFront(el)
 		c.evictLocked()
-		return
+		return true
 	}
 
 	e := &entry{
@@ -188,7 +248,144 @@ func (c *Cache) Put(key string, value any, sizeHint int64, ttl time.Duration) {
 
 	c.items[key] = c.ll.PushFront(e)
 	c.bytes += sizeHint
+	c.inserts++
 	c.evictLocked()
+	return true
+}
+
+// GetOrCompute returns the cached value for key, computing it exactly once
+// even when several goroutines race on the same key (single-flight
+// coalescing). The FIRST caller runs compute OUTSIDE the cache mutex —
+// expensive work never blocks other cache users — and the result is stored
+// and shared with concurrent callers of the same key. Coalesced joins are
+// counted in Stats.Coalesced.
+//
+// sizeHint measures the computed value for the byte bound (may be nil = 0).
+// compute must be deterministic, must not call back into the same cache key
+// (it runs without the lock, so re-entrance on OTHER keys is safe), and its
+// result must be reproducible from inputs alone — the cache is never a
+// source of truth.
+//
+// The T-typed form keeps call sites allocation-light: callers no longer
+// need a separate Get type assertion round-trip.
+func GetOrCompute[T any](
+	c *Cache,
+	key string,
+	ttl time.Duration,
+	sizeHint func(T) int64,
+	compute func() T,
+) (T, bool) {
+	// Fast path: hit under one short lock.
+	if v, ok := c.Get(key); ok {
+		if tv, ok := v.(T); ok {
+			return tv, true
+		}
+		// Wrong type means a different pipeline generation used the key —
+		// treat as a miss and recompute (version invalidation handles the
+		// common case; this is belt-and-braces).
+		c.Invalidate(key)
+	}
+
+	// Claim the in-flight slot for this key.
+	c.mu.Lock()
+
+	if call, ok := c.inflight[key]; ok {
+		// Someone is already computing: join them instead of duplicating
+		// the work. The WaitGroup guarantees the result is visible.
+		c.coalesced++
+		c.mu.Unlock()
+
+		call.wg.Wait()
+
+		if call.panicked != nil {
+			panic(call.panicked) // propagate the compute failure to joiners
+		}
+
+		if tv, ok := call.value.(T); ok {
+			return tv, true
+		}
+
+		var zero T
+		return zero, false
+	}
+
+	call := &inflightCall{}
+	call.wg.Add(1)
+	c.inflight[key] = call
+	c.mu.Unlock()
+
+	// Compute with NO lock held. Every path below releases the in-flight
+	// slot before returning so joiners can never deadlock.
+	value, panicked := runCompute(compute)
+
+	var size int64
+	if panicked == nil && sizeHint != nil {
+		size = sizeHint(value)
+		if size < 0 {
+			size = 0
+		}
+	}
+
+	c.mu.Lock()
+	if panicked == nil {
+		c.putLocked(key, value, size, ttl)
+	}
+	delete(c.inflight, key)
+	c.mu.Unlock()
+
+	if panicked != nil {
+		call.panicked = panicked
+		call.wg.Done()
+		panic(panicked) // owner re-panics like a normal panic
+	}
+
+	call.value = value
+	call.wg.Done()
+
+	return value, true
+}
+
+// putLocked is Put without locking; caller holds mu.
+func (c *Cache) putLocked(key string, value any, sizeHint int64, ttl time.Duration) bool {
+	if sizeHint < 0 {
+		sizeHint = 0
+	}
+
+	var expiresAt time.Time
+
+	if ttl > 0 {
+		expiresAt = time.Now().Add(ttl)
+	}
+
+	if c.maxEntryBytes > 0 && sizeHint > c.maxEntryBytes {
+		c.oversized++
+		return false
+	}
+
+	if el, ok := c.items[key]; ok {
+		e := el.Value.(*entry)
+		c.bytes -= e.bytes
+		e.value = value
+		e.bytes = sizeHint
+		e.expiresAt = expiresAt
+		c.bytes += sizeHint
+		c.ll.MoveToFront(el)
+		c.evictLocked()
+		return true
+	}
+
+	e := &entry{
+		key:       key,
+		value:     value,
+		bytes:     sizeHint,
+		expiresAt: expiresAt,
+	}
+
+	c.items[key] = c.ll.PushFront(e)
+	c.bytes += sizeHint
+	c.inserts++
+	c.evictLocked()
+	return true
 }
 
 // Invalidate drops one key. Returns whether it existed.
@@ -246,6 +443,9 @@ type Stats struct {
 	Hits      uint64  `json:"hits"`
 	Misses    uint64  `json:"misses"`
 	Evictions uint64  `json:"evictions"`
+	Inserts   uint64  `json:"inserts"`
+	Coalesced uint64  `json:"coalesced"` // GetOrCompute duplicate-compute joins
+	Oversized uint64  `json:"oversizedRejected"`
 	HitRatio  float64 `json:"hitRatio"`
 }
 
@@ -261,6 +461,9 @@ func (c *Cache) Stats() Stats {
 		Hits:      c.hits,
 		Misses:    c.misses,
 		Evictions: c.evictions,
+		Inserts:   c.inserts,
+		Coalesced: c.coalesced,
+		Oversized: c.oversized,
 	}
 
 	if total := s.Hits + s.Misses; total > 0 {
@@ -317,7 +520,8 @@ func (c *Cache) evictOldestLocked() {
 // String renders a compact human-readable summary for logs.
 func (s Stats) String() string {
 	return fmt.Sprintf(
-		"entries=%d bytes=%d hits=%d misses=%d evictions=%d hitRatio=%.2f",
-		s.Entries, s.Bytes, s.Hits, s.Misses, s.Evictions, s.HitRatio,
+		"entries=%d bytes=%d hits=%d misses=%d evictions=%d inserts=%d coalesced=%d oversized=%d hitRatio=%.2f",
+		s.Entries, s.Bytes, s.Hits, s.Misses, s.Evictions, s.Inserts,
+		s.Coalesced, s.Oversized, s.HitRatio,
 	)
 }

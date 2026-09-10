@@ -1,193 +1,183 @@
-SHEYTAN-Local-Agent — v1.1.5Z Phase 2 Replacement Package
+SHEYTAN-Local-Agent — v1.1.5Z Phase 3 Replacement Package
 =========================================================
 
 Contents
 --------
 This package contains EVERY new and modified repository file required to
-replace the v1.1.5Z Phase 1 repository state with v1.1.5Z Phase 2, at
+replace the v1.1.5Z Phase 2 repository state with v1.1.5Z Phase 3, at
 repository-relative paths. No deleted files exist in this release. To
-apply: unzip over a v1.1.5Z Phase 1 checkout (or clean clone at the base
+apply: unzip over a v1.1.5Z Phase 2 checkout (or clean clone at the base
 commit), overwriting files; then run the verification commands below.
 
 Summary
 -------
 Version:            1.1.5 (codename Zeta) — "v1.1.5Z" (unchanged — this
                     phase does NOT create a new release number)
-Base commit:        f4488d5f621c1b9af387b8ab4d1bae709011b17d (v1.1.5Z-phase1)
-Target:             SHEYTAN Native AI Engine Phase 2 — native GGUF model
-                    loading (metadata, validation, memory planning,
-                    ModelInfo) — generation stays on llama.cpp
+Base commit:        dc4172c (v1.1.5Z-phase2)
+Target:             Local data pipeline + memory efficiency — unified
+                    loading, shared chunk engine, single-flight cache,
+                    streaming attachment staging, append-aware memory
+                    cache, allocation-free recall scoring, measured
+                    instrumentation, bounded resource policy
 
-Native loader status (do not overstate):
-  Native engine lifecycle            = implemented (Phase 1)
-  Native GGUF loading                = implemented/tested
-  Native metadata                    = implemented/tested
-  Native memory planning             = implemented/tested
-  Native generation                  = NOT implemented yet
-  llama.cpp                          = current generation backend
+What changed (honest scope)
+---------------------------
+Structural improvements (all verified by the suites below):
 
-Protocol / ABI
---------------
-Protocol v1 → v2, ABI v1 → v2, bumped TOGETHER on both sides
-(native/engine/include/shtn/version.h and
-internal/native/engine/{protocol,backend}.go). The handshake still fails
-closed on mismatch. The Go↔C++ boundary (supervised shtn-engine-host +
-versioned length-prefixed JSON IPC) is UNCHANGED — the change is purely
-additive:
+  1. Unified loading pipeline. One owner per stage:
+     Source/Input → Loader → Normalizer → Chunker → Cache → Retriever →
+     Context Builder. The legacy attachments writeObjectAtomic /
+     buildChunks paths were removed after their last callers moved to
+     the shared flow. No duplicate loaders remain.
 
-  - wire ops: load_model (payload {"path","contextLength"?}),
-    unload_model, model_info;
-  - C ABI: shtn_engine_load_model / shtn_engine_unload_model /
-    shtn_engine_model_info / shtn_engine_memory_plan; new fixed-size
-    structs shtn_model_load_options / shtn_model_info /
-    shtn_memory_plan; error codes APPENDED (never renumbered):
-    SHTN_ERR_MODEL_FORMAT / SHTN_ERR_MODEL_STATE / SHTN_ERR_NO_MODEL;
-  - pre-existing ops (ping/health/hwinfo/metrics/cancel/shutdown) kept
-    their exact wire shapes (metrics gained one additive
-    "modelState" field).
+  2. Chunk engine (internal/chunking/chunker.go, processing version v2).
+     ChunkText: single interval pass (no rescanning, no repeated
+     copying), exact byte offsets recorded during the pass, configurable
+     overlap (rune-aligned, progress-guaranteed) and max-chunk count
+     without unbounded memory, UTF-8-rune-aligned hard splits,
+     deterministic chunk IDs from source content hash + processing
+     parameters + chunk content hash, full metadata per chunk (source
+     identity, byte range, estimated tokens, sequence index, total
+     chunks, processing version, preview). SplitParagraphs keeps its
+     public behaviour; with ASCII input its cuts are byte-identical to
+     the pre-Phase-3 algorithm (equivalence test pinned). Lossless
+     reconstruction preserved for Overlap=0.
 
-New files (9)
--------------
-  internal/native/engine/model_test.go
-  native/engine/src/gguf.cpp
-  native/engine/src/gguf.h
-  native/engine/src/model.cpp
-  native/engine/src/model.h
-  native/engine/src/util.h
-  native/engine/tests/gguf_writer.h
-  native/engine/tests/test_gguf.cpp
-  native/engine/tests/test_model.cpp
+  3. Cache as a data-layer primitive (internal/contextcache, processing
+     version v4). GetOrCompute[T] single-flight coalescing (compute
+     outside the mutex, joiners share the result, panics propagate
+     without wedging the slot); oversized-entry guard — Put now returns
+     bool and rejects a single entry above the per-entry bound instead
+     of pinning the cache above its byte bound; exact insert
+     accounting; new measured counters (inserts, coalesced,
+     oversizedRejected). Content keys, version invalidation, config
+     fingerprints, LRU and both bounds unchanged.
 
-Changed files (29, v1.1.5Z-phase1 → v1.1.5Z-phase2)
----------------------------------------------------
+  4. Attachment loading (internal/attachments). Streaming staging:
+     Add spools to a temp object while hashing and keeps only a
+     16 KiB sniff head + one pooled 128 KiB buffer in RAM — binaries
+     and images are never fully buffered; oversize/empty rejects happen
+     during the copy and never touch the object store. Retrieval: each
+     attachment's object is read AT MOST ONCE per call (verified by
+     test); objects above the 32 MiB per-call retention cap degrade to
+     exact byte-range reads. NormalizeText zero-copy fast path.
+     Measured resource counters (ResourceUsage). Caps, content
+     addressing, symlink refusal, dedupe, provenance and error strings
+     unchanged.
+
+  5. Context construction instrumentation. contextplan.Plan gained
+     measured PromptBytes; the orchestrator logs a context-metrics line
+     per turn (bytes, tokens, pressure, elided, recalled, attachments);
+     the API server logs measured retrieval stats per turn
+     (attachments considered, chunks considered/selected, bytes,
+     object reads, cache hit). Wire/UI contracts unchanged (additive
+     JSON fields only).
+
+  6. Persistent memory (internal/memory). Append-aware parsed cache:
+     appends, deletes and clears fold into the cache and refresh the
+     stat key — remember→recall cycles no longer re-parse the file
+     (tests assert ZERO full re-parses after warmup). Search scores the
+     cached entries read-only and copies only matches. Trust rules
+     untouched: M1–M7, quarantine, external downgrade and
+     authoritative-user-fact logic are the same code paths, re-verified
+     by the full trust test suite.
+
+  7. Other loading paths. llm.ReadModelCard reads through a 64 KiB
+     buffered window (skipping a tokenizer array used to issue one
+     unbuffered syscall per string); the API model-card cache is keyed
+     by path+size+mtime and bounded (512 entries).
+
+  8. Concurrency. No new goroutines. The only new primitive is the
+     cache in-flight map (mutex + WaitGroup; compute runs without the
+     lock). Full race suite passes (see verification).
+
+Measured benchmark results (same inputs, 2-vCPU Linux container,
+Go 1.27.1, median of 5 runs; before = pre-Phase-3 algorithm on the
+base commit, after = this package):
+
+  chunk derivation (512×4 KiB chunks of a 5.5 MB source):
+    before 5.77 ms/op · 10.91 MB/op · 4880 allocs/op
+    after  3.64 ms/op ·  2.46 MB/op · 4880 allocs/op
+    → 1.6× faster, 4.4× fewer bytes allocated
+  memory.Search (5000-entry store):
+    before 7.40 ms/op · 7.67 MB/op · 172 allocs/op
+    after  3.24 ms/op · 1.53 MB/op ·  90 allocs/op
+    → 2.3× faster, 5× fewer bytes
+  recall.Search (5000-capsule corpus):
+    before 4.78 ms/op · 5.46 MB/op · 15160 allocs/op
+    after  2.37 ms/op · 3.17 MB/op ·   124 allocs/op
+    → 2.0× faster, 122× fewer allocations
+  contextcache hit path: 20.9 ns/op, 0 allocs/op
+
+Structural wins not visible in micro-benchmarks: per-retrieval object
+reads drop from N(selected chunks) to ≤1 per attachment; binary/image
+staging peak RAM drops from the full file size (≤64 MiB) to ≤16 KiB +
+one copy buffer; remember→recall no longer re-parses the memory file.
+
+Remaining bottlenecks (documented, not hidden): retrieval scoring still
+ranks on chunk previews (deliberate v1.1.3Z design); the sha256 of each
+chunk dominates the remaining chunking cost (content identity requires
+it); the memory store still stats the file on every read by design
+(cross-writer correctness).
+
+Explicit non-goals (NOT in this phase)
+--------------------------------------
+  Native token generation / GPU inference / NPU inference  = NOT implemented
+  Scheduler / continuous batching                          = NOT implemented
+  Multi-agent redesign                                     = NOT implemented
+  Android port / major UI redesign                         = NOT implemented
+  Model-tier routing                                       = NOT implemented
+  Semantic or structural repository retrieval / embeddings = NOT implemented
+
+llama.cpp remains the working generation backend. Native GGUF loading
+from Phase 2 continues to work exactly as before (its real-host
+integration tests pass unchanged). All existing security controls and
+resource bounds remain intact.
+
+Files in this package (19)
+--------------------------
+Modified:
   ARCHITECTURE.md
-  README.md
-  REPLACEMENT-MANIFEST.txt
-  REPLACEMENT-SHA256.txt
   agent.md
-  internal/llm/backend.go
-  internal/llm/gguf.go
-  internal/native/engine/backend.go
-  internal/native/engine/cpp_integration_test.go
-  internal/native/engine/doc.go
-  internal/native/engine/engine_test.go
-  internal/native/engine/model.go
-  internal/native/engine/platform.go
-  internal/native/engine/protocol.go
-  internal/native/engine/runtime.go
-  internal/native/engine/scheduler.go
-  native/engine/CMakeLists.txt
-  native/engine/Makefile
-  native/engine/README.md
-  native/engine/include/shtn/engine.h
-  native/engine/include/shtn/types.h
-  native/engine/include/shtn/version.h
-  native/engine/src/engine.cpp
-  native/engine/src/host_main.cpp
-  native/engine/src/json.cpp
-  native/engine/src/json.h
-  native/engine/tests/test_engine.cpp
-  native/engine/tests/test_host.cpp
   worklog.md
+  internal/agent/orchestrator.go
+  internal/api/server.go
+  internal/attachments/attachments.go
+  internal/chunking/chunking.go
+  internal/contextcache/contextcache.go
+  internal/contextplan/contextplan.go
+  internal/llm/gguf.go
+  internal/memory/memory.go
+  internal/recall/recall.go
+New:
+  internal/attachments/attachments_phase3_test.go
+  internal/chunking/bench_compare_test.go
+  internal/chunking/chunker.go
+  internal/chunking/chunker_test.go
+  internal/contextcache/contextcache_phase3_test.go
+  internal/memory/memory_phase3_test.go
+  internal/recall/recall_phase3_test.go
 
-Deleted files: none.
+Verification performed on the package state (all executed, all PASS)
+--------------------------------------------------------------------
+  go build -tags headless ./...                                  PASS
+  go vet -tags headless ./...                                    PASS
+  go test -tags headless ./internal/... -count=1                 PASS (all 22 test packages)
+  go test -race -tags headless ./internal/agent/ ./internal/llm/
+         ./internal/api/ ./internal/native/engine/
+         ./internal/contextcache/ ./internal/memory/
+         ./internal/attachments/ ./internal/recall/              PASS
+  npm run typecheck                                              PASS
+  npm run lint                                                   PASS (0 warnings, 0 errors)
+  npm run build                                                  PASS
+  go run ./scripts/stress-main stress                            30 pass / 0 fail
+  node scripts/release-version.mjs --check                       PASS
+  cmake -S native/engine -B native/engine/build                  PASS
+  cmake --build native/engine/build                              PASS
+  ctest --test-dir native/engine/build                           5/5 PASS (engine, protocol, host, gguf, model)
+  go test -tags headless ./internal/native/engine/
+    -run 'TestRealCppHostEndToEnd|TestRealCppHostModelLifecycle' PASS (real shtn-engine-host binary)
 
-Build commands
---------------
-  # C++ native engine (CMake preferred)
-  cmake -S native/engine -B native/engine/build
-  cmake --build native/engine/build
-  ctest --test-dir native/engine/build
-
-  # C++ native engine (plain make alternative)
-  make -C native/engine && make -C native/engine test
-
-  # Go
-  go build -tags headless ./...
-  go vet -tags headless ./...
-  go test -tags headless ./internal/... -count=1
-  go test -race -tags headless ./internal/agent/ ./internal/llm/ \
-      ./internal/api/ ./internal/native/engine/
-
-  # Go↔C++ integration (skips when the host binary is not built)
-  go test -tags headless ./internal/native/engine/ \
-      -run 'TestRealCppHostEndToEnd|TestRealCppHostModelLifecycle'
-
-  # Frontend
-  npm ci && npm run typecheck && npm run lint && npm run build
-
-  # Release gates
-  go run ./scripts/stress-main stress
-  node scripts/release-version.mjs --check
-
-Test results (all verified on this exact tree, Linux x86_64,
-Go 1.26, g++ 14.2, CMake 4.4)
------------------------------
-  cmake configure + build                                PASS
-  ctest                                                  5/5 PASS
-      engine / protocol / host / gguf / model
-  C++ suite rebuilt with -fsanitize=address              5/5 PASS
-      (no leaks, no out-of-bounds access)
-  plain make + make test                                 PASS
-  go build -tags headless ./...                          PASS
-  go vet -tags headless ./...                            PASS
-  go test -tags headless ./internal/... -count=1         22 packages PASS
-  go test -race -tags headless (agent, llm, api,
-      native/engine)                                     PASS
-  TestRealCppHostEndToEnd                                PASS (real C++ host)
-  TestRealCppHostModelLifecycle                          PASS (real C++ host:
-      Go → native host → C++ → LoadModel → ModelInfo)
-  npm ci / typecheck / lint (0 warnings) / build         PASS (web/static
-      assets unchanged — no frontend edits in this phase)
-  go run ./scripts/stress-main stress                    30 pass / 0 fail
-  node scripts/release-version.mjs --check               PASS (all four
-      release surfaces 1.1.5)
-
-Native loader implementation summary
-------------------------------------
-  - GGUF reader (native/engine/src/gguf.*): magic + version validation
-    (v2/v3), metadata parsing with hostile-input bounds, tensor-table
-    parsing with overflow-checked element products and per-tensor offset
-    validation against the data section (exact byte-size checks for
-    known GGML types), alignment handling, file-size validation; model
-    metadata is never trusted; reads touch only header pages.
-  - Memory mapping: whole-file read-only mmap (POSIX) /
-    CreateFileMapping (Windows) — lazy access, no eager copy of tensor
-    data into RAM, no full-file reads.
-  - LoadModel/UnloadModel (native/engine/src/model.*, ABI v2):
-    all-or-nothing loading with replace semantics; idempotent unload;
-    clean release of mapping/handle on every failure path (verified
-    under AddressSanitizer); model states unloaded/loading/loaded/failed
-    mirrored on the Go side and reset on every host lifecycle boundary.
-  - Memory planning (computed, never allocated): model file / mapped /
-    weights (tensor-data span) / workspace estimate (ctx·vocab·4) /
-    KV-cache estimate (2·K/V·layers·ctx·emb·2 bytes f16) / fixed 64 MiB
-    runtime allowance / overflow-checked total / fit-vs-RAM verdict.
-  - Metadata extraction (only values actually read or derived):
-    architecture, name, parameter count (read or derived from the tensor
-    table), context length, vocabulary size, embedding length, layer
-    count, quantization (general.file_type), tensor count, file size.
-  - Go exposure: llm.ModelInfo gains additive optional fields
-    (State, FileSizeBytes, TensorCount, GGUFVersion, VocabSize,
-    EmbeddingLength, LayerCount, KV/workspace/total memory estimates);
-    the llama.cpp model path is untouched (leaves the new fields zero).
-
-Known limitations
------------------
-  - Native generation is NOT implemented (this phase loads and plans,
-    nothing else): Generate/StreamGenerate return ErrNotImplemented,
-    GenerationCapable() stays false, every generation request runs on
-    llama.cpp. Loading a model does NOT enable generation.
-  - The memory plan is arithmetic on parsed metadata; real buffer
-    allocation arrives with the inference phase.
-  - GGUF v1 containers are rejected; GGML tensor types outside this
-    build's size table are validated leniently (offset-in-range only) —
-    never guessed.
-  - The contextLength load option plans memory only; no context buffers
-    exist yet.
-  - The native host binary is not shipped or auto-downloaded; build it
-    from native/engine/ and place it in {DataDir}/bin/ (or set
-    nativeEnginePath).
-  - As with any mmap consumer, a model file shrinking while mapped is an
-    OS-level hazard; SHEYTAN opens model files read-only and never
-    writes to them.
+Note: "PASS" above reflects only commands actually executed on this
+exact package state on 2026-09-10. No documentation in this package
+claims functionality that is not implemented.

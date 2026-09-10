@@ -47,12 +47,12 @@ stress suite; see the exact commands in `agent.md` §10.
 | Tool registry (17 tools when all features enabled) | `internal/tools`, `internal/lab`, `internal/research`, `internal/memory`, `internal/sandbox` | IMPLEMENTED + TESTED | `shell`, `files`, `codeExec`, `webSearch`, `git`, `browser`, `dataAnalysis`, `json`, `archive`, `fetch`, `diff`, `screenshot`, `linux`, `coding_lab`, `research`, `memory` + sandbox override |
 | Coding Lab (isolated workspace, lexical command policy, verification gates, bounded repair loop, snapshot-before-promote) | `internal/lab` | IMPLEMENTED + TESTED | policy is lexical + env-pinned, not a kernel sandbox (documented limitation) |
 | Code-exec sandbox governor (Windows Job Objects) | `internal/sandbox` | IMPLEMENTED + TESTED | memory/CPU configurable, fail-closed default ON |
-| Attachments (content-addressed staging, caps, normalization, retrieval with provenance headers) | `internal/attachments` | IMPLEMENTED + TESTED | sha256 staging, symlink-safe |
-| Chunking (paragraph-boundary splitting, byte budgets, head+tail windowing, history windowing) | `internal/chunking` | IMPLEMENTED + TESTED | **not** structural/semantic repository chunking — see Part II §4 |
+| Attachments (content-addressed streaming staging, caps, normalization, bounded retrieval with provenance headers and measured stats) | `internal/attachments` | IMPLEMENTED + TESTED | sha256 staging streamed while hashed (RAM ≈ 16 KiB head + 128 KiB buffer, not the file size), symlink-safe; retrieval reads each object ≤1× per call with a 32 MiB retention cap and byte-range fallback (v1.1.5Z Phase 3) |
+| Chunking (shared provenance chunk engine: paragraph-boundary splitting with full metadata, byte budgets, head+tail windowing, history windowing) | `internal/chunking` | IMPLEMENTED + TESTED | `ChunkText` (processing version v2): deterministic IDs, byte ranges, token estimates, total counts, optional overlap, UTF-8-safe splits; **not** structural/semantic repository chunking — see Part II §4 |
 | Context plan (explicit budget: system / tools / recall / attachments / history sections with priorities and pressure) | `internal/contextplan` | IMPLEMENTED + TESTED | the seed of the future budget taxonomy — see Part II §5 |
-| Context cache (content-keyed LRU, TTL, bounds) | `internal/contextcache` | IMPLEMENTED + TESTED | |
-| Memory (M1–M7 trust classes, persistent JSONL store, search) | `internal/memory` | IMPLEMENTED + TESTED | external material quarantined |
-| Recall (BM25 over past turns, recency boost, 👍/👎 feedback steering) | `internal/recall` | IMPLEMENTED + TESTED | feedback wired via `/api/feedback` since v1.1.4Z |
+| Context cache (content-keyed LRU, TTL, bounds, single-flight coalescing, oversized-entry guard, measured counters) | `internal/contextcache` | IMPLEMENTED + TESTED | processing version v4; concurrent same-key computes are coalesced; a value above the per-entry bound is rejected, never retained |
+| Memory (M1–M7 trust classes, persistent JSONL store, append-aware parsed cache, copy-free search) | `internal/memory` | IMPLEMENTED + TESTED | external material quarantined; appends/deletes fold into the cache incrementally (no full re-parse per write) without changing any trust rule |
+| Recall (BM25 over past turns, cached corpus statistics, recency boost, 👍/👎 feedback steering) | `internal/recall` | IMPLEMENTED + TESTED | per-capsule terms + distinct counts cached; per-query scoring allocation-free; feedback wired via `/api/feedback` since v1.1.4Z |
 | Continuum chapter rollover | `internal/continuum` | IMPLEMENTED + TESTED (wired post-run) | deterministic `Distill` runs in production; the LLM `Enhance` pass is implemented and unit-tested but has **no production caller** (deliberate future option) |
 | Research (auto/GitHub/Reddit/DuckDuckGo/SearXNG, TTL cache, provenance) | `internal/research` | IMPLEMENTED + TESTED | SSRF/alias contracts tested |
 | Vision (mmproj projector pairing, image classification, screenshot capture) | `internal/vision`, `internal/screen` | PARTIALLY IMPLEMENTED | pairing logic implemented + unit-tested; not yet exercised with a real projector model (known limitation) |
@@ -345,13 +345,19 @@ The system should be designed around:
   structured artifacts instead of transcript dumps (Part II §7)
 
 Current state (honest): SHEYTAN has the *seeds* — an explicit context
-plan (`internal/contextplan`), a content-keyed cache
-(`internal/contextcache`), paragraph-boundary chunking for attachments
-(`internal/chunking`), provenance-tagged attachment retrieval, BM25 recall
-and continuum rollover. There is **no** repository structural or semantic
-index, no hierarchical retrieval, and no context builder that composes
-retrieved chunks for a model. "Context Engine" is the name for the future
-system that unifies these.
+plan with measured prompt bytes (`internal/contextplan`), a content-keyed
+single-flight cache (`internal/contextcache`), a provenance chunk engine
+(`internal/chunking`, deterministic metadata + byte ranges since
+v1.1.5Z Phase 3), streaming attachment staging with bounded retrieval
+(`internal/attachments`), an append-aware trust-classed memory store,
+BM25 recall and continuum rollover. Measured Phase 3 results (same
+inputs, 2-vCPU container, median of 5): chunk derivation 1.6× faster
+with 4.4× fewer bytes allocated, memory search 2.3× faster, recall
+search 2.0× faster with 122× fewer allocations. There is **no**
+repository structural or semantic index, no embeddings, no hierarchical
+retrieval, and no context builder that composes retrieved chunks for a
+model. "Context Engine" is the name for the future system that unifies
+these.
 
 ## II.4 — Hierarchical chunk model (PLANNED)
 

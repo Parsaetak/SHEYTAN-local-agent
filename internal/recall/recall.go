@@ -88,6 +88,7 @@ type Engine struct {
 	// per capsule (lazily, cached in the parallel slice) and the corpus
 	// aggregates are cached until an IndexTurn/Clear changes them.
 	terms        [][]string // parallel to capsules (nil = not tokenized yet)
+	distinct     []int      // parallel to capsules (-1 = not computed yet)
 	statsOK      bool       // df/avgLen/N caches valid
 	cachedN      int
 	cachedAvgLen float64
@@ -334,7 +335,11 @@ func (e *Engine) Count() int {
 }
 
 // termsFor returns the cached tokenization of capsule i (computing it
-// once on first use).
+// once on first use). The distinct-term count is computed in the same
+// pass and cached — BM25's document length is the DISTINCT count, and
+// Phase 3 scoring counts query-term occurrences by linear scan over the
+// cached terms (zero per-query allocations) instead of rebuilding a tf
+// map per capsule per query.
 func (e *Engine) termsFor(i int) []string {
 	if i < len(e.terms) && e.terms[i] != nil {
 		return e.terms[i]
@@ -345,7 +350,39 @@ func (e *Engine) termsFor(i int) []string {
 		e.terms = append(e.terms, nil)
 	}
 	e.terms[i] = t
+	for len(e.distinct) < len(e.capsules) {
+		e.distinct = append(e.distinct, -1)
+	}
+	if i < len(e.distinct) && e.distinct[i] < 0 {
+		seen := make(map[string]struct{}, len(t))
+		for _, term := range t {
+			seen[term] = struct{}{}
+		}
+		e.distinct[i] = len(seen)
+	}
 	return t
+}
+
+// distinctFor returns the cached distinct-term count of capsule i.
+func (e *Engine) distinctFor(i int) int {
+	_ = e.termsFor(i) // ensures the parallel distinct cache is filled
+	if i < len(e.distinct) {
+		return e.distinct[i]
+	}
+	return 0
+}
+
+// countTerm returns how many times term occurs in the cached term slice
+// (allocation-free; slices are short — capsule digests are a few hundred
+// bytes — so the linear scan beats a per-query map rebuild).
+func countTerm(terms []string, term string) int {
+	n := 0
+	for _, t := range terms {
+		if t == term {
+			n++
+		}
+	}
+	return n
 }
 
 // invalidateStatsLocked drops the corpus aggregates after an index change.
@@ -415,15 +452,15 @@ func (e *Engine) Search(query string, k int) []Capsule {
 	for i, c := range e.capsules {
 		var score float64
 		if len(qTerms) > 0 {
+			// v1.1.5Z Phase 3: count occurrences directly against the
+			// cached term slice — no tf map per capsule per query. The
+			// scoring math is unchanged (f values, distinct-count dl and
+			// raw-length avgLen are all identical to the pre-Phase-3 path).
 			terms := e.termsFor(i)
-			tf := make(map[string]int, len(terms))
-			for _, t := range terms {
-				tf[t]++
-			}
-			dl := float64(len(tf))
+			dl := float64(e.distinctFor(i))
 			for _, t := range qTerms {
-				f, ok := tf[t]
-				if !ok {
+				f := countTerm(terms, t)
+				if f == 0 {
 					continue
 				}
 				idf := idf(float64(df[t]), float64(N))
@@ -585,6 +622,7 @@ func (e *Engine) Clear() error {
 	defer e.mu.Unlock()
 	e.capsules = nil
 	e.terms = nil
+	e.distinct = nil
 	e.invalidateStatsLocked()
 	e.loaded = true
 	_ = os.Remove(filepath.Join(e.dir, "backfilled"))

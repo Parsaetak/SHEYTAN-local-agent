@@ -25,23 +25,26 @@
 package attachments
 
 import (
+	"bytes"
 	"context"
+	crand "crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/humanize"
 	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/chunking"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/contextcache"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/humanize"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/vision"
 )
 
@@ -55,6 +58,19 @@ const (
 	DefaultMaxTotalBytes     = 128 << 20 // staging dir soft cap
 	DefaultRetrievalBudget   = 16 * 1024 // bytes for one retrieval block
 )
+
+// retrieveObjectCacheCap bounds how many object bytes ONE retrieval call
+// may retain for chunk-text reuse. When the accumulated objects exceed the
+// cap the source degrades to per-chunk byte-range reads (correct, more
+// syscalls) instead of pinning unbounded buffers — the Phase 3 resource
+// policy: shed retention, never correctness. A var so tests can shrink it;
+// production code never writes it.
+var retrieveObjectCacheCap = int64(32 << 20)
+
+// sniffHeadBytes is the amount of content kept in RAM during staging for
+// classification (looksBinary reads 8 KiB, isUTF8ish 16 KiB — 16 KiB covers
+// both).
+const sniffHeadBytes = 16 * 1024
 
 // Kind classifies a staged attachment.
 type Kind string
@@ -128,6 +144,31 @@ type Manager struct {
 	metas   map[string]*Attachment // id -> metadata (loaded lazily)
 	loaded  bool
 	version string // processing fingerprint for cache keys
+
+	// res is the Phase 3 resource accounting: measured bytes flowing
+	// through the manager. Atomic — hot paths never take mu to count.
+	res resourceCounters
+}
+
+// resourceCounters tracks measured data movement. Everything here is a
+// real measurement (bytes actually read/written), never an estimate.
+type resourceCounters struct {
+	staged      atomic.Uint64 // files staged
+	stagedBytes atomic.Uint64 // bytes written to the object store
+	objectReads atomic.Uint64 // object file opens during retrieval
+	readBytes   atomic.Uint64 // object bytes read during retrieval
+	chunksBuilt atomic.Uint64 // chunks derived (cache misses only)
+	cacheSheds  atomic.Uint64 // times the per-call object cache shed entries
+}
+
+// ResourceStats is a point-in-time snapshot of measured data movement.
+type ResourceStats struct {
+	FilesStaged uint64 `json:"filesStaged"`
+	StagedBytes uint64 `json:"stagedBytes"`
+	ObjectReads uint64 `json:"objectReads"`
+	ReadBytes   uint64 `json:"readBytes"`
+	ChunksBuilt uint64 `json:"chunksBuilt"`
+	CacheSheds  uint64 `json:"cacheSheds"`
 }
 
 // Options configures a Manager.
@@ -179,6 +220,19 @@ func (m *Manager) Dir() string { return m.dir }
 // Limits returns the active bound set.
 func (m *Manager) Limits() Limits { return m.limits }
 
+// ResourceUsage returns the measured data-movement counters of this
+// manager (diagnostics: real counts only, no estimates).
+func (m *Manager) ResourceUsage() ResourceStats {
+	return ResourceStats{
+		FilesStaged: m.res.staged.Load(),
+		StagedBytes: m.res.stagedBytes.Load(),
+		ObjectReads: m.res.objectReads.Load(),
+		ReadBytes:   m.res.readBytes.Load(),
+		ChunksBuilt: m.res.chunksBuilt.Load(),
+		CacheSheds:  m.res.cacheSheds.Load(),
+	}
+}
+
 // objectPath is the content-addressed object location.
 func (m *Manager) objectPath(id string) string {
 	return filepath.Join(m.dir, "objects", id)
@@ -188,9 +242,17 @@ func (m *Manager) metaPath(id string) string {
 	return filepath.Join(m.dir, "meta", id+".json")
 }
 
-// Add stages one uploaded file: it reads, bounds, hashes, stores, sniffs,
+// Add stages one uploaded file: it streams, bounds, hashes, stores, sniffs,
 // and processes (chunks) the content. The returned Attachment is safe to
 // persist and display. `sessionID` records provenance (may be empty).
+//
+// v1.1.5Z Phase 3: staging is STREAMING — content is spooled to a temp
+// file while hashed on the fly, so only a bounded sniff head (16 KiB) and
+// one copy buffer ever sit in RAM, whatever the upload size. Previously the
+// whole file (up to 64 MiB) was buffered just to hash and classify it.
+// Binary and image attachments are never fully buffered anymore; text
+// attachments are read back from the object store once for chunking (the
+// page cache makes that cheap) so peak memory stays bounded.
 func (m *Manager) Add(
 	ctx context.Context,
 	sessionID string,
@@ -203,46 +265,37 @@ func (m *Manager) Add(
 
 	name := SanitizeName(displayName)
 
-	// Read bounded: one extra byte beyond the cap detects oversize without
-	// ever buffering more than the cap in memory.
-	lr := io.LimitReader(r, m.limits.MaxFileSizeBytes+1)
-
-	data, err := io.ReadAll(lr)
+	// Stream to a temp object while hashing. Oversize/empty checks happen
+	// during the copy — an oversized upload never touches the object store.
+	tmpPath, size, sum, head, err := m.spool(name, r)
 	if err != nil {
-		return nil, fmt.Errorf("attachments: read %s: %w", name, err)
+		return nil, err
 	}
+	// From here on the temp file is ours to rename or discard.
+	defer func() {
+		if tmpPath != "" {
+			_ = os.Remove(tmpPath)
+		}
+	}()
 
-	if int64(len(data)) > m.limits.MaxFileSizeBytes {
-		return nil, fmt.Errorf(
-			"attachments: %s exceeds the %s per-file limit",
-			name,
-			humanize.Bytes(m.limits.MaxFileSizeBytes),
-		)
-	}
-
-	if len(data) == 0 {
-		return nil, fmt.Errorf("attachments: %s is empty", name)
-	}
-
-	sum := sha256.Sum256(data)
-
-	id := "a" + hex.EncodeToString(sum[:])[:24]
 	sha := hex.EncodeToString(sum[:])
+	id := "a" + sha[:24]
 
 	// Content-addressed store: identical content under any name dedupes.
 	obj := m.objectPath(id)
 
-	if err := writeObjectAtomic(obj, data); err != nil {
+	if err := commitObject(obj, tmpPath); err != nil {
 		return nil, err
 	}
+	tmpPath = "" // renamed into place — nothing left to clean up
 
-	kind := classify(name, data)
+	kind := classify(name, head)
 
 	att := &Attachment{
 		ID:        id,
 		Name:      name,
 		Kind:      kind,
-		Size:      int64(len(data)),
+		Size:      size,
 		SHA256:    sha,
 		CreatedAt: time.Now().UTC(),
 	}
@@ -251,18 +304,26 @@ func (m *Manager) Add(
 		att.SessionIDs = []string{sessionID}
 	}
 
+	m.res.staged.Add(1)
+	m.res.stagedBytes.Add(uint64(size))
+
 	// Process (extract + chunk) with a bounded timeout. Text only — images
-	// and binaries carry no chunks by design.
+	// and binaries carry no chunks by design. Text content is read back
+	// from the stored object in one pass.
 	if kind == KindText {
 		pctx, cancel := context.WithTimeout(ctx, m.limits.ProcessTimeout)
 		defer cancel()
 
-		chunks, perr := m.processText(pctx, att, data)
-		if perr != nil {
-			att.Note = "processing incomplete: " + perr.Error()
+		data, rerr := os.ReadFile(obj)
+		if rerr != nil {
+			att.Note = "processing incomplete: " + rerr.Error()
+		} else {
+			chunks, perr := m.processText(pctx, att, data)
+			if perr != nil {
+				att.Note = "processing incomplete: " + perr.Error()
+			}
+			att.Chunks = chunks
 		}
-
-		att.Chunks = chunks
 	} else if kind == KindImage {
 		att.Note = "image attachment — delivered to the vision pipeline when the engine supports it"
 	} else {
@@ -284,7 +345,126 @@ func (m *Manager) Add(
 	return att, nil
 }
 
+// spool streams r into a temp file under the object store while hashing it
+// and capturing the sniff head. It enforces the per-file size cap during
+// the copy, so oversized input is rejected without ever buffering it (and
+// without writing it to the final object location). The caller owns the
+// returned temp file (rename or remove).
+func (m *Manager) spool(name string, r io.Reader) (tmpPath string, size int64, sum []byte, head []byte, err error) {
+	token, terr := spoolToken()
+	if terr != nil {
+		return "", 0, nil, nil, fmt.Errorf("attachments: spool token: %w", terr)
+	}
+
+	tmpPath = filepath.Join(m.dir, "objects", "incoming-"+token)
+
+	f, ferr := os.OpenFile(tmpPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if ferr != nil {
+		return "", 0, nil, nil, fmt.Errorf("attachments: stage: %w", ferr)
+	}
+	defer func() {
+		f.Close()
+		if err != nil {
+			_ = os.Remove(tmpPath)
+			tmpPath = ""
+		}
+	}()
+
+	hasher := sha256.New()
+	headBuf := make([]byte, 0, sniffHeadBytes)
+
+	// boundedHead captures the first sniffHeadBytes as the stream passes.
+	boundedHead := &headCapture{dst: &headBuf, cap: sniffHeadBytes}
+	limited := io.LimitReader(r, m.limits.MaxFileSizeBytes+1)
+	sink := io.MultiWriter(f, hasher, boundedHead)
+
+	buf := copyBufferPool.Get().(*[]byte)
+	n, cerr := io.CopyBuffer(sink, limited, *buf)
+	copyBufferPool.Put(buf)
+
+	if cerr != nil {
+		err = fmt.Errorf("attachments: read: %w", cerr)
+		return "", 0, nil, nil, err
+	}
+
+	size = n
+
+	if size > m.limits.MaxFileSizeBytes {
+		err = fmt.Errorf(
+			"attachments: %s exceeds the %s per-file limit",
+			name,
+			humanize.Bytes(m.limits.MaxFileSizeBytes),
+		)
+		return "", 0, nil, nil, err
+	}
+
+	if size == 0 {
+		err = fmt.Errorf("attachments: %s is empty", name)
+		return "", 0, nil, nil, err
+	}
+
+	return tmpPath, size, hasher.Sum(nil), headBuf, nil
+}
+
+// headCapture retains the first `cap` bytes of a stream (no-op afterwards).
+type headCapture struct {
+	dst *[]byte
+	cap int
+}
+
+func (h *headCapture) Write(p []byte) (int, error) {
+	if len(*h.dst) < h.cap {
+		room := h.cap - len(*h.dst)
+		if room > len(p) {
+			room = len(p)
+		}
+		*h.dst = append(*h.dst, p[:room]...)
+	}
+	return len(p), nil
+}
+
+var copyBufferPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, 128*1024)
+		return &b
+	},
+}
+
+// spoolToken produces a unique-enough token for temp file names.
+func spoolToken() (string, error) {
+	var rnd [8]byte
+	if _, err := crand.Read(rnd[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(rnd[:]), nil
+}
+
+// commitObject moves a spooled temp object into its content-addressed
+// location. An existing identical object is a dedupe hit: the temp file is
+// discarded HERE (the caller clears its cleanup reference). Symlinks at
+// the target are refused (path safety unchanged).
+func commitObject(obj, tmp string) error {
+	if fi, err := os.Lstat(obj); err == nil {
+		if fi.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("attachments: refusing symlink at %s", obj)
+		}
+		// Same content already stored — dedupe hit; discard the spool.
+		_ = os.Remove(tmp)
+		return nil
+	}
+
+	if err := os.Rename(tmp, obj); err != nil {
+		return fmt.Errorf("attachments: commit: %w", err)
+	}
+
+	return nil
+}
+
 // processText normalizes and chunks text content, caching the result.
+//
+// v1.1.5Z Phase 3: chunk derivation runs through the shared chunking
+// engine (chunking.ChunkText) with full metadata, and the cache lookup is
+// single-flight — concurrent processing of the same content computes once.
 func (m *Manager) processText(
 	ctx context.Context,
 	att *Attachment,
@@ -300,22 +480,58 @@ func (m *Manager) processText(
 		m.version,
 	)
 
-	if cached, ok := m.cache.Get(key); ok {
-		if chunks, ok := cached.([]Chunk); ok {
-			return chunks, nil
-		}
-	}
+	chunks, _ := contextcache.GetOrCompute(
+		m.cache,
+		key,
+		0,
+		func(chunks []Chunk) int64 {
+			return int64(len(chunks)) * int64(chunkMetaSize)
+		},
+		func() []Chunk {
+			text := NormalizeText(data)
 
-	text := NormalizeText(data)
+			// Historical floors preserved: chunkSize >= 256, maxChunks >= 1.
+			chunkSize := m.limits.ChunkSizeBytes
+			if chunkSize < 256 {
+				chunkSize = 256
+			}
+			maxChunks := m.limits.MaxChunksPerFile
+			if maxChunks < 1 {
+				maxChunks = 1
+			}
 
-	chunks := buildChunks(
-		att.ID,
-		text,
-		m.limits.ChunkSizeBytes,
-		m.limits.MaxChunksPerFile,
+			derived := chunking.ChunkText(
+				att.SHA256,
+				text,
+				chunking.ChunkerConfig{
+					MaxBytes:    chunkSize,
+					MaxChunks:   maxChunks,
+					WithPreview: true,
+				},
+			)
+
+			out := make([]Chunk, 0, len(derived))
+
+			for i, dc := range derived {
+				// Wire identity unchanged: <attID>:<index>:<hash8> — the same
+				// format every stored meta file uses.
+				out = append(out, Chunk{
+					ID:      fmt.Sprintf("%s:%d:%s", att.ID, i, dc.Hash[:8]),
+					AttID:   att.ID,
+					Index:   i,
+					Hash:    dc.Hash,
+					Offset:  int(dc.Offset),
+					Bytes:   dc.Bytes,
+					Tokens:  dc.Tokens,
+					Preview: dc.Preview,
+				})
+			}
+
+			m.res.chunksBuilt.Add(uint64(len(out)))
+
+			return out
+		},
 	)
-
-	m.cache.Put(key, chunks, int64(len(chunks))*int64(chunkMetaSize), 0)
 
 	return chunks, nil
 }
@@ -424,6 +640,19 @@ func (m *Manager) StagePath(id string) string {
 	return m.objectPath(att.ID)
 }
 
+// RetrievalStats carries the measured outcomes of one retrieval call —
+// every field is a real count, never an estimate (Phase 3 instrumentation).
+type RetrievalStats struct {
+	AttachmentsConsidered int    `json:"attachmentsConsidered"`
+	ChunksConsidered      int    `json:"chunksConsidered"`
+	ChunksSelected        int    `json:"chunksSelected"`
+	BytesComposed         int    `json:"bytesComposed"`
+	ObjectReads           int    `json:"objectReads"`
+	ObjectBytesRead       int64  `json:"objectBytesRead"`
+	CacheSheds            uint64 `json:"cacheSheds"`
+	CacheHit              bool   `json:"cacheHit"`
+}
+
 // Retrieve composes a bounded, provenance-tagged block of the most
 // relevant chunks across the given attachments for one query. Images are
 // skipped (they ride the vision pipeline); binaries contribute their note.
@@ -434,6 +663,25 @@ func (m *Manager) Retrieve(
 	ids []string,
 	budgetBytes int,
 ) string {
+	block, _ := m.RetrieveWithStats(ctx, query, ids, budgetBytes)
+	return block
+}
+
+// RetrieveWithStats is Retrieve plus the measured RetrievalStats.
+//
+// v1.1.5Z Phase 3: object text is read from disk AT MOST ONCE per
+// attachment per call and reused for every selected chunk (previously the
+// whole object was re-read per selected chunk — N chunks meant N full
+// reads). Objects larger than the per-call retention cap degrade to
+// per-chunk byte-range reads instead of being pinned in memory.
+func (m *Manager) RetrieveWithStats(
+	ctx context.Context,
+	query string,
+	ids []string,
+	budgetBytes int,
+) (string, RetrievalStats) {
+	stats := RetrievalStats{}
+
 	if budgetBytes <= 0 {
 		budgetBytes = m.limits.RetrievalBudget
 	}
@@ -453,8 +701,10 @@ func (m *Manager) Retrieve(
 		}
 	}
 
+	stats.AttachmentsConsidered = len(outAttachments)
+
 	if len(outAttachments) == 0 {
-		return ""
+		return "", stats
 	}
 
 	// Deterministic cache key: sorted ids + query hash + version + budget.
@@ -474,7 +724,9 @@ func (m *Manager) Retrieve(
 
 	if cached, ok := m.cache.Get(key); ok {
 		if block, ok := cached.(string); ok {
-			return block
+			stats.CacheHit = true
+			stats.BytesComposed = len(block)
+			return block, stats
 		}
 	}
 
@@ -492,6 +744,8 @@ func (m *Manager) Retrieve(
 			if ctx.Err() != nil {
 				break
 			}
+
+			stats.ChunksConsidered++
 
 			preview := ch.Preview
 			score := scoreChunk(terms, preview, ch)
@@ -516,6 +770,12 @@ func (m *Manager) Retrieve(
 		return candidates[i].chunk.Index < candidates[j].chunk.Index
 	})
 
+	// Per-call object source: each attachment's object is read at most
+	// once, bounded by the retention cap (larger objects fall back to
+	// per-chunk byte-range reads).
+	src := &objectSource{m: m, cap: retrieveObjectCacheCap, bytes: map[string][]byte{}}
+	defer src.release()
+
 	var b strings.Builder
 	used := 0
 
@@ -536,7 +796,7 @@ func (m *Manager) Retrieve(
 			break
 		}
 
-		full := m.chunkText(c.att, c.chunk)
+		full := src.chunkText(c.att, c.chunk)
 		if full == "" {
 			continue
 		}
@@ -565,6 +825,7 @@ func (m *Manager) Retrieve(
 
 		fmt.Fprintf(&b, "[chunk %d · %s]\n%s\n\n", c.chunk.Index, c.chunk.Hash[:8], full)
 		used += need
+		stats.ChunksSelected++
 	}
 
 	// If nothing scored, still surface a compact metadata block so the
@@ -589,31 +850,98 @@ func (m *Manager) Retrieve(
 		}
 
 		if b.Len() == 0 {
-			return ""
+			return "", stats
 		}
 	}
 
 	block := strings.TrimSpace(b.String())
+	stats.BytesComposed = len(block)
+	stats.ObjectReads = src.reads
+	stats.ObjectBytesRead = src.bytesRead
+	stats.CacheSheds = src.sheds
+
+	// Fold the per-call degradation counts into the manager's resource
+	// accounting (measured counters only).
+	m.res.cacheSheds.Add(src.sheds)
 
 	m.cache.Put(key, block, int64(len(block)), time.Minute)
 
-	return block
+	return block, stats
 }
 
-// chunkText reads the exact byte range of one chunk from the stored
-// object. Falls back to the preview when the object vanished (the cache
-// entry is invalidated so stale previews stop circulating).
-func (m *Manager) chunkText(att *Attachment, ch Chunk) string {
-	data, err := os.ReadFile(m.objectPath(att.ID))
-	if err != nil {
-		m.cache.Invalidate(
-			contextcache.Key("attachments:chunks", att.SHA256, m.version),
+// objectSource serves chunk text for one retrieval call. Each object is
+// read at most once (whole-file, reused for every chunk of that
+// attachment) while the retained bytes stay under cap; over the cap it
+// degrades to exact byte-range reads — correct, just more syscalls.
+type objectSource struct {
+	m         *Manager
+	cap       int64
+	bytes     map[string][]byte
+	retained  int64
+	reads     int
+	bytesRead int64
+	sheds     uint64
+}
+
+// chunkText returns the exact byte range of one chunk. Falls back to the
+// preview when the object vanished or the stored range no longer exists
+// (the cache entry is invalidated so stale previews stop circulating) —
+// the same fallback semantics the pre-Phase-3 path had.
+func (o *objectSource) chunkText(att *Attachment, ch Chunk) string {
+	if data, ok := o.bytes[att.ID]; ok {
+		return sliceChunk(data, ch, ch.Preview)
+	}
+
+	if att.Size <= o.cap-o.retained {
+		data, err := o.m.readObject(att.ID)
+		o.reads++
+		if err != nil {
+			o.m.cache.Invalidate(
+				contextcache.Key("attachments:chunks", att.SHA256, o.m.version),
+			)
+			return ch.Preview
+		}
+		o.bytesRead += int64(len(data))
+
+		// Retain only while it fits; large objects stream per chunk below.
+		if int64(len(data)) <= o.cap-o.retained {
+			o.bytes[att.ID] = data
+			o.retained += int64(len(data))
+		}
+
+		return sliceChunk(data, ch, ch.Preview)
+	}
+
+	// Over the retention cap: read exactly the chunk's byte range.
+	text, ok := o.m.readObjectRange(att.ID, ch.Offset, ch.Bytes)
+	o.reads++
+	o.bytesRead += int64(len(text))
+	if !ok || text == "" {
+		o.m.cache.Invalidate(
+			contextcache.Key("attachments:chunks", att.SHA256, o.m.version),
 		)
+		o.sheds++
 		return ch.Preview
 	}
 
+	o.sheds++
+	return text
+}
+
+// release drops the retained object buffers (called at the end of the
+// retrieval call — nothing large outlives the request).
+func (o *objectSource) release() {
+	for k := range o.bytes {
+		delete(o.bytes, k)
+	}
+	o.retained = 0
+}
+
+// sliceChunk extracts one chunk range from a loaded object; out-of-range
+// offsets return the provided fallback (the chunk preview).
+func sliceChunk(data []byte, ch Chunk, fallback string) string {
 	if ch.Offset >= len(data) {
-		return ch.Preview
+		return fallback
 	}
 
 	end := ch.Offset + ch.Bytes
@@ -622,6 +950,60 @@ func (m *Manager) chunkText(att *Attachment, ch Chunk) string {
 	}
 
 	return string(data[ch.Offset:end])
+}
+
+// readObject reads the stored object (counted).
+func (m *Manager) readObject(id string) ([]byte, error) {
+	m.res.objectReads.Add(1)
+
+	data, err := os.ReadFile(m.objectPath(id))
+	if err == nil {
+		m.res.readBytes.Add(uint64(len(data)))
+	}
+
+	return data, err
+}
+
+// readObjectRange reads exactly [offset, offset+length) from the stored
+// object (counted). ok=false when the object is missing.
+func (m *Manager) readObjectRange(id string, offset, length int) (string, bool) {
+	f, err := os.Open(m.objectPath(id))
+	if err != nil {
+		return "", false
+	}
+	defer f.Close()
+
+	if offset < 0 || length <= 0 {
+		return "", false
+	}
+
+	buf := make([]byte, length)
+	n, err := io.ReadFull(io.NewSectionReader(f, int64(offset), int64(length)), buf)
+	m.res.objectReads.Add(1)
+
+	if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
+		return "", false
+	}
+
+	m.res.readBytes.Add(uint64(n))
+	return string(buf[:n]), true
+}
+
+// chunkText reads the exact byte range of one chunk from the stored
+// object (single-chunk convenience path: a range read — the whole object
+// is NOT loaded for one chunk). Falls back to the preview when the object
+// vanished (the cache entry is invalidated so stale previews stop
+// circulating).
+func (m *Manager) chunkText(att *Attachment, ch Chunk) string {
+	text, ok := m.readObjectRange(att.ID, ch.Offset, ch.Bytes)
+	if !ok {
+		m.cache.Invalidate(
+			contextcache.Key("attachments:chunks", att.SHA256, m.version),
+		)
+		return ch.Preview
+	}
+
+	return text
 }
 
 // --- persistence ----------------------------------------------------------
@@ -776,7 +1158,12 @@ func isUTF8ish(data []byte) bool {
 }
 
 // NormalizeText converts staged bytes into prompt-ready text: invalid
-// UTF-8 replaced, BOM dropped, CRLF normalized, trailing space trimmed.
+// UTF-8 replaced, BOM dropped, CRLF normalized, trailing newlines trimmed.
+//
+// v1.1.5Z Phase 3: the clean case (valid UTF-8, no BOM, no CR) returns the
+// ORIGINAL bytes without a single full-content copy — previously every
+// staged text paid up to three copies (ToValidUTF8 + two ReplaceAll) even
+// when nothing needed replacing.
 func NormalizeText(data []byte) string {
 	b := data
 
@@ -784,66 +1171,15 @@ func NormalizeText(data []byte) string {
 		b = b[3:]
 	}
 
+	if utf8.Valid(b) && bytes.IndexByte(b, '\r') < 0 {
+		return strings.TrimRight(string(b), "\n")
+	}
+
 	s := strings.ToValidUTF8(string(b), "\uFFFD")
 	s = strings.ReplaceAll(s, "\r\n", "\n")
 	s = strings.ReplaceAll(s, "\r", "\n")
 
 	return strings.TrimRight(s, "\n")
-}
-
-// buildChunks splits normalized text on semantic boundaries (blank lines,
-// then lines, then hard splits) and stamps each chunk with stable
-// identity: content hash + sequence. Byte offsets index the normalized
-// text stored in the object, so chunk text can be re-read exactly.
-func buildChunks(attID, text string, chunkSize, maxChunks int) []Chunk {
-	if chunkSize < 256 {
-		chunkSize = 256
-	}
-
-	if maxChunks < 1 {
-		maxChunks = 1
-	}
-
-	if text == "" {
-		return nil
-	}
-
-	parts := chunking.SplitParagraphs(text, chunkSize)
-	if len(parts) > maxChunks {
-		parts = parts[:maxChunks]
-	}
-
-	out := make([]Chunk, 0, len(parts))
-	offset := 0
-
-	for i, p := range parts {
-		// SplitParagraphs keeps trailing newlines; recompute the true
-		// offset of this part in the normalized text.
-		idx := strings.Index(text[offset:], p)
-		start := offset
-
-		if idx >= 0 {
-			start = offset + idx
-		}
-
-		sum := sha256.Sum256([]byte(p))
-		hash := hex.EncodeToString(sum[:])
-
-		out = append(out, Chunk{
-			ID:      fmt.Sprintf("%s:%d:%s", attID, i, hash[:8]),
-			AttID:   attID,
-			Index:   i,
-			Hash:    hash,
-			Offset:  start,
-			Bytes:   len(p),
-			Tokens:  chunking.EstimateTokens(p),
-			Preview: clipRunes(strings.TrimSpace(p), 120),
-		})
-
-		offset = start + len(p)
-	}
-
-	return out
 }
 
 // tokenize lowercases and splits a query into overlap terms.
@@ -909,33 +1245,6 @@ func clipRunes(s string, n int) string {
 	}
 
 	return string([]rune(s)[:n]) + "…"
-}
-
-// writeObjectAtomic writes data to path refusing to follow symlinks and
-// using tmp+rename for atomicity. Existing identical objects are fine
-// (content-addressed dedupe).
-func writeObjectAtomic(path string, data []byte) error {
-	if fi, err := os.Lstat(path); err == nil {
-		if fi.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("attachments: refusing symlink at %s", path)
-		}
-
-		// Same content already stored — dedupe hit.
-		return nil
-	}
-
-	tmp := path + ".tmp"
-
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return fmt.Errorf("attachments: stage: %w", err)
-	}
-
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("attachments: commit: %w", err)
-	}
-
-	return nil
 }
 
 func writeAtomic(path string, data []byte) error {

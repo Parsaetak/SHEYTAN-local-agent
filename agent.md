@@ -54,6 +54,7 @@ assume a successful build means functionality
 assume a UI control is wired
 assume engine state is true
 claim success without evidence
+claim a performance win without a before/after measurement
 ```
 
 When the user says "done, check verify and continue":
@@ -88,16 +89,18 @@ internal/native/engine  SHEYTAN native engine: protocol (v2), supervised runtime
 internal/api         REST/WS surface, run registry, engine event bus
 internal/runtime     Stack wiring (single source for every subsystem)
 internal/config      Config + Source (copy-on-write live config)  ← READ THIS
-internal/attachments staged uploads, chunking retrieval
-internal/contextplan context budget authority
-internal/contextcache content-keyed LRU cache
+internal/attachments streaming staged uploads, shared chunk engine,
+                    bounded retrieval (measured stats)
+internal/contextplan context budget authority (+ measured PromptBytes)
+internal/contextcache content-keyed LRU cache, single-flight coalescing,
+                    oversized-entry guard
 internal/continuum   chapter rollover (wired post-run since v1.1.4Z)
 internal/lab         Coding Lab (policy, runner, verifier, repair)
 internal/sandbox     Job-Object code-exec governor
 internal/proc        process spawn/kill-tree + environment sanitization
 internal/tools       17 agent tools
-internal/memory      M1–M7 trust-classed store
-internal/recall      BM25 recall + feedback steering
+internal/memory      M1–M7 trust-classed store (append-aware cache)
+internal/recall      BM25 recall + feedback steering (cached corpus stats)
 internal/research    multi-provider search
 internal/multiagent  planner→executor→critic pipeline (CLI `ask --multi` ONLY — sequential, single model, no HTTP/UI surface)
 internal/updater     engine download/update (zip-slip hardened)
@@ -118,6 +121,26 @@ native/engine/       C++ native engine (CMake + Makefile): C ABI core,
 - `updater.RunScheduled` runs `CheckAndApply` on a private copy and publishes back.
 
 Violating this contract reintroduces the v1.1.3Z data race (`*s.cfg = updated` in the patch handler). `TestSourceConcurrentReadWrite` and `TestConfigPatchIsRaceFree` guard it under `-race` — keep them passing.
+
+# 4b. Data-pipeline rules (v1.1.5Z Phase 3)
+
+The local data path has one owner per stage — Source/Input → Loader →
+Normalizer → Chunker (chunking.ChunkText) → Cache (contextcache) →
+Retriever → Context Builder — and every stage keeps derived data
+separate from sources and bounded:
+
+- Chunk IDs/metadata are deterministic from content + processing
+  parameters; bump `chunking.ProcessingVersion` AND
+  `contextcache.Version` together when derivation changes shape.
+- The cache is never a source of truth. Concurrent same-key work is
+  coalesced by `contextcache.GetOrCompute`; a value above the per-entry
+  bound is rejected, not stored.
+- Memory-store search, recall search and attachment retrieval are
+  measured (Store.ParseStats, cache Stats, ResourceUsage,
+  RetrievalStats, plan PromptBytes). Log measured values only.
+- Never trade a trust/security bound for speed: quarantine,
+  authoritative-user-fact rules and path jails apply to the fast paths
+  exactly as before.
 
 # 5. Engine rules
 
@@ -142,8 +165,14 @@ stream stall          5 min zero-byte abort
 lab output            2 MiB shared stdout+stderr
 lab command timeout   ≤ 3600s     repair iterations ≤ 100
 shell output          tool-level caps (64 KB simulator, 2 MB file reads)
-attachments           manager-enforced size/count/chunk/processing caps
-recall index          5000 capsules (compacted on load)
+attachments           manager-enforced size/count/chunk/processing caps;
+                      staging is streaming (RAM ≈ 16 KiB head + 128 KiB
+                      buffer, not the file size)
+attachment chunks     ≤ 512 per file (bounded derived data)
+retrieval objects     ≤ 32 MiB retained per retrieve call; larger objects
+                      fall back to exact byte-range reads
+context cache         entries + bytes + per-entry bound; single-flight;
+                      oversized entries rejected, never retained
 screenshots           50 kept     crash reports: 20 kept
 WS hubs               128-event buffers, drop-on-slow (never block runs)
 ```
@@ -215,7 +244,8 @@ A button is not a feature. An endpoint is not a feature. A compile is not a feat
 # 13. Immediate next tasks (priority order)
 
 ```text
-1. Native engine Phase 3: real generation — implement Generate/
+1. Native engine generation (the native engine's next phase): implement
+   Generate/
    StreamGenerate in the C++ core + host protocol (coarse-grained:
    whole requests, streamed chunks), then flip GenerationCapable().
    Extend internal/native/engine/{kv,generation,scheduler} from types
@@ -227,7 +257,9 @@ A button is not a feature. An endpoint is not a feature. A compile is not a feat
 4. Tool-calling reliability tuning with larger instruct models
 5. Continuum rollover exercise under real long sessions (it is wired +
    unit-tested; it has not yet been observed in a real multi-hour thread)
-6. Context Engine foundations (PLANNED work — see ARCHITECTURE.md Part II)
+6. Context Engine foundations (PLANNED work — see ARCHITECTURE.md
+   Part II; Phase 3 shipped the bounded chunk/cache/metrics layer it
+   will build on, NOT the semantic index itself)
 7. Model tier discovery + capability-based routing (PLANNED — see
    ARCHITECTURE.md §II.2)
 ```

@@ -412,6 +412,22 @@ func (o *Orchestrator) RunDetailed(
 		chunking.EstimateMessagesTokens(messages),
 	)
 
+	// v1.1.5Z Phase 3: record the MEASURED prompt size (bytes actually
+	// carried by the assembled messages) on the plan — the context report
+	// now carries a real byte figure alongside the token estimates.
+	plan.SetPromptBytes(int64(measureMessagesBytes(messages)))
+
+	logging.Default().Info(
+		"agent",
+		"context metrics: promptBytes=%d estTokens=%d pressure=%.2f elided=%d recalled=%d attachments=%d",
+		plan.PromptBytes,
+		plan.TotalTokens(),
+		plan.Pressure(),
+		plan.Elided,
+		plan.Recalled,
+		plan.Attachments,
+	)
+
 	// v1.1.3Z: publish the context provenance report once per turn so
 	// the UI can show the real budget split without exposing prompts.
 	onActivity(Activity{
@@ -908,6 +924,23 @@ func classifyMessages(messages []llm.Message) (sysTokens, injectedTokens, inject
 	}
 
 	return sysTokens, injectedTokens, injectedBlocks
+}
+
+// measureMessagesBytes returns the measured byte size of the message
+// contents (content + tool-call arguments). Phase 3 instrumentation:
+// bytes are counted, never estimated.
+func measureMessagesBytes(messages []llm.Message) int {
+	total := 0
+
+	for i := range messages {
+		total += len(messages[i].Content)
+
+		for _, tc := range messages[i].ToolCalls {
+			total += len(tc.Function.Arguments)
+		}
+	}
+
+	return total
 }
 
 // historyBudgetFor was removed in v1.1.3Z: the context plan (contextplan

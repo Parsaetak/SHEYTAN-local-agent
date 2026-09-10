@@ -20,15 +20,275 @@ v1.1.5Z
 
 v1.1.5Z is the **SHEYTAN Native AI Engine** release line. Phase 1
 established the backend abstraction, the supervised native engine path
-and the C++ engine skeleton. Phase 2 (this log, first below) added
-**native GGUF model loading**: a hardened C++ GGUF reader, memory-mapped
-model access, real metadata extraction, load-time memory planning, the
-model lifecycle and the `ModelInfo` surface through Go. Native
-GENERATION is still NOT implemented — llama.cpp remains fully functional
-as the fallback (and the default generation engine). Full phase logs
-below.
+and the C++ engine skeleton. Phase 2 added **native GGUF model
+loading**: a hardened C++ GGUF reader, memory-mapped model access, real
+metadata extraction, load-time memory planning, the model lifecycle and
+the `ModelInfo` surface through Go. Phase 3 (this log, first below)
+rebuilt the **local data pipeline for memory efficiency**: a shared
+chunk engine with full provenance metadata, single-flight content
+caching, streaming attachment staging, append-aware memory-store
+caching and allocation-free recall scoring — all measured with
+before/after benchmarks. Native GENERATION is still NOT implemented —
+llama.cpp remains fully functional as the fallback (and the default
+generation engine). Full phase logs below.
 
 ---
+
+# v1.1.5Z Phase 3 Implementation Log (2026-09-10)
+
+## Goal
+
+Make SHEYTAN significantly more efficient for real local workloads by
+improving the complete data path — file/attachment/conversation →
+loading → normalization → chunking → cache → context planning →
+recall/memory → LLM request — without breaking verified behaviour,
+wire contracts or any security bound. Generation stays on llama.cpp;
+the Phase 2 native GGUF loading path is untouched and still passes its
+real-host integration tests.
+
+## Baseline verification (before any change)
+
+The Phase 2 tree was verified FIRST at commit `dc4172c`
+(v1.1.5Z-phase2): `go build -tags headless ./...`, `go vet -tags headless
+./...`, the full `go test -tags headless ./internal/... -count=1` suite
+(all packages PASS), race tests on agent/llm/api/native-engine (PASS),
+npm typecheck/lint/build (PASS), stress 30/30, release-version --check
+PASS, CMake configure+build, ctest 5/5 and the two real-host Go↔C++
+integration tests PASS. Only then did Phase 3 work begin.
+
+## Audit findings (measured, from source)
+
+1. `attachments.Retrieve → chunkText`: the ENTIRE stored object was
+   re-read per selected chunk (N selected chunks = N full-object reads
+   and N full-size transient allocations per retrieval).
+2. `attachments.Add`: the whole upload (up to 64 MiB) was buffered in
+   RAM just to hash and classify it, including binaries and images —
+   only a 16 KiB head is needed for classification.
+3. `memory.Store`: every append invalidated the parsed-cache key, so the
+   next search re-parsed the WHOLE JSONL file; search additionally
+   copied every entry per call.
+4. `recall.Engine.Search`: rebuilt a term-frequency map for EVERY
+   capsule on EVERY query (≈15k map allocations per turn at the 5000
+   capsule index cap).
+5. `contextcache`: concurrent callers of the same expensive key both
+   computed; a single entry larger than the byte bound could pin the
+   cache above its bound forever (eviction always keeps ≥1 entry).
+6. `attachments.buildChunks`: recomputed chunk offsets by re-scanning
+   the text with `strings.Index` per chunk; hard splits could cut a
+   multi-byte UTF-8 rune in half.
+7. `llm.ReadModelCard`: unbuffered reads issued one syscall per skipped
+   tokenizer-array string; the model-card cache key ignored file size.
+8. Context construction had no measured instrumentation (bytes,
+   chunks considered/selected, cache behaviour, pressure).
+
+## 1. Unified loading pipeline
+
+Ownership is now explicit and single-copy per stage:
+
+```text
+Source/Input        staged upload, object file, session JSON, memory JSONL
+→ Loader            attachments.Manager.spool (streaming), readObject/
+                    readObjectRange (counted), memory/recall scanners
+→ Normalizer        attachments.NormalizeText (zero-copy fast path)
+→ Chunker           chunking.ChunkText (single interval pass)
+→ Cache             contextcache.Cache (single-flight, bounded)
+→ Retriever         attachments.RetrieveWithStats, recall.Engine.Search
+→ Context Builder   contextplan.Assemble + orchestrator (measured plan)
+```
+
+No duplicate loaders were introduced; the legacy `writeObjectAtomic` /
+`buildChunks` paths were removed after their last callers moved to the
+shared flow.
+
+## 2. Chunking engine (internal/chunking/chunker.go)
+
+New `ChunkText` / `ChunkerConfig` / `Chunk` (v2 processing version):
+
+- one interval pass, no rescanning; chunk strings share the source
+  backing array (no repeated copying, no O(n²));
+- exact byte offsets recorded during the pass (the old path re-scanned);
+- configurable `Overlap` (rune-aligned, progress-guaranteed) and
+  `MaxChunks` without unbounded memory;
+- UTF-8-correct hard splits (a hard cut backs up to a rune boundary);
+- deterministic chunk IDs from source content hash + processing
+  parameters + chunk content hash;
+- full metadata per chunk: source identity, byte range, estimated
+  tokens, sequence index, total chunks, processing version, preview;
+- raw source data is never retained by derived chunks.
+
+`SplitParagraphs` was re-expressed on the same pass; with ASCII input
+its cuts are byte-identical to the pre-Phase-3 algorithm (a fuzz-style
+equivalence test pins this). Lossless reconstruction is preserved for
+Overlap=0. `attachments.buildChunks` now maps `chunking.Chunk` onto the
+unchanged wire format (`<attID>:<index>:<hash8>`, same JSON fields), so
+stored meta files stay valid.
+
+## 3. Cache as a data-layer primitive (internal/contextcache)
+
+- `GetOrCompute[T]`: single-flight coalescing — the first caller
+  computes OUTSIDE the cache mutex, joiners share the result; panics
+  are propagated to joiners and never wedge the in-flight slot;
+- oversized-entry guard (`WithMaxEntryBytes`): `Put` (now returns
+  bool) rejects a single entry above the per-entry bound instead of
+  letting it pin the cache above its byte bound;
+- exact accounting: `inserts` counted on new keys only, oversized
+  rejections and coalesced joins measured;
+- `Stats` gained `inserts`, `coalesced`, `oversizedRejected`; content
+  keys, version invalidation, config fingerprints, LRU and both bounds
+  are unchanged. Processing version bumped 3 → 4.
+
+## 4. Attachment loading (internal/attachments)
+
+- STREAMING STAGING: `Add` spools to a temp object while hashing
+  (SHA-256 on the fly) and keeps only a 16 KiB sniff head plus one
+  pooled 128 KiB copy buffer in RAM — binaries and images are never
+  fully buffered anymore; oversize/empty rejects happen during the
+  copy and never touch the object store;
+- content addressing, symlink refusal, dedupe, naming, caps and
+  provenance unchanged (same error strings, same IDs);
+- text processing reads the stored object back once;
+- `RetrieveWithStats`: each attachment's object is read AT MOST ONCE
+  per retrieval call and reused for every selected chunk (verified:
+  objectReads == 1 for a multi-chunk call); objects larger than the
+  32 MiB per-call retention cap degrade to exact byte-range reads —
+  correctness identical, memory bounded;
+- `NormalizeText` zero-copy fast path: valid UTF-8 without CR/BOM
+  returns the original bytes (previously up to three full-content
+  copies);
+- measured resource counters on the Manager (`ResourceUsage()`):
+  files staged, staged bytes, object reads, bytes read, chunks built,
+  cache sheds.
+
+## 5. Context construction + instrumentation
+
+- `contextplan.Plan.PromptBytes`: the MEASURED byte size of the final
+  prompt (set by the orchestrator after assembly; never an estimate);
+- the orchestrator logs one context-metrics line per turn (prompt
+  bytes, estimated tokens, pressure, elided, recalled, attachments);
+- the API server logs one attachment-retrieval line per turn with the
+  measured retrieval stats (attachments considered, chunks
+  considered/selected, bytes, object reads, cache hit);
+- wire/UI contracts unchanged — the plan JSON gained additive fields
+  only.
+
+## 6. Persistent memory efficiency (internal/memory)
+
+- APPEND-AWARE cache: `AppendEntry` folds the normalized entry into the
+  parsed cache and refreshes the stat key; `DeleteByID` rewrites from
+  the warm cache (it previously re-parsed the file on every delete);
+  `Clear` caches the empty state; an empty store parse warms the cache;
+- copy-free search: `SearchWithOptions` scores the cached entries
+  read-only (scores in a parallel slice; cached entries never mutated)
+  and copies only matches — the whole-store copy per search is gone;
+- a non-existent file correctly stays cold (nothing to cache);
+- trust rules untouched: M1–M7, quarantine, external downgrade,
+  authoritative-user-fact logic and search semantics are byte-for-byte
+  the same paths as before, re-verified by the full trust test suite;
+- measured counters: `Store.ParseStats()` (full parses vs incremental
+  appends) — tests assert appends cause ZERO full re-parses.
+
+## 7. Resource policy
+
+Bounds are unchanged in law and now observable in practice: staging
+caps (size/count/total/timeout), the 512-chunk-per-file cap, the
+32 MiB per-call retrieval retention cap with graceful degradation to
+byte-range reads, the cache bounds (entries, bytes, per-entry), the
+5000-capsule recall cap, and the memory-store stat-keyed cache. The
+degradation ladder is: shed retained derived objects → re-read from
+disk on demand → never truncate authoritative data (nothing
+authoritative is retained in the shedded structures). All counters are
+real measurements exposed via `attachments.ResourceUsage()`,
+`contextcache.Stats` and `memory.ParseStats()`.
+
+## 8. Other loading paths
+
+- `llm.ReadModelCard` now reads through a 64 KiB buffered window —
+  skipping a tokenizer vocabulary array used to issue one unbuffered
+  syscall per string (up to ~150k per header); parsing semantics
+  unchanged;
+- the API model-card cache is keyed by path+size+mtime (a same-size
+  rewrite used to serve stale metadata) and bounded (512 entries).
+
+## 9. Concurrency
+
+No new goroutines were introduced. The only new concurrency primitive
+is the cache's in-flight map (mutex-protected, WaitGroup-synchronised;
+compute happens without the lock). The full race suite passes:
+`-race` on agent, llm, api, native/engine, contextcache, memory,
+attachments and recall, plus the new concurrent cache/memory/retrieval
+tests.
+
+## 10. Benchmarks (measured, before vs after)
+
+Environment: 2-vCPU Linux container, Go 1.27.1. Same-binary comparison
+for the chunker (legacy algorithm compiled next to the new one);
+baseline worktree at commit dc4172c for memory/recall. Median of 5:
+
+| Benchmark | Before | After | Δ |
+|---|---|---|---|
+| chunk derivation — 512×4 KiB chunks of a 5.5 MB source (includes sha256 + metadata + preview) | 5.77 ms/op · 10.91 MB/op · 4880 allocs | 3.64 ms/op · 2.46 MB/op · 4880 allocs | 1.6× faster · 4.4× fewer bytes |
+| memory.Search — 5000-entry store | 7.40 ms/op · 7.67 MB/op · 172 allocs | 3.24 ms/op · 1.53 MB/op · 90 allocs | 2.3× faster · 5× fewer bytes |
+| recall.Search — 5000-capsule corpus | 4.78 ms/op · 5.46 MB/op · 15160 allocs | 2.37 ms/op · 3.17 MB/op · 124 allocs | 2.0× faster · 122× fewer allocs |
+| contextcache.GetOrCompute hit | — | 20.9 ns/op · 0 allocs | hit path is allocation-free |
+
+Structural wins not visible in micro-benchmarks: per-retrieval object
+reads drop from N(selected chunks) to ≤1 per attachment (verified by
+test); binary/image staging peak RAM drops from the full file size
+(≤64 MiB) to ≤16 KiB + one copy buffer; remember→recall cycles no
+longer re-parse the memory file.
+
+## 11. Tests added
+
+- `internal/chunking/chunker_test.go`: legacy-equivalence (ASCII
+  byte-identical), lossless reconstruction, determinism, metadata
+  integrity (hash/offset/total/version round-trip), UTF-8 hard splits,
+  max-chunks cap, overlap re-inclusion + termination, benchmarks;
+- `internal/contextcache/contextcache_phase3_test.go`: compute-once,
+  16-goroutine coalescing, panic propagation + recovery, oversized
+  rejection (Put and GetOrCompute), cross-key parallelism, exact
+  insert accounting, hit-path benchmark;
+- `internal/attachments/attachments_phase3_test.go`: 6 MB staging +
+  retrieval, identical-content cache reuse (chunksBuilt unchanged),
+  changed-content invalidation, single object read per call, degraded
+  range-read path, measured retrieval stats, binary never fully
+  buffered, concurrent retrieval;
+- `internal/memory/memory_phase3_test.go`: appends cause zero full
+  re-parses, search correctness after append/clear/re-append,
+  incremental delete, external-writer visibility, cache non-mutation,
+  concurrent append+search race, 5000-entry benchmark;
+- `internal/recall/recall_phase3_test.go`: BM25 scoring identical to a
+  tf-map reference implementation, distinct-count integrity, clear
+  resets caches, 5000-capsule benchmark.
+
+## 12. Validation performed (this release)
+
+```text
+go build -tags headless ./...                                  PASS
+go vet -tags headless ./...                                    PASS
+go test -tags headless ./internal/... -count=1                 ALL PACKAGES PASS
+go test -race -tags headless ./internal/{agent,llm,api,
+        native/engine,contextcache,memory,attachments,recall}/ PASS
+npm run typecheck / lint / build                               PASS
+go run ./scripts/stress-main stress                            30 pass / 0 fail
+node scripts/release-version.mjs --check                       PASS
+cmake -S native/engine -B native/engine/build                  PASS
+cmake --build native/engine/build                              PASS
+ctest --test-dir native/engine/build                           5/5 PASS
+go test -tags headless ./internal/native/engine/
+  -run 'TestRealCppHostEndToEnd|TestRealCppHostModelLifecycle' PASS (real host binary)
+```
+
+## Known limitations (Phase 3, by design)
+
+- Retrieval scoring still ranks on chunk previews (cheap first pass);
+  this was a deliberate v1.1.3Z design, not changed here.
+- The native engine still does NOT generate tokens — Phase 2 model
+  loading is untouched; generation remains llama.cpp.
+- No semantic/structural repository retrieval exists (nothing in this
+  phase implements embeddings or an index beyond the existing BM25 and
+  lexical scorers).
+- No new config surface: the phase reuses existing limits; nothing was
+  added to the settings UI or the wire API.
 
 # v1.1.5Z Phase 2 Implementation Log (2026-09-10)
 

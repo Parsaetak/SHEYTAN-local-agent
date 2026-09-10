@@ -79,8 +79,25 @@ type Store struct {
 	// previously re-opened and re-parsed the whole JSONL file — the memory
 	// tool calls Search on every use, so long stores made each tool call
 	// O(file). Appends invalidate by bumping the observed stat.
-	cache    []Entry
-	cacheKey cacheKey
+	//
+	// v1.1.5Z Phase 3: the store is APPEND-AWARE. AppendEntry/DeleteByID/
+	// Clear now update the parsed cache incrementally (and refresh the
+	// observed stat), so the remember→recall cycle no longer re-parses the
+	// whole file after every write. fullParses/incrementalAppends are
+	// measured counters (ParseStats) proving which path served each read.
+	cache            []Entry
+	cacheKey         cacheKey
+	fullParses       uint64
+	incrementalAddes uint64
+}
+
+// ParseStats reports the measured cache behavior of this store:
+// how many times the whole JSONL file was re-parsed versus how many
+// writes were folded into the cache incrementally.
+func (s *Store) ParseStats() (fullParses, incrementalAppends uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.fullParses, s.incrementalAddes
 }
 
 type cacheKey struct {
@@ -304,7 +321,29 @@ func (s *Store) AppendEntry(entry Entry) error {
 	enc := json.NewEncoder(f)
 	enc.SetEscapeHTML(false)
 
-	return enc.Encode(entry)
+	if err := enc.Encode(entry); err != nil {
+		return err
+	}
+
+	// Phase 3: fold the new entry into the parsed cache instead of letting
+	// the next Search re-parse the whole file. Only valid when the cache is
+	// already warm (never loaded → the next read parses everything once,
+	// which includes this entry).
+	if s.cache != nil {
+		s.cache = append(s.cache, entry)
+		s.incrementalAddes++
+		s.refreshCacheKeyLocked()
+	}
+
+	return nil
+}
+
+// refreshCacheKeyLocked re-observes the file stat after a write so the
+// cache key matches the post-write file (caller holds mu).
+func (s *Store) refreshCacheKeyLocked() {
+	if fi, err := os.Stat(s.path); err == nil {
+		s.cacheKey = cacheKey{size: fi.Size(), mod: fi.ModTime()}
+	}
 }
 
 func (s *Store) All() ([]Entry, error) {
@@ -369,9 +408,17 @@ func (s *Store) allLocked() ([]Entry, error) {
 		return nil, err
 	}
 
+	// An empty store still WARMS the cache: a non-nil (empty) slice marks
+	// the cache as live so Phase 3 appends fold in instead of leaving the
+	// store permanently cold.
+	if out == nil {
+		out = []Entry{}
+	}
+
 	// refresh the cache key from the post-read stat
 	if fi, err := f.Stat(); err == nil {
 		s.cache, s.cacheKey = out, cacheKey{size: fi.Size(), mod: fi.ModTime()}
+		s.fullParses++
 	}
 
 	return out, nil
@@ -398,49 +445,73 @@ func (s *Store) SearchWithOptions(
 	limit int,
 	includeQuarantined bool,
 ) ([]Entry, error) {
-	all, err := s.All()
-	if err != nil {
-		return nil, err
-	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-	filtered := make([]Entry, 0, len(all))
-
-	for _, e := range all {
-		if !includeQuarantined &&
-			e.Quarantined {
-			continue
+	// Phase 3: score the CACHED entries read-only instead of copying the
+	// whole store per search. Scores live in a parallel slice so cached
+	// entries are never mutated; only matching entries are copied out.
+	entries, ok := s.cachedLocked()
+	if !ok {
+		var err error
+		entries, err = s.allLocked()
+		if err != nil {
+			return nil, err
 		}
-
-		filtered = append(filtered, e)
 	}
 
 	q := strings.ToLower(
 		strings.TrimSpace(query),
 	)
 
+	// Empty query: recency order (newest first), bounded by limit.
 	if q == "" {
+		recent := make([]Entry, 0, len(entries))
+
+		for _, e := range entries {
+			if !includeQuarantined && e.Quarantined {
+				continue
+			}
+
+			recent = append(recent, e)
+		}
+
 		sort.Slice(
-			filtered,
+			recent,
 			func(i, j int) bool {
-				return filtered[i].CreatedAt.After(
-					filtered[j].CreatedAt,
+				return recent[i].CreatedAt.After(
+					recent[j].CreatedAt,
 				)
 			},
 		)
 
 		if limit > 0 &&
-			len(filtered) > limit {
-			filtered = filtered[:limit]
+			len(recent) > limit {
+			recent = recent[:limit]
 		}
 
-		return filtered, nil
+		return recent, nil
 	}
 
-	for i := range filtered {
+	// scoreIdx/scoreVal are parallel to the filtered candidate set: the
+	// cache slice itself is never written.
+	type candidate struct {
+		idx   int
+		score float64
+	}
+
+	var candidates []candidate
+
+	for i, e := range entries {
+		if !includeQuarantined &&
+			e.Quarantined {
+			continue
+		}
+
 		score := 0.0
 		matched := false
 
-		for _, tag := range filtered[i].Tags {
+		for _, tag := range e.Tags {
 			if strings.Contains(
 				strings.ToLower(tag),
 				q,
@@ -451,7 +522,7 @@ func (s *Store) SearchWithOptions(
 		}
 
 		if strings.Contains(
-			strings.ToLower(filtered[i].Content),
+			strings.ToLower(e.Content),
 			q,
 		) {
 			score += 1.0
@@ -466,7 +537,7 @@ func (s *Store) SearchWithOptions(
 
 		// Trusted/verified memory is stronger recall material, but this
 		// does not turn it into external authority for the rest of the agent.
-		switch filtered[i].Trust {
+		switch e.Trust {
 		case TrustVerified:
 			score += 0.50
 		case TrustTrusted:
@@ -475,15 +546,15 @@ func (s *Store) SearchWithOptions(
 			score += 0.05
 		}
 
-		filtered[i].Score = score
+		candidates = append(candidates, candidate{idx: i, score: score})
 	}
 
-	var hits []Entry
+	hits := make([]Entry, 0, len(candidates))
 
-	for _, e := range filtered {
-		if e.Score > 0 {
-			hits = append(hits, e)
-		}
+	for _, c := range candidates {
+		e := entries[c.idx]
+		e.Score = c.score // copy — the cached entry keeps its zero Score
+		hits = append(hits, e)
 	}
 
 	sort.SliceStable(
@@ -511,12 +582,18 @@ func (s *Store) DeleteByID(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	entries, err := s.allLocked()
-	if err != nil {
-		return err
+	// Phase 3: serve the rewrite from the warm parsed cache when possible —
+	// the previous code re-parsed the whole file on every delete.
+	entries, ok := s.cachedLocked()
+	if !ok {
+		var err error
+		entries, err = s.allLocked()
+		if err != nil {
+			return err
+		}
 	}
 
-	var kept []Entry
+	kept := make([]Entry, 0, len(entries))
 
 	for _, e := range entries {
 		if e.ID != id {
@@ -548,18 +625,40 @@ func (s *Store) DeleteByID(id string) error {
 		return err
 	}
 
-	return os.Rename(tmp, s.path)
+	if err := os.Rename(tmp, s.path); err != nil {
+		return err
+	}
+
+	// Phase 3: the rewrite IS the new state — cache it instead of forcing
+	// the next Search to re-parse the file. kept entries are already
+	// normalized (they came from allLocked).
+	if kept == nil {
+		kept = []Entry{}
+	}
+	s.cache = kept
+	s.incrementalAddes++
+	s.refreshCacheKeyLocked()
+
+	return nil
 }
 
 func (s *Store) Clear() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	return os.WriteFile(
+	if err := os.WriteFile(
 		s.path,
 		[]byte{},
 		0o644,
-	)
+	); err != nil {
+		return err
+	}
+
+	// Phase 3: the empty file is the new state — cache it.
+	s.cache = []Entry{}
+	s.refreshCacheKeyLocked()
+
+	return nil
 }
 
 func (s *Store) Count() int {
