@@ -6,7 +6,7 @@ Repository: https://github.com/Parsaetak/SHEYTAN-local-agent
 
 Branch: `main`
 
-Current release: `v1.1.5Z` (SHEYTAN Native AI Engine — Phase 4 foundation: real native tokenizer, KV cache, scheduler, sampler; NO inference yet — see `worklog.md` for the full Phase 1 + Phase 2 + Phase 4 logs).
+Current release: `v1.1.5Z` (SHEYTAN Native AI Engine — Phase 5: REAL native transformer inference + generation + streaming + cancellation + measured metrics for the llama architecture; llama.cpp remains the fallback — see `worklog.md` for the full Phase 1 + 2 + 4 + 5 logs).
 
 **Read `worklog.md` before working.** It records the audit findings and the fixes this release shipped, including which subsystems were previously unwired and why.
 
@@ -67,12 +67,18 @@ inspect → verify → diagnose → fix → retest → continue
 
 Backend: Go 1.26, Wails v3 (desktop shell), Go HTTP API + WebSocket on `127.0.0.1:8765`.
 
-Engine stack (v1.1.5Z Phase 4 — the native engine implements REAL tokenizer, KV cache, scheduler and sampler primitives; llama.cpp is still the only generation backend because the transformer forward pass is not implemented yet):
+Engine stack (v1.1.5Z Phase 5 — the native engine performs REAL transformer inference for the llama architecture and serves REAL generation with streaming + cancellation + measured metrics; llama.cpp remains the default/fallback and serves every model the native engine cannot execute):
 
 ```text
-React/TypeScript → Wails → Go Core → llm.Backend contract → llama.cpp (default + fallback)
-                                              ↘ internal/native/engine → shtn-engine-host (C++, lifecycle/metrics/GGUF model loading +
-                                                  Phase 4: real tokenizer/KV cache/scheduler/sampler — NO inference yet)
+React/TypeScript → Wails → Go Core → llm.Backend contract
+                                    ├─ llama.cpp (default + fallback: tools, images,
+                                    │             non-llama archs, unsupported tensors)
+                                    └─ native backend (selected + GenerationCapable)
+                                        → shtn-engine-host (supervised subprocess)
+                                        → C++ engine: GGUF tokenizer → transformer
+                                          forward pass (RMSNorm/RoPE/GQA/SwiGLU)
+                                          → real logits → sampler → fp16 KV cache
+                                          → decode loop → streamed chunks → metrics
 ```
 
 Frontend: React 19, TypeScript, Vite, Zustand; embedded via `web/static` (go:embed) — **`npm run build` must be re-run after any frontend change** so the embedded assets stay in sync.
@@ -83,11 +89,13 @@ Primary packages:
 internal/agent       orchestrator (per-run config snapshot, tool registry)
 internal/llm         LlamaServer (engine lifecycle) + OpenAI-compatible client
                      + Backend contract + LlamaBackend + selection (v1.1.5Z)
-internal/native/engine  SHEYTAN native engine: protocol (v3), supervised runtime,
+internal/native/engine  SHEYTAN native engine: protocol (v4), supervised runtime,
                      Backend adapter, hardware profile, metrics, model lifecycle,
-                     tokenizer, KV cache, scheduler (Phase 4: real foundation;
-                     NO inference — Generate/StreamGenerate return
-                     llm.ErrNotImplemented, llama.cpp remains the backend)
+                     tokenizer, KV cache, scheduler, sampler AND REAL llama-
+                     architecture generation (Phase 5: transformer forward
+                     pass, streamed chunks, cooperative cancellation,
+                     measured generation metrics; unsupported models fall
+                     back to llama.cpp with an inspectable reason)
 internal/api         REST/WS surface, run registry, engine event bus
 internal/runtime     Stack wiring (single source for every subsystem)
 internal/config      Config + Source (copy-on-write live config)  ← READ THIS
@@ -110,7 +118,10 @@ internal/logging     log catcher + redaction
 internal/sysinfo     hardware probe (CIM-first on Windows)
 internal/netcheck    parallel connectivity probes
 native/engine/       C++ native engine (CMake + Makefile): C ABI core,
-                     shtn-engine-host subprocess, protocol + host tests
+                     shtn-engine-host subprocess, protocol + host tests,
+                     llama forward pass + generation + tensor dequant
+                     (F32/F16/Q4_0/Q4_1/Q5_0/Q5_1/Q8_0), Python reference
+                     + fixtures for the numerical-correctness tests
 ```
 
 # 4. Configuration: the Source contract
@@ -151,10 +162,14 @@ separate from sources and bounded:
 - `MarkBusy` performs the whole transition under one lock — do not split it again (see `setStateLocked`).
 - Streaming has NO overall client timeout by design; the stall watchdog (5 min zero-byte) provides the hang bound. Do not reintroduce a blanket `http.Client.Timeout` on the stream client.
 - Engine downloads are context-bounded (10 min) and size-capped (2 GiB).
-- v1.1.5Z backend rules: generation is routed by `llm.SelectGenerationBackend` — the native engine only when selected (`engineBackend: "native"`) AND `GenerationCapable()`; otherwise llama.cpp. Native GENERATION is not implemented yet, so generation ALWAYS resolves to llama.cpp. The native backend's Generate/StreamGenerate return `llm.ErrNotImplemented` — that is the fallback signal, never a bug to "fix" by faking inference. Native engine failures never fail the llama path (best-effort, logged, visible in `native.state`).
+- v1.1.5Z Phase 5 backend rules: generation is routed by `llm.SelectGenerationBackend` (wired through the orchestrator's generation router — `Stack.streamGeneration`) — the native engine only when selected (`engineBackend: "native"`) AND `GenerationCapable()` (alive + a loaded model whose llama graph validated at load time); otherwise llama.cpp. Request shapes the native path cannot serve (tools, images) and pre-first-token native failures fall back to llama.cpp with the reason logged and inspectable. Native engine failures never fail the llama path (best-effort, logged, visible in `native.state`).
 - Native MODEL loading (Phase 2) is real: `LoadModel` validates the file and loads it natively (GGUF validate → memory-map → metadata → memory plan). Model states use their own dedicated vocabulary — `unloaded/loading/loaded/failed` — separate from the engine states above; a host restart resets the model state (a fresh host maps nothing). Loading a model does NOT enable generation.
-- v1.1.5Z Phase 4 native foundation primitives: the native engine implements REAL tokenizer init/encode/decode (BPE/unigram/WPM, special tokens, BOS/EOS, bounded), a REAL KV-cache data structure sized from model dims (capacity/usage/measured bytes, GQA-aware, bounded), a REAL bounded scheduler (single-slot, FIFO, cancel, drain, queue cap) and REAL sampling primitives (greedy, temperature, top-k, top-p, repetition penalty, seedable RNG). These are wired through the IPC protocol (ops: `tokenizer_init` / `tokenizer_info` / `tokenizer_encode` / `tokenizer_decode` / `kv_cache_info` / `scheduler_info`; ABI/protocol v3) and exposed via Engine.InitTokenizer / Engine.TokenizerInfo / Engine.TokenizerEncode / Engine.TokenizerDecode / Engine.KVCacheInfo / Engine.SchedulerInfo. They do NOT produce generated text — no transformer forward pass exists. The KV cache is NOT auto-allocated on model load (it reports the honest zero-state until a future op explicitly allocates it). The scheduler executes nothing in Phase 4 (active=0; the queue exists and is measurable, but no worker thread runs). Honest reporting: an unsupported tokenizer model kind returns `ErrUnsupportedTokenizer` and the llama.cpp fallback remains the generation backend.
-- The native engine host (`shtn-engine-host`) runs with a sanitized environment, bounded op timeouts (10 s; model loads 30 s), a 1 MiB frame cap and a protocol/ABI handshake that fails closed (protocol/ABI v3 — both sides bumped together; v3 adds the tokenizer/KV/scheduler surface to v2 additively, a v2-era host would still build against this header by ignoring the new functions). Build it from `native/engine/` (CMake or Make); this phase does not ship or auto-download it.
+- v1.1.5Z Phase 5 native generation (REAL): the native engine performs the actual transformer computation for the llama architecture — token embeddings → per-layer RMSNorm → Q/K/V projection → RoPE → causal GQA attention over a REAL fp16 KV cache → output projection + residual → RMSNorm → SwiGLU FFN + residual → final norm → logits. The sampler consumes the REAL logits (temperature, top-k, top-p, repetition penalty, seed — the Phase 4 primitives). Generation streams coarse-grained chunks over IPC (one generate request → event frames → final frame; NEVER one frame per token), supports REAL cooperative cancellation (observed every token), stops honestly (EOS without emitting it / max_tokens / context bound / error) and reports MEASURED metrics only (prompt tokens, generated tokens, prefill time, TTFT, decode tok/s, KV positions — monotonic clock). The context bound is a REJECT policy: prompt+max_tokens beyond the context window fails explicitly (no silent truncation).
+- Native generation support is NARROW and honest: architecture llama only; tensor types F32/F16/Q4_0/Q4_1/Q5_0/Q5_1/Q8_0 only; RoPE freq_scale 1.0 only; no chat-template interpretation (plain role-labeled prompt format — llama.cpp keeps template fidelity); tools/images requests return ErrNotImplemented (the router sends them to llama.cpp). A model outside the supported set loads fine but reports `generationCapable=false` with an inspectable reason; generation selection (`llm.SelectGenerationBackend` → native only when selected AND capable) then routes to llama.cpp. A native failure BEFORE the first streamed token falls back to llama.cpp with the reason logged; after the first token it surfaces like any engine error.
+- The native KV cache now stores REAL fp16 bits (uint16_t, Phase 5 corrected the Phase 4 float[]-but-reported-f16 defect: capacity_bytes == the actual allocation, layer offsets exact, used_bytes consistent with written positions — pinned by regression tests). The cache allocates at the first generate (sized from model dims) and resets per request; `kv_cache_info` reports the measured population.
+- The native scheduler runs a REAL single-slot worker thread (max concurrent = 1): queued/active/completed/cancelled/failed counts are real; the generation lane in the host keeps the dispatch loop responsive (cancel/metrics/shutdown while generating).
+- Model loads now compute the llama-graph verdict (metadata-level: every required tensor present with the right shape and a supported type) and report `generationCapable` + `generationReason` in model_info. Pre-warm loads the selected model natively and logs the verdict; an incapable model keeps llama.cpp serving generation.
+- The native engine host (`shtn-engine-host`) runs with a sanitized environment, bounded op timeouts (10 s; model loads 30 s), a 1 MiB frame cap and a protocol/ABI handshake that fails closed (protocol/ABI v4 — both sides bumped together; v4 adds the generate/cancel ops with streamed event frames + real cancellation to v3; generation runs on bounded lanes so the host stays responsive mid-generation; malformed generate payloads and host-side errors are bounded error frames, never crashes). Build it from `native/engine/` (CMake or Make); this phase does not ship or auto-download it.
 - v1.1.5Z Phase 4 frontend perf contract: streaming model output is COALESCED through `flushStreaming` (rAF-boundary batching in `store.ts`). The UI updates at most once per frame regardless of token rate — a model emitting 200 tokens/sec no longer triggers 200 React renders/sec. Lifecycle events (done/error/session) bypass the coalescer and reset state immediately. A frame-budget diagnostic HUD (`src/perf-hud.ts`) is OFF by default — toggle with Ctrl+Shift+P or `window.__shtnTogglePerfHUD()`. The HUD measures real frame time, dropped frames, longtask count and coalesced stream-update frequency. The target budget is auto-detected from the display refresh rate (8.33 ms for 120 Hz, 16.67 ms for 60 Hz) — the HUD does NOT claim guaranteed 120 FPS; it reports `optimized for high-refresh displays / frame-budget aware / 120 Hz-capable presentation where hardware permits`.
 
 # 6. Bounded-resource invariants
@@ -216,17 +231,23 @@ When adding a config field, grep for a consumer in the same change. When adding 
 
 ```bash
 go test -tags headless ./internal/... -count=1
-go test -race  -tags headless ./internal/agent/ ./internal/llm/ ./internal/api/
+go test -race  -tags headless ./internal/agent/ ./internal/llm/ ./internal/api/ ./internal/native/engine/ ./internal/runtime/
 go vet -tags headless ./...
 npm run typecheck && npm run lint && npm run build
 go run ./scripts/stress-main stress          # release gate (0 fail required)
 node scripts/release-version.mjs --check     # version surfaces consistent
 # C++ native engine (when toolchain available):
 cmake -S native/engine -B native/engine/build && cmake --build native/engine/build
-ctest --test-dir native/engine/build         # 9 suites: engine, protocol, host, gguf, model
-                                              #          + Phase 4: tokenizer, kv_cache, scheduler, sampler
+ctest --test-dir native/engine/build         # 12 suites: engine, protocol, host, gguf, model,
+                                              #  tokenizer, kv_cache, scheduler, sampler
+                                              #  + Phase 5: tensor, forward (vs the independent
+                                              #    Python reference), generate
 # Go↔C++ integration (skips when the host binary is not built):
-go test -tags headless ./internal/native/engine/ -run 'TestRealCppHostEndToEnd|TestRealCppHostModelLifecycle|TestRealCppHostPhase4'
+go test -tags headless ./internal/native/engine/ -run 'TestRealCppHostEndToEnd|TestRealCppHostModelLifecycle|TestRealCppHostPhase4|TestRealCppHostPhase5'
+# Fixtures regenerate (deterministic; the reference comparison depends on them):
+python3 native/engine/tests/reference/make_fixture.py
+# Measured performance evidence (prints the measured table):
+go test -tags headless ./internal/native/engine/ -run TestPhase5Benchmark -count=1 -v
 ```
 
 New runtime features need a regression test at the level where a real user would notice the failure (HTTP-level for API changes, request-shape tests for wire fields, behavioral tests for loop mechanics).
@@ -249,23 +270,26 @@ A button is not a feature. An endpoint is not a feature. A compile is not a feat
 # 13. Immediate next tasks (priority order)
 
 ```text
-1. Native engine generation (the native engine's next phase): implement
-   Generate/
-   StreamGenerate in the C++ core + host protocol (coarse-grained:
-   whole requests, streamed chunks), then flip GenerationCapable().
-   Extend internal/native/engine/{kv,generation,scheduler} from types
-   to implementations. Do NOT change the wire types or the ABI without
-   bumping SHTN_PROTOCOL_VERSION / SHTN_ABI_VERSION.
-2. Native engine packaging: build + ship shtn-engine-host in the
+1. Native generation PERF: the Phase 5 forward pass is portable scalar
+   C++ (dequant-then-dot) — measured SLOWER than llama.cpp (see
+   worklog.md Phase 5 performance table). SIMD/block-fused matvec,
+   thread-parallel prefill and quantized-compute paths are the next
+   lever. Correctness is pinned by the Python reference; optimize under
+   it.
+2. Native generation SCOPE: more architectures (the derive/validate/
+   forward separation keeps arch-specific behaviour explicit), K-quants,
+   chat-template interpretation (currently a plain role-labeled prompt),
+   tool-call formatting/parsing on the native path.
+3. Native engine packaging: build + ship shtn-engine-host in the
    portable layout (bin/) with an update path (updater pattern).
-3. Vision pipeline verification with a real mmproj projector
-4. Tool-calling reliability tuning with larger instruct models
-5. Continuum rollover exercise under real long sessions (it is wired +
+4. Vision pipeline verification with a real mmproj projector
+5. Tool-calling reliability tuning with larger instruct models
+6. Continuum rollover exercise under real long sessions (it is wired +
    unit-tested; it has not yet been observed in a real multi-hour thread)
-6. Context Engine foundations (PLANNED work — see ARCHITECTURE.md
+7. Context Engine foundations (PLANNED work — see ARCHITECTURE.md
    Part II; Phase 3 shipped the bounded chunk/cache/metrics layer it
    will build on, NOT the semantic index itself)
-7. Model tier discovery + capability-based routing (PLANNED — see
+8. Model tier discovery + capability-based routing (PLANNED — see
    ARCHITECTURE.md §II.2)
 ```
 

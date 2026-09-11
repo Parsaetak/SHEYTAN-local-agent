@@ -1,6 +1,6 @@
 package engine
 
-// protocol.go — the SHEYTAN Native API wire protocol (v1.1.5Z Phase 4).
+// protocol.go — the SHEYTAN Native API wire protocol (v1.1.5Z Phase 5).
 //
 // Frame layout (both directions, binary-safe):
 //
@@ -10,20 +10,26 @@ package engine
 //
 //      {"id": 1, "op": "health"}
 //      {"id": 2, "op": "load_model", "payload": {"path": "...", "contextLength": 0}}
+//      {"id": 3, "op": "generate", "payload": {"requestId": "...", "prompt": "...",
+//            "maxTokens": 64, "temperature": 0.7, "topK": 40, "topP": 0.95,
+//            "repetitionPenalty": 1.1, "repeatLastN": 64, "seed": 42}}
 //
-// Response:
+// Response (one or more frames per request id):
 //
-//      {"id": 1, "ok": true, "result": { ... }}
-//      {"id": 1, "ok": false, "error": "human-readable reason"}
+//      {"id": 1, "ok": true, "result": { ... }}                        (final)
+//      {"id": 3, "ok": true, "event": "chunk", "result": { ... }}      (stream event)
+//      {"id": 3, "ok": true, "result": { ... }}                        (final, same id)
+//      {"id": 1, "ok": false, "error": "human-readable reason"}       (final, error)
 //
 // Operations (coarse-grained by design — no tiny high-frequency calls
-// cross this boundary):
+// cross this boundary; generation streams BATCHED chunks, never one
+// frame per token):
 //
 //      ping              handshake: protocol + ABI version negotiation
 //      health            active engine health probe
 //      hwinfo            hardware capability profile (detected values)
 //      metrics           engine metrics snapshot (measured values)
-//      cancel            request cooperative cancellation of one in-flight generation
+//      cancel            cooperative cancellation of one generation request
 //      load_model        validate + memory-map a GGUF model, extract metadata, plan memory
 //      unload_model      release the loaded model (idempotent)
 //      model_info        snapshot of the model concern (state + metadata + plan)
@@ -31,8 +37,9 @@ package engine
 //      tokenizer_info    tokenizer snapshot (initialized, vocab size, specials)
 //      tokenizer_encode  UTF-8 text → token ids
 //      tokenizer_decode  token ids → UTF-8 text
-//      kv_cache_info     measured KV-cache snapshot (Phase 4)
-//      scheduler_info    measured scheduler snapshot (Phase 4)
+//      kv_cache_info     measured KV-cache snapshot (Phase 5: real population)
+//      scheduler_info    measured scheduler snapshot (Phase 5: real execution)
+//      generate          REAL native generation: streamed event frames + final
 //      shutdown          graceful engine shutdown
 //
 // Unknown ops and malformed frames produce a bounded error response (or
@@ -41,10 +48,12 @@ package engine
 // exhaust memory.
 //
 // Version history: v1 = Phase 1 (lifecycle/health/hardware/metrics);
-// v2 = Phase 2 (model loading surface added; pre-existing op shapes
-// unchanged); v3 = Phase 4 (tokenizer/KV/scheduler surface added;
-// pre-existing op shapes unchanged). Both sides are bumped together — a
-// mismatch is a hard handshake failure (fail closed).
+// v2 = Phase 2 (model loading surface added); v3 = Phase 4
+// (tokenizer/KV/scheduler surface added); v4 = Phase 5 (REAL generation:
+// generate op with streamed event frames + real cancel semantics — the
+// Phase 4 cancel stub answered "no generation requests exist"). Both
+// sides are bumped together — a mismatch is a hard handshake failure
+// (fail closed).
 
 import (
 	"encoding/binary"
@@ -57,7 +66,7 @@ import (
 // ProtocolVersion is the wire protocol version implemented here. The C++
 // host reports its own value in the ping result; a mismatch is a hard
 // handshake failure (fail closed).
-const ProtocolVersion = 3
+const ProtocolVersion = 4
 
 // MaxFrameBytes bounds one protocol frame (1 MiB). Anything larger is a
 // protocol violation, not a buffer to allocate.
@@ -79,6 +88,7 @@ const (
 	OpTokenizerDecode = "tokenizer_decode"
 	OpKVCacheInfo     = "kv_cache_info"
 	OpSchedulerInfo   = "scheduler_info"
+	OpGenerate        = "generate"
 	OpShutdown        = "shutdown"
 )
 
@@ -98,6 +108,7 @@ var ValidOps = map[string]bool{
 	OpTokenizerDecode: true,
 	OpKVCacheInfo:     true,
 	OpSchedulerInfo:   true,
+	OpGenerate:        true,
 	OpShutdown:        true,
 }
 
@@ -117,13 +128,21 @@ type Request struct {
 	Payload json.RawMessage `json:"payload,omitempty"`
 }
 
-// Response is one inbound result.
+// Response is one inbound result. Streaming responses carry the same id
+// as the request: every frame with a non-empty Event is an intermediate
+// event (delivered to the stream callback); the frame WITHOUT an Event
+// member is the final response that completes the call.
 type Response struct {
 	ID     int64           `json:"id"`
 	OK     bool            `json:"ok"`
+	Event  string          `json:"event,omitempty"`
 	Result json.RawMessage `json:"result,omitempty"`
 	Error  string          `json:"error,omitempty"`
 }
+
+// IsFinal reports whether this response completes its request (no event
+// marker — event frames are intermediate by definition).
+func (r *Response) IsFinal() bool { return r.Event == "" }
 
 // PingResult is the handshake answer.
 type PingResult struct {
@@ -172,6 +191,14 @@ type NativeModelInfo struct {
 	KVCacheBytes    uint64 `json:"kvCacheBytes,omitempty"`
 	WorkspaceBytes  uint64 `json:"workspaceBytes,omitempty"`
 	TotalPlanBytes  uint64 `json:"totalPlanBytes,omitempty"`
+
+	// GenerationCapable (Phase 5): the load-time native-inference
+	// verdict — the llama graph validated against real GGUF metadata
+	// (every required tensor present with the right shape and a
+	// supported type). False + GenerationReason is the explicit,
+	// inspectable fallback signal the backend layer acts on.
+	GenerationCapable bool   `json:"generationCapable"`
+	GenerationReason  string `json:"generationReason,omitempty"`
 }
 
 // NativeMemoryPlan is the load-time memory budget computed by the C++
@@ -201,6 +228,60 @@ type ModelOpResult struct {
 	Model  *NativeModelInfo  `json:"model,omitempty"`
 	Memory *NativeMemoryPlan `json:"memory,omitempty"`
 }
+
+// --- Phase 5: generation wire types ---------------------------------------
+
+// GeneratePayload is the generate op request payload. Prompt is the
+// plain prompt text — the ENGINE tokenizes it with its own materialized
+// GGUF tokenizer (the real native path: Go request → engine tokenizer →
+// forward pass).
+type GeneratePayload struct {
+	RequestID         string  `json:"requestId"`
+	Prompt            string  `json:"prompt"`
+	MaxTokens         uint32  `json:"maxTokens"`
+	Temperature       float64 `json:"temperature,omitempty"`
+	TopK              int32   `json:"topK,omitempty"`
+	TopP              float64 `json:"topP,omitempty"`
+	RepetitionPenalty float64 `json:"repetitionPenalty,omitempty"`
+	RepeatLastN       uint32  `json:"repeatLastN,omitempty"`
+	Seed              uint64  `json:"seed,omitempty"`
+}
+
+// GenerationEventResult is one streamed "event":"chunk" frame's result.
+type GenerationEventResult struct {
+	RequestID string `json:"requestId"`
+	Text      string `json:"text"`
+	Token     uint32 `json:"token"`
+	Final     bool   `json:"final,omitempty"`
+}
+
+// GenerationMetricsWire is the metrics object inside the generate op's
+// final frame (the engine-level view lives in generation.go).
+type GenerationMetricsWire struct {
+	PromptSeconds         float64 `json:"promptSeconds"`
+	TTFTSeconds           float64 `json:"ttftSeconds"`
+	DecodeSeconds         float64 `json:"decodeSeconds"`
+	TotalSeconds          float64 `json:"totalSeconds"`
+	TokensPerSecond       float64 `json:"tokensPerSecond"`
+	PromptTokensPerSecond float64 `json:"promptTokensPerSecond"`
+	KVPositionsUsed       uint64  `json:"kvPositionsUsed"`
+}
+
+// GenerationFinalResult is the generate op's final frame result.
+type GenerationFinalResult struct {
+	RequestID       string                `json:"requestId"`
+	FinishReason    string                `json:"finishReason"`
+	PromptTokens    uint32                `json:"promptTokens"`
+	GeneratedTokens uint32                `json:"generatedTokens"`
+	Metrics         GenerationMetricsWire `json:"metrics"`
+}
+
+// Finish reasons (mirrors the C++ SHTN_FINISH_* values).
+const (
+	FinishEOS       = "eos"
+	FinishLength    = "length"
+	FinishCancelled = "cancelled"
+)
 
 // WriteFrame writes one length-prefixed JSON payload.
 func WriteFrame(w io.Writer, payload []byte) error {

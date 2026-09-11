@@ -5,22 +5,39 @@
 // stderr carries human-readable diagnostics (ring-buffered by Go).
 //
 // Dispatch loop rules:
-//   - one request frame in → exactly one response frame out;
+//   - one request frame in → one or more response frames out (generate
+//     streams EVENT frames with the same id before its final frame);
 //   - malformed input (bad JSON, unknown op, oversized frame) gets a
 //     bounded ERROR response — the host NEVER crashes and never exits
 //     on bad input;
 //   - "shutdown" acknowledges and exits cleanly;
-//   - stdin EOF exits cleanly (the Go side closes stdin on stop);
-//   - every op is coarse-grained; there is no per-token traffic.
+//   - stdin EOF cancels in-flight generation, waits for the lanes and
+//     exits cleanly (the Go side closes stdin on stop);
+//   - every op is coarse-grained; generation streams coarse chunks
+//     (never one frame per token — the engine batches emissions).
 //
 // Phase 2 ops: load_model / unload_model / model_info — the native GGUF
 // loading surface (validate + memory-map + metadata + memory plan).
 //
 // Phase 4 ops: tokenizer_init / tokenizer_info / tokenizer_encode /
 // tokenizer_decode / kv_cache_info / scheduler_info — the foundation
-// primitives surface (real tokenizer, real KV cache struct, real
-// scheduler; NO inference — the forward pass is a later phase, and
-// llama.cpp remains the generation backend).
+// primitives surface.
+//
+// Phase 5 ops: generate / cancel — REAL native generation.
+//   generate: {"id":N,"op":"generate","payload":{requestId, prompt,
+//             maxTokens, temperature, topK, topP, repetitionPenalty,
+//             repeatLastN, seed}} →
+//             {"id":N,"ok":true,"event":"chunk","result":{requestId,
+//              text, token, tokensSoFar}}* then
+//             {"id":N,"ok":true,"result":{requestId, finishReason,
+//              generatedTokens, promptTokens, metrics{...}}}
+//             (or {"id":N,"ok":false,"error":"..."} as the final frame).
+//             The generation runs on a bounded LANE thread through the
+//             engine's single-slot scheduler; the dispatch loop stays
+//             responsive (cancel / metrics / shutdown while generating).
+//   cancel: {"id":N,"op":"cancel","payload":{requestId}} →
+//           {"id":N,"ok":true,"result":{cancelled, reason}} — real
+//           cooperative cancellation of the queued or active request.
 
 #include "shtn/engine.h"
 #include "shtn/types.h"
@@ -32,8 +49,12 @@
 #include <cstdio>
 #include <cstring>
 #include <iostream>
+#include <list>
+#include <memory>
+#include <mutex>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #if defined(_WIN32)
@@ -44,6 +65,11 @@
 namespace {
 
 using shtn::json::quote;
+
+// Forward declarations (definitions live further down; the Phase 5
+// generation lane code references them).
+std::string error_response(int64_t id, const std::string& message);
+std::string success_response(int64_t id, const std::string& result);
 
 // json_num renders a double without trailing garbage for integral values.
 std::string json_num(double v) {
@@ -127,6 +153,15 @@ std::string op_metrics(shtn_engine* engine) {
     shtn_model_info mi{};
     shtn_engine_model_info(engine, &mi);
 
+    // Phase 5: REAL generation + KV measurements (zero before any
+    // generation — never fabricated).
+    shtn_generation_stats gs{};
+    shtn_engine_generation_stats(engine, &gs);
+    shtn_kv_cache_info kv{};
+    shtn_engine_kv_cache_info(engine, &kv);
+    shtn_scheduler_info si{};
+    shtn_engine_scheduler_info(engine, &si);
+
     std::ostringstream oss;
     oss << "{"
         << "\"engineState\":" << quote(m.state)
@@ -134,26 +169,273 @@ std::string op_metrics(shtn_engine* engine) {
         << ",\"processRssBytes\":" << json_uint(m.process_rss_bytes)
         << ",\"modelState\":" << quote(mi.state)
         << ",\"scheduler\":{"
-        << "\"activeRequests\":" << m.active_requests
-        << ",\"maxConcurrentRequests\":1"
+        << "\"activeRequests\":" << si.active_requests
+        << ",\"queuedRequests\":" << si.queued_requests
+        << ",\"maxConcurrentRequests\":" << si.max_concurrent
+        << ",\"totalSubmitted\":" << json_uint(si.total_submitted)
+        << ",\"totalCompleted\":" << json_uint(si.total_completed)
+        << ",\"totalCancelled\":" << json_uint(si.total_cancelled)
+        << ",\"totalFailed\":" << json_uint(si.total_failed)
         << "},\"memory\":{"
         << "\"nativeRssBytes\":" << json_uint(m.process_rss_bytes)
         << "},\"kv\":{"
-        << "\"strategy\":\"none\""
+        << "\"allocated\":" << (kv.allocated ? "true" : "false")
+        << ",\"strategy\":\"f16\""
+        << ",\"capacityBytes\":" << json_uint(kv.capacity_bytes)
+        << ",\"usedBytes\":" << json_uint(kv.used_bytes)
+        << ",\"capacityPositions\":" << json_uint(kv.capacity_positions)
+        << ",\"usedPositions\":" << json_uint(kv.used_positions)
         << "},\"generation\":{"
-        << "\"activeRequests\":" << m.active_requests
+        << "\"activeRequests\":" << gs.active_requests
+        << ",\"totalRequests\":" << json_uint(gs.total_requests)
+        << ",\"totalCompleted\":" << json_uint(gs.total_completed)
+        << ",\"totalCancelled\":" << json_uint(gs.total_cancelled)
+        << ",\"totalFailed\":" << json_uint(gs.total_failed)
+        << ",\"ttftSeconds\":" << json_num(gs.ttft_seconds)
+        << ",\"tokensPerSecond\":" << json_num(gs.tokens_per_second)
+        << ",\"promptTokensPerSecond\":"
+        << json_num(gs.prompt_tokens_per_second)
+        << ",\"lastPromptTokens\":" << gs.last_prompt_tokens
+        << ",\"lastGeneratedTokens\":" << gs.last_generated_tokens
         << "}"
         << "}";
     return oss.str();
 }
 
-std::string op_cancel() {
-    // No generation requests exist in this phase, so a cancel is
-    // honestly reported as a miss (the Go side surfaces the reason).
+// --- Phase 5: generation lane ------------------------------------------------
+//
+// The host runs at most kMaxLanes generation lanes at a time (each lane
+// blocks in shtn_engine_generate while the engine's single-slot
+// scheduler serializes execution). A generate request beyond the engine
+// queue bound is rejected with SHTN_ERR_QUEUE_FULL by the scheduler, so
+// the lane count is structurally bounded.
+constexpr size_t kMaxLanes = 16;
+
+// GenLane is one in-flight generate request.
+struct GenLane {
+    int64_t id = 0;
+    std::string request_id;
+    shtn_generation_options opts{};
+    std::thread thread;
+};
+
+// HostCtx carries everything the lanes + dispatch loop share.
+struct HostCtx {
+    shtn_engine* engine = nullptr;
+    std::ostream* out = nullptr;
+    std::mutex out_mu;        // serializes every write_frame
+    std::mutex lanes_mu;      // guards the lane list
+    std::list<std::unique_ptr<GenLane>> lanes;
+};
+
+// generation_result_json renders the final generate frame's result.
+std::string generation_result_json(const std::string& request_id,
+                                   const shtn_generation_result& res) {
     std::ostringstream oss;
     oss << "{"
-        << "\"cancelled\":false"
-        << ",\"reason\":\"no active generation requests (generation is a later phase)\""
+        << "\"requestId\":" << quote(request_id)
+        << ",\"finishReason\":" << quote(res.finish_reason)
+        << ",\"promptTokens\":" << res.metrics.prompt_tokens
+        << ",\"generatedTokens\":" << res.metrics.generated_tokens
+        << ",\"metrics\":{"
+        << "\"promptSeconds\":" << json_num(res.metrics.prompt_seconds)
+        << ",\"ttftSeconds\":" << json_num(res.metrics.ttft_seconds)
+        << ",\"decodeSeconds\":" << json_num(res.metrics.decode_seconds)
+        << ",\"totalSeconds\":" << json_num(res.metrics.total_seconds)
+        << ",\"tokensPerSecond\":" << json_num(res.metrics.tokens_per_second)
+        << ",\"promptTokensPerSecond\":"
+        << json_num(res.metrics.prompt_tokens_per_second)
+        << ",\"kvPositionsUsed\":" << json_uint(res.metrics.kv_positions_used)
+        << "}"
+        << "}";
+    return oss.str();
+}
+
+// lane_body is the thread body of one generate lane.
+void lane_body(HostCtx* ctx, GenLane* lane) {
+    // The emit callback runs on the ENGINE's scheduler worker thread (the
+    // lane itself blocks in shtn_engine_generate). Event frames are
+    // written under the shared out mutex so they never interleave
+    // mid-frame with dispatch-loop responses.
+    struct EmitCtx {
+        HostCtx* ctx;
+        GenLane* lane;
+    } emit_ctx{ctx, lane};
+
+    auto emit = [](void* user, const shtn_generation_chunk* c) -> int32_t {
+        auto* e = static_cast<EmitCtx*>(user);
+        if (c == nullptr) {
+            return 0;
+        }
+
+        std::ostringstream oss;
+        oss << "{"
+            << "\"id\":" << e->lane->id
+            << ",\"ok\":true"
+            << ",\"event\":\"chunk\""
+            << ",\"result\":{"
+            << "\"requestId\":" << quote(e->lane->request_id)
+            << ",\"text\":" << quote(std::string(c->text, c->text_len))
+            << ",\"token\":" << c->token_id
+            << ",\"final\":" << (c->final ? "true" : "false")
+            << "}"
+            << "}";
+
+        const std::string payload = oss.str();
+        std::lock_guard<std::mutex> lock(e->ctx->out_mu);
+        shtn::protocol::write_frame(*e->ctx->out, payload);
+        return 0;
+    };
+
+    shtn_generation_result res{};
+    char detail[256] = {0};
+    const int32_t rc = shtn_engine_generate(ctx->engine, &lane->opts, emit,
+                                            &emit_ctx, &res, detail);
+
+    // The final frame for this request id.
+    std::string payload;
+    if (rc == SHTN_OK || rc == SHTN_ERR_CANCELLED) {
+        payload = "{\"id\":" + std::to_string(lane->id) +
+                  ",\"ok\":true,\"result\":" +
+                  generation_result_json(lane->request_id, res) + "}";
+    } else {
+        std::string msg = detail[0] != '\0' ? detail
+                                             : "generation failed (code " +
+                                                   std::to_string(rc) + ")";
+        payload = "{\"id\":" + std::to_string(lane->id) +
+                  ",\"ok\":false,\"error\":" + quote(msg) + "}";
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(ctx->out_mu);
+        shtn::protocol::write_frame(*ctx->out, payload);
+    }
+}
+
+// op_generate schedules a generation lane. The dispatch loop returns
+// WITHOUT writing a response — the lane owns this request id's frames
+// (event frames + the final frame).
+void op_generate(HostCtx* ctx, const shtn::json::Parsed& req,
+                 const std::string& payload_raw, bool has_payload) {
+    if (!has_payload) {
+        std::lock_guard<std::mutex> lock(ctx->out_mu);
+        shtn::protocol::write_frame(
+            *ctx->out, error_response(req.id, "generate requires a payload"));
+        return;
+    }
+
+    std::string request_id, prompt, err;
+    uint32_t max_tokens = 0, repeat_last_n = 0;
+    float temperature = 1.0f, top_p = 1.0f, repetition_penalty = 1.0f;
+    int32_t top_k = 0;
+    uint64_t seed = 0;
+
+    if (!shtn::json::extract_generate_payload(
+            payload_raw, request_id, prompt, max_tokens, temperature, top_k,
+            top_p, repetition_penalty, repeat_last_n, seed, err)) {
+        std::lock_guard<std::mutex> lock(ctx->out_mu);
+        shtn::protocol::write_frame(
+            *ctx->out,
+            error_response(req.id, "malformed generate payload: " + err));
+        return;
+    }
+
+    if (request_id.empty()) {
+        request_id = "go-" + std::to_string(req.id);
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(ctx->lanes_mu);
+        if (ctx->lanes.size() >= kMaxLanes) {
+            std::lock_guard<std::mutex> olock(ctx->out_mu);
+            shtn::protocol::write_frame(
+                *ctx->out,
+                error_response(req.id,
+                               "generate: too many concurrent requests"));
+            return;
+        }
+    }
+
+    auto lane = std::make_unique<GenLane>();
+    lane->id = req.id;
+    lane->request_id = request_id;
+    lane->opts.request_id = lane->request_id.c_str();
+    // NOTE: opts.prompt points into the lane's own copy, which outlives
+    // the generation (owned by the GenLane stored in the list).
+    lane->opts.prompt = prompt.c_str();
+    lane->opts.prompt_len = prompt.size();
+    lane->opts.max_tokens = max_tokens;
+    lane->opts.temperature = temperature;
+    lane->opts.top_k = top_k;
+    lane->opts.top_p = top_p;
+    lane->opts.repetition_penalty = repetition_penalty;
+    lane->opts.repeat_last_n = repeat_last_n;
+    lane->opts.seed = seed;
+    lane->opts.reserved = 0;
+
+    GenLane* raw = lane.get();
+    {
+        std::lock_guard<std::mutex> lock(ctx->lanes_mu);
+        ctx->lanes.push_back(std::move(lane));
+    }
+
+    raw->thread = std::thread(
+        [ctx, raw]() { lane_body(ctx, raw); });
+}
+
+// join_lanes cancels every in-flight generation and joins the lane
+// threads (call before destroying the engine / leaving host_loop).
+void join_lanes(HostCtx* ctx) {
+    std::list<std::unique_ptr<GenLane>> lanes;
+    {
+        std::lock_guard<std::mutex> lock(ctx->lanes_mu);
+        lanes = std::move(ctx->lanes);
+    }
+
+    // Cancel each request (queued or active) so lanes unblock promptly.
+    for (auto& l : lanes) {
+        int32_t cancelled = 0;
+        char reason[128] = {0};
+        shtn_engine_cancel_generation(ctx->engine, l->request_id.c_str(),
+                                      &cancelled, reason);
+    }
+
+    for (auto& l : lanes) {
+        if (l->thread.joinable()) {
+            l->thread.join();
+        }
+    }
+}
+
+// op_cancel is the REAL Phase 5 cancel: cooperative cancellation of the
+// queued or active generation request.
+std::string op_cancel(HostCtx* ctx, const std::string& payload_raw,
+                      bool has_payload) {
+    std::string request_id;
+    std::string err;
+
+    if (!has_payload ||
+        !shtn::json::extract_request_id_payload(payload_raw, request_id,
+                                                err)) {
+        return "{\"cancelled\":false,\"reason\":\"" +
+               (has_payload ? err : std::string("cancel requires a payload")) +
+               "\"}";
+    }
+
+    int32_t cancelled = 0;
+    char reason[128] = {0};
+    const int32_t rc = shtn_engine_cancel_generation(
+        ctx->engine, request_id.c_str(), &cancelled, reason);
+
+    if (rc != SHTN_OK) {
+        return "{\"cancelled\":false,\"reason\":\"cancel failed (code " +
+               std::to_string(rc) + ")\"}";
+    }
+
+    std::ostringstream oss;
+    oss << "{"
+        << "\"cancelled\":" << (cancelled ? "true" : "false")
+        << ",\"reason\":" << quote(cancelled ? "" : reason)
         << "}";
     return oss.str();
 }
@@ -182,6 +464,9 @@ std::string model_info_json(const shtn_model_info& mi) {
         << ",\"kvCacheBytes\":" << json_uint(mi.kv_cache_bytes)
         << ",\"workspaceBytes\":" << json_uint(mi.workspace_bytes)
         << ",\"totalPlanBytes\":" << json_uint(mi.total_plan_bytes)
+        << ",\"generationCapable\":"
+        << (mi.generation_capable ? "true" : "false")
+        << ",\"generationReason\":" << quote(mi.generation_reason)
         << "}";
     return oss.str();
 }
@@ -502,8 +787,12 @@ std::string op_scheduler_info(shtn_engine* engine) {
 // --- dispatch ----------------------------------------------------------------
 
 // handle_request processes one parsed request and returns the RESULT JSON
-// (success) or throws a std::string error message (failure).
-std::string handle_request(shtn_engine* engine, const shtn::json::Parsed& req) {
+// (success) or throws a std::string error message (failure). The generate
+// op is special: it schedules a lane and returns an EMPTY string (the
+// caller detects this and skips writing a direct response — the lane owns
+// the frames for this id).
+std::string handle_request(HostCtx* ctx, const shtn::json::Parsed& req) {
+    shtn_engine* engine = ctx->engine;
     if (req.op == "ping") {
         return op_ping();
     }
@@ -517,7 +806,11 @@ std::string handle_request(shtn_engine* engine, const shtn::json::Parsed& req) {
         return op_metrics(engine);
     }
     if (req.op == "cancel") {
-        return op_cancel();
+        return op_cancel(ctx, req.payload_raw, req.has_payload);
+    }
+    if (req.op == "generate") {
+        op_generate(ctx, req, req.payload_raw, req.has_payload);
+        return {}; // the lane writes the event + final frames
     }
     if (req.op == "load_model") {
         return op_load_model(engine, req.payload_raw, req.has_payload);
@@ -579,7 +872,9 @@ std::string success_response(int64_t id, const std::string& result) {
 // host_loop is the testable core: read frames from in, write response
 // frames to out, until EOF or shutdown. Returns the process exit code.
 int host_loop(std::istream& in, std::ostream& out, shtn_engine* engine) {
-    bool shutting_down = false;
+    HostCtx ctx;
+    ctx.engine = engine;
+    ctx.out = &out;
 
     for (;;) {
         std::string payload;
@@ -588,18 +883,24 @@ int host_loop(std::istream& in, std::ostream& out, shtn_engine* engine) {
         case shtn::protocol::FrameStatus::Ok:
             break;
         case shtn::protocol::FrameStatus::Eof:
-            return shutting_down ? 0 : 0; // clean close either way
+            // Clean close: cancel in-flight generation, wait for the
+            // lanes (bounded — cancellation unblocks them), then exit.
+            join_lanes(&ctx);
+            return 0;
         case shtn::protocol::FrameStatus::TooLarge:
             // Cannot correlate to an id (frame unreadable): log and exit —
-            // the supervisor restarts us. This is the one non-clean exit:
-            // a peer sending >1 MiB frames is broken beyond recovery.
+            // the supervisor restarts us. Cancel lanes first so nothing
+            // outlives the streams.
             std::fprintf(stderr, "[shtn-host] protocol violation: frame exceeds cap\n");
+            join_lanes(&ctx);
             return 2;
         case shtn::protocol::FrameStatus::Truncated:
             std::fprintf(stderr, "[shtn-host] protocol violation: truncated frame\n");
+            join_lanes(&ctx);
             return 2;
         case shtn::protocol::FrameStatus::Invalid:
             std::fprintf(stderr, "[shtn-host] protocol violation: invalid frame\n");
+            join_lanes(&ctx);
             return 2;
         }
 
@@ -607,26 +908,38 @@ int host_loop(std::istream& in, std::ostream& out, shtn_engine* engine) {
 
         if (!parsed.valid) {
             // Malformed request: bounded error response, keep serving.
-            shtn::protocol::write_frame(
-                out, error_response(0, "malformed request: " + parsed.error));
+            const std::string resp =
+                error_response(0, "malformed request: " + parsed.error);
+            std::lock_guard<std::mutex> lock(ctx.out_mu);
+            shtn::protocol::write_frame(out, resp);
             continue;
         }
 
         try {
-            const std::string result = handle_request(engine, parsed);
+            const std::string result = handle_request(&ctx, parsed);
 
             if (parsed.op == "shutdown") {
-                // Respond first, then exit cleanly.
-                shtn::protocol::write_frame(
-                    out, success_response(parsed.id, result));
+                // Respond first, then cancel lanes and exit cleanly.
+                {
+                    std::lock_guard<std::mutex> lock(ctx.out_mu);
+                    shtn::protocol::write_frame(
+                        out, success_response(parsed.id, result));
+                }
+                join_lanes(&ctx);
                 return 0;
             }
 
-            shtn::protocol::write_frame(
-                out, success_response(parsed.id, result));
+            if (!result.empty()) {
+                std::lock_guard<std::mutex> lock(ctx.out_mu);
+                shtn::protocol::write_frame(
+                    out, success_response(parsed.id, result));
+            }
+            // An empty result means the op wrote its own frames (generate)
+            // or owns them via a lane — nothing to write here.
         } catch (const std::string& err) {
-            shtn::protocol::write_frame(
-                out, error_response(parsed.id, err));
+            const std::string resp = error_response(parsed.id, err);
+            std::lock_guard<std::mutex> lock(ctx.out_mu);
+            shtn::protocol::write_frame(out, resp);
         }
     }
 }
@@ -671,7 +984,9 @@ int main() {
               << "engine=" << SHTN_ENGINE_NAME
               << " abi=" << SHTN_ABI_VERSION
               << " protocol=" << SHTN_PROTOCOL_VERSION
-              << " (phase 2: lifecycle, health, hardware, metrics, GGUF model loading)"
+              << " (phase 5: lifecycle, health, hardware, metrics, GGUF model"
+                 " loading, tokenizer, KV cache, scheduler, REAL native"
+                 " generation with streaming + cancellation)"
               << std::endl;
 
     return shtn_host_run(std::cin, std::cout);

@@ -1,12 +1,15 @@
-// kv_cache.cpp — native engine KV cache implementation (Phase 4).
+// kv_cache.cpp — native engine KV cache implementation (Phase 5).
+//
+// Phase 5 correction: TRUE fp16 storage. The buffer is a uint16_t[] of
+// IEEE 754 binary16 bit patterns; capacity_bytes is the exact allocation
+// size; per-layer offsets are element-accurate. See kv_cache.h for the
+// full Phase 4 defect description.
 
 #include "kv_cache.h"
 
 #include "shtn/engine.h"
 #include "gguf.h"
 #include "util.h"
-
-#include <cstring>
 
 namespace shtn {
 namespace kv {
@@ -18,15 +21,15 @@ Cache::~Cache() {
 Cache::Cache(Cache&& other) noexcept
     : layout_(other.layout_),
       buffers_(std::move(other.buffers_)),
-      layer_bytes_(other.layer_bytes_),
+      layer_elems_(other.layer_elems_),
+      total_elems_(other.total_elems_),
       total_bytes_(other.total_bytes_),
-      used_positions_(other.used_positions_),
-      allocated_(other.allocated_) {
+      used_positions_(other.used_positions_) {
     other.layout_ = Layout{};
-    other.layer_bytes_ = 0;
+    other.layer_elems_ = 0;
+    other.total_elems_ = 0;
     other.total_bytes_ = 0;
     other.used_positions_ = 0;
-    other.allocated_ = false;
 }
 
 Cache& Cache::operator=(Cache&& other) noexcept {
@@ -34,15 +37,15 @@ Cache& Cache::operator=(Cache&& other) noexcept {
         release();
         layout_ = other.layout_;
         buffers_ = std::move(other.buffers_);
-        layer_bytes_ = other.layer_bytes_;
+        layer_elems_ = other.layer_elems_;
+        total_elems_ = other.total_elems_;
         total_bytes_ = other.total_bytes_;
         used_positions_ = other.used_positions_;
-        allocated_ = other.allocated_;
         other.layout_ = Layout{};
-        other.layer_bytes_ = 0;
+        other.layer_elems_ = 0;
+        other.total_elems_ = 0;
         other.total_bytes_ = 0;
         other.used_positions_ = 0;
-        other.allocated_ = false;
     }
     return *this;
 }
@@ -63,67 +66,67 @@ int32_t Cache::allocate(const Layout& layout, uint64_t available_ram_bytes,
         return SHTN_ERR_UNSUPPORTED;
     }
 
-    // Per-layer bytes: 2 (K+V) * context * kv_dim * 2 (f16 bytes).
-    // We store as float internally for simplicity but report the f16 size
-    // honestly (we allocate float[] but only use half the bits in the
-    // conceptual model — the future forward pass will cast to __fp16).
-    //
-    // ACTUALLY: to keep the bytes honest, we allocate the buffer as f16
-    // bytes. We use uint16_t storage and reinterpret_cast to float* for
-    // API symmetry with the future fp16 forward pass. The byte count we
-    // report matches the real allocation: 2 * layers * ctx * kv_dim * 2.
-    uint64_t per_layer_f16_bytes = 0;
+    // Elements per layer per K (or V) block: context * kv_dim.
+    uint64_t layer_elems = 0;
     if (!gguf::checked_mul_u64(layout.context_length, layout.kv_dim,
-                               per_layer_f16_bytes) ||
-        !gguf::checked_mul_u64(per_layer_f16_bytes, 2, per_layer_f16_bytes)) {
-        error = "kv: per-layer bytes overflow";
+                               layer_elems)) {
+        error = "kv: per-layer element count overflow";
         return SHTN_ERR_UNSUPPORTED;
     }
 
-    uint64_t total = 0;
-    // 2 (K + V) * layers * per_layer_f16_bytes
-    if (!gguf::checked_mul_u64(per_layer_f16_bytes, layout.layer_count, total) ||
-        !gguf::checked_mul_u64(total, 2, total)) {
-        error = "kv: total bytes overflow";
+    // Total uint16 elements: 2 (K+V) * layers * layer_elems.
+    uint64_t total_elems = 0;
+    if (!gguf::checked_mul_u64(layer_elems, layout.layer_count, total_elems) ||
+        !gguf::checked_mul_u64(total_elems, 2, total_elems)) {
+        error = "kv: total element count overflow";
         return SHTN_ERR_UNSUPPORTED;
     }
 
-    if (total > kMaxKVBytes) {
-        error = "kv: total " + std::to_string(total) + " exceeds cap " +
+    // Actual allocation size in bytes: total_elems * sizeof(uint16_t).
+    // This IS capacity_bytes — one identity the regression tests pin.
+    uint64_t total_bytes = 0;
+    if (!gguf::checked_mul_u64(total_elems, sizeof(uint16_t), total_bytes)) {
+        error = "kv: total byte count overflow";
+        return SHTN_ERR_UNSUPPORTED;
+    }
+
+    if (total_bytes > kMaxKVBytes) {
+        error = "kv: total " + std::to_string(total_bytes) + " exceeds cap " +
                 std::to_string(kMaxKVBytes);
         return SHTN_ERR_UNSUPPORTED;
     }
 
-    if (available_ram_bytes > 0 && total > available_ram_bytes) {
-        error = "kv: total " + std::to_string(total) + " exceeds available RAM " +
-                std::to_string(available_ram_bytes);
+    if (available_ram_bytes > 0 && total_bytes > available_ram_bytes) {
+        error = "kv: total " + std::to_string(total_bytes) +
+                " exceeds available RAM " + std::to_string(available_ram_bytes);
         return SHTN_ERR_UNSUPPORTED;
     }
 
-    // Total floats to allocate: total bytes / sizeof(float).
-    // total = 2 (K+V) * layers * ctx * kv_dim * 2 (f16 bytes).
-    // sizeof(float) = 4. So total_floats = total / 4 = (layers * ctx * kv_dim).
-    uint64_t total_floats = 0;
-    if (!gguf::checked_mul_u64(layout.context_length, layout.kv_dim, total_floats) ||
-        !gguf::checked_mul_u64(total_floats, layout.layer_count, total_floats) ||
-        !gguf::checked_mul_u64(total_floats, 2, total_floats)) {
-        error = "kv: float count overflow";
+    // Guard the element count against a hostile layout before narrowing to
+    // size_t for the array new.
+    if (total_elems > SIZE_MAX / sizeof(uint16_t) ||
+        total_elems > static_cast<uint64_t>(1) << 40) {
+        error = "kv: implausible element count " +
+                std::to_string(total_elems);
         return SHTN_ERR_UNSUPPORTED;
     }
 
-    // Allocate via unique_ptr<float[]> — zero-initialized.
-    buffers_ = std::unique_ptr<float[]>(new (std::nothrow) float[total_floats]());
+    // The REAL fp16 allocation: one uint16 per element, zero-initialized
+    // (deterministic first-read behaviour for tests; generation always
+    // writes before reading anyway).
+    buffers_ = std::unique_ptr<uint16_t[]>(
+        new (std::nothrow) uint16_t[static_cast<size_t>(total_elems)]());
     if (buffers_ == nullptr) {
-        error = "kv: allocation of " + std::to_string(total_floats * sizeof(float)) +
+        error = "kv: allocation of " + std::to_string(total_bytes) +
                 " bytes failed";
         return SHTN_ERR_INTERNAL;
     }
 
     layout_ = layout;
-    layer_bytes_ = per_layer_f16_bytes; // bytes per layer per K or V
-    total_bytes_ = total;
+    layer_elems_ = layer_elems;
+    total_elems_ = total_elems;
+    total_bytes_ = total_bytes;
     used_positions_ = 0;
-    allocated_ = true;
 
     return SHTN_OK;
 }
@@ -131,23 +134,25 @@ int32_t Cache::allocate(const Layout& layout, uint64_t available_ram_bytes,
 void Cache::release() {
     buffers_.reset();
     layout_ = Layout{};
-    layer_bytes_ = 0;
+    layer_elems_ = 0;
+    total_elems_ = 0;
     total_bytes_ = 0;
     used_positions_ = 0;
-    allocated_ = false;
 }
 
 void Cache::reset() {
     used_positions_ = 0;
-    // We do NOT zero the buffers — that's wasted work between requests
-    // when the forward pass will overwrite them anyway. The forward pass
-    // is responsible for writing before reading.
+    // Deliberately NO buffer clearing: positions are overwritten before
+    // they are read by the forward pass, so zeroing the whole allocation
+    // between requests would be wasted work (pinned by a test that reads
+    // back written values after reset()).
 }
 
 void Cache::advance(uint64_t n) {
-    if (!allocated_) return;
-    uint64_t next = used_positions_ + n;
-    if (next > layout_.context_length) {
+    if (!allocated()) return;
+    uint64_t next = 0;
+    if (!gguf::checked_add_u64(used_positions_, n, next) ||
+        next > layout_.context_length) {
         next = layout_.context_length;
     }
     used_positions_ = next;
@@ -155,38 +160,48 @@ void Cache::advance(uint64_t n) {
 
 Stats Cache::stats() const {
     Stats s;
-    s.allocated = allocated_;
+    s.allocated = allocated();
     s.capacity_bytes = total_bytes_;
     s.capacity_positions = layout_.context_length;
     s.used_positions = used_positions_;
     s.layer_count = layout_.layer_count;
     s.kv_dim = layout_.kv_dim;
-    if (allocated_) {
+    if (allocated()) {
         s.quantization = "f16";
-        // used_bytes: proportional to used_positions.
-        // (used_positions / context_length) * capacity_bytes — but only
-        // when context_length > 0.
-        if (layout_.context_length > 0) {
-            s.used_bytes = (used_positions_ * total_bytes_) / layout_.context_length;
-        }
+        // used_bytes: positions actually written, times the per-position
+        // K+V footprint across all layers. Mathematically consistent with
+        // the write positions (pinned by regression tests).
+        s.used_bytes = used_positions_ * bytes_per_position();
     }
     return s;
 }
 
-float* Cache::k_layer(uint32_t layer) const {
-    if (!allocated_ || layer >= layout_.layer_count) return nullptr;
-    // K block comes first: layers 0..N-1, each layer_bytes_/sizeof(float)
-    // floats.
-    uint64_t floats_per_layer = layer_bytes_ / sizeof(float);
-    return buffers_.get() + (layer * floats_per_layer);
+uint16_t* Cache::k_layer(uint32_t layer) const {
+    if (!allocated() || layer >= layout_.layer_count) return nullptr;
+    return buffers_.get() + static_cast<size_t>(layer) * layer_elems_;
 }
 
-float* Cache::v_layer(uint32_t layer) const {
-    if (!allocated_ || layer >= layout_.layer_count) return nullptr;
-    // V block comes after the K block: layers N..2N-1.
-    uint64_t floats_per_layer = layer_bytes_ / sizeof(float);
-    uint64_t total_k_floats = floats_per_layer * layout_.layer_count;
-    return buffers_.get() + total_k_floats + (layer * floats_per_layer);
+uint16_t* Cache::v_layer(uint32_t layer) const {
+    if (!allocated() || layer >= layout_.layer_count) return nullptr;
+    const uint64_t k_total = layer_elems_ * layout_.layer_count;
+    return buffers_.get() + static_cast<size_t>(k_total) +
+           static_cast<size_t>(layer) * layer_elems_;
+}
+
+uint16_t* Cache::k_at(uint32_t layer, uint64_t pos) const {
+    if (!allocated() || layer >= layout_.layer_count ||
+        pos >= layout_.context_length) {
+        return nullptr;
+    }
+    return k_layer(layer) + static_cast<size_t>(pos) * layout_.kv_dim;
+}
+
+uint16_t* Cache::v_at(uint32_t layer, uint64_t pos) const {
+    if (!allocated() || layer >= layout_.layer_count ||
+        pos >= layout_.context_length) {
+        return nullptr;
+    }
+    return v_layer(layer) + static_cast<size_t>(pos) * layout_.kv_dim;
 }
 
 } // namespace kv

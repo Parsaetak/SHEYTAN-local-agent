@@ -13,6 +13,8 @@
 #include "shtn/types.h"
 
 #include "gguf.h"
+#include "llama.h"
+#include "tensor.h"
 #include "tokenizer.h"
 
 #include <mutex>
@@ -88,11 +90,51 @@ private:
 
     shtn_memory_plan plan_{};  // last computed plan (0s before load)
 
+    // Phase 5: llama graph binding (weights view + hyper + capability),
+    // rebuilt on every successful load (the header is replaced, so the
+    // view must be rebuilt with it).
+    tensor::Weights weights_;
+    llama::Hyper hyper_{};
+    bool generation_capable_ = false;
+    std::string generation_reason_;
+
+    // epoch increments on every successful load; the generation runner
+    // rebinds its KV/scratch when it changes.
+    uint64_t epoch_ = 0;
+
+    // Available RAM measured at load time (0 = unknown) — bounds the KV
+    // cache allocation at generation time.
+    uint64_t available_ram_ = 0;
+
     // Phase 4: materialized tokenizer vocab (empty until init_tokenizer
     // succeeds; cleared on unload). Owned here so its lifetime is bound
     // to the model, not the host process.
     tokenizer::Vocab vocab_;
     bool vocab_initialized_ = false;
+
+public:
+    // --- Phase 5 accessors (stable under the model mutex) -----------------
+
+    // epoch identifies the current load generation.
+    uint64_t epoch() const;
+
+    // weights returns the tensor access view bound to the CURRENT
+    // mapping (nullptr when nothing is loaded).
+    const tensor::Weights* weights() const;
+
+    // hyper returns the derived llama hyper parameters (valid only when
+    // generation_capable()).
+    llama::Hyper hyper() const;
+
+    // generation_capable: the load-time native-inference verdict.
+    bool generation_capable() const;
+
+    // generation_reason names WHY the model is not natively executable
+    // (empty when capable).
+    std::string generation_reason() const;
+
+    // available_ram_bytes measured at load time (0 = unknown).
+    uint64_t available_ram_bytes() const;
 };
 
 } // namespace model

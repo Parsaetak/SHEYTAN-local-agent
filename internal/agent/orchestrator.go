@@ -111,12 +111,25 @@ enough.`
 // thinkingNudgeSentinel detects an already-present nudge.
 const thinkingNudgeSentinel = "## THINKING MODE (enabled by the user)"
 
+// GenerationStream is the pluggable streaming-generation seam: the same
+// signature the llm client exposes, so the runtime can route through the
+// backend selection (native when selected + capable, llama.cpp
+// otherwise) WITHOUT the loop knowing which engine serves the request.
+// A nil router falls back to the direct client path.
+type GenerationStream func(ctx context.Context, req *llm.ChatRequest,
+	onEvent func(llm.StreamEvent) error) (llm.PerfStats, error)
+
 // Orchestrator runs the plan-execute-critic loop with streaming activity.
 type Orchestrator struct {
 	src     *config.Source
 	client  *llm.Client
 	toolsMu sync.RWMutex
 	tools   map[string]Tool
+
+	// genMu guards the router swap (set once at wiring; also readable
+	// under race detector in tests).
+	genMu sync.RWMutex
+	gen   GenerationStream
 
 	mu        sync.Mutex
 	sessionID string
@@ -129,6 +142,32 @@ func New(src *config.Source, client *llm.Client) *Orchestrator {
 		client: client,
 		tools:  make(map[string]Tool),
 	}
+}
+
+// SetGenerationStream installs the backend-aware generation router (the
+// runtime seam; Phase 5). Nil restores the direct client path.
+func (o *Orchestrator) SetGenerationStream(router GenerationStream) {
+	o.genMu.Lock()
+	o.gen = router
+	o.genMu.Unlock()
+}
+
+// generationRouter returns the installed router (nil = client path).
+func (o *Orchestrator) generationRouter() GenerationStream {
+	o.genMu.RLock()
+	defer o.genMu.RUnlock()
+	return o.gen
+}
+
+// streamChat routes ONE generation request through the installed
+// backend-aware router, or the direct client path when no router is set
+// (unit tests, the CLI multi-agent path).
+func (o *Orchestrator) streamChat(ctx context.Context, req *llm.ChatRequest,
+	onEvent func(llm.StreamEvent) error) (llm.PerfStats, error) {
+	if router := o.generationRouter(); router != nil {
+		return router(ctx, req, onEvent)
+	}
+	return o.client.StreamChatDetailed(ctx, req, onEvent)
 }
 
 // Register adds a tool to the registry.
@@ -560,7 +599,7 @@ func (o *Orchestrator) RunDetailed(
 			}
 		}
 
-		perf, err := o.client.StreamChatDetailed(
+		perf, err := o.streamChat(
 			ctx,
 			req,
 			func(ev llm.StreamEvent) error {

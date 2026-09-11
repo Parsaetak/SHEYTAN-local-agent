@@ -1,321 +1,295 @@
-SHEYTAN-Local-Agent v1.1.5Z — Phase 4 Replacement Package
-===========================================================
+# SHEYTAN-Local-Agent Phase 5 replacement manifest
+#
+# A COMPLETE replacement archive of the final repository state
+# (baseline: v1.1.5Z Phase 4, commit 84324b8c). Status vocabulary:
+#   new       — added in Phase 5 (absent from the baseline)
+#   modified  — changed relative to the baseline
+#   unchanged — identical to the baseline; included so the
+#               archive reconstructs the full repository state
+#   deleted   — present in the baseline, removed (none in Phase 5)
+#
+# Excluded by policy: .git/ node_modules/ dist/ build artifacts
+# (native/engine/build) runtime dirs (models/ sessions/ logs/
+# caches/ tmp/ secrets) and built binaries.
+#
+# files included: 279
 
-This ZIP is a COMPLETE replacement package (not a diff). Extract over
-a clean clone of https://github.com/Parsaetak/SHEYTAN-local-agent
-(or replace the entire tree) to apply the Phase 4 state.
-
-Total files: 272
-
-Phase 4 scope:
-  - C++ native engine: real GGUF tokenizer (BPE/Unigram/WPM),
-    real KV-cache (sized from model dims, GQA-aware, bounded),
-    real bounded scheduler (single-slot, cancel, drain),
-    real sampling primitives (greedy/temperature/top-k/top-p/
-    repetition penalty/seedable RNG).
-  - ABI/protocol bumped v2 -> v3 (additive — backward compatible).
-  - Go side: Engine.InitTokenizer / TokenizerInfo / TokenizerEncode /
-    TokenizerDecode / KVCacheInfo / SchedulerInfo wired through IPC.
-    Generate/StreamGenerate STILL return llm.ErrNotImplemented
-    (Phase 4 does NOT fake inference).
-  - Frontend: streaming coalescing (rAF-boundary batching of token
-    chunks); frame-budget diagnostic perf HUD (OFF by default,
-    Ctrl+Shift+P to toggle).
-
-NOT implemented (later phases — DO NOT claim otherwise):
-  - transformer forward pass (RMSNorm/GQA attention/RoPE/SwiGLU MLP)
-  - native token generation
-  - real measured TTFT / tokens-per-second (honestly 0)
-
-Validation gates (run before packaging):
-  go build -tags headless ./...                    PASS
-  go vet -tags headless ./...                      PASS
-  go test -tags headless ./internal/...            27 packages PASS
-  cmake -S native/engine -B native/engine/build    PASS
-  cmake --build native/engine/build                PASS
-  ctest --test-dir native/engine/build             9/9 PASS
-    (engine, protocol, host, gguf, model
-     + tokenizer, kv_cache, scheduler, sampler)
-  go test -tags headless ./internal/native/engine/
-    -run TestRealCppHostPhase4                    3/3 PASS
-  npm run typecheck                                 PASS
-  npm run lint                                      0 warnings
-  npm run build                                     PASS
-  go run ./scripts/stress-main stress               30 pass / 0 fail
-  node scripts/release-version.mjs --check          PASS
-
-Files (repository-relative paths):
------------------------------------
-
-.github/workflows/build-desktop.yml
-.gitignore
-.oxlintrc.json
-.prettierignore
-ARCHITECTURE.md
-FIX-README.md
-LICENSE
-README.md
-REPLACEMENT-MANIFEST.txt
-REPLACEMENT-SHA256.txt
-SIGNATURE
-agent.md
-build/config.yml
-cmd/ask.go
-cmd/context.go
-cmd/diagnostics.go
-cmd/license.go
-cmd/logs.go
-cmd/root.go
-cmd/serve.go
-cmd/setup.go
-cmd/stress.go
-cmd/stress_zeta.go
-cmd/update.go
-go.mod
-go.sum
-index.html
-internal/agent/orchestrator.go
-internal/agent/orchestrator_test.go
-internal/aicontext/AI-CONTEXT.md
-internal/aicontext/aicontext.go
-internal/aicontext/aicontext_test.go
-internal/api/attachments.go
-internal/api/engine.go
-internal/api/lab.go
-internal/api/lifecycle.go
-internal/api/research.go
-internal/api/server.go
-internal/api/server_native_test.go
-internal/api/server_test.go
-internal/api/server_v114_test.go
-internal/api/timeout_test.go
-internal/api/ws.go
-internal/artifacts/artifacts.go
-internal/attachments/attachments.go
-internal/attachments/attachments_phase3_test.go
-internal/attachments/attachments_test.go
-internal/brand/brand.go
-internal/browser/browser.go
-internal/chunking/bench_compare_test.go
-internal/chunking/chunker.go
-internal/chunking/chunker_test.go
-internal/chunking/chunking.go
-internal/chunking/chunking_test.go
-internal/config/config.go
-internal/config/source.go
-internal/config/source_test.go
-internal/contextcache/contextcache.go
-internal/contextcache/contextcache_phase3_test.go
-internal/contextcache/contextcache_test.go
-internal/contextplan/contextplan.go
-internal/contextplan/contextplan_test.go
-internal/continuum/continuum.go
-internal/continuum/continuum_test.go
-internal/continuum/rollover.go
-internal/desktop/desktop.go
-internal/desktop/headless.go
-internal/humanize/humanize.go
-internal/installer/installer.go
-internal/installer/lookpath.go
-internal/lab/api.go
-internal/lab/lab_test.go
-internal/lab/policy.go
-internal/lab/policy_v114_test.go
-internal/lab/repair.go
-internal/lab/repair_test.go
-internal/lab/runner.go
-internal/lab/runner_test.go
-internal/lab/session.go
-internal/lab/task.go
-internal/lab/tool.go
-internal/lab/verifier.go
-internal/lab/workspace.go
-internal/llm/backend.go
-internal/llm/backend_test.go
-internal/llm/client.go
-internal/llm/client_response_test.go
-internal/llm/client_v114_test.go
-internal/llm/gguf.go
-internal/llm/llama.go
-internal/llm/llama_test.go
-internal/llm/llamabackend.go
-internal/llm/models.go
-internal/llm/presets.go
-internal/llm/speed.go
-internal/logging/logging.go
-internal/memory/memory.go
-internal/memory/memory_phase3_test.go
-internal/memory/memory_test.go
-internal/memory/trust_test.go
-internal/multiagent/multiagent.go
-internal/native/engine/backend.go
-internal/native/engine/cpp_integration_test.go
-internal/native/engine/doc.go
-internal/native/engine/engine_test.go
-internal/native/engine/generation.go
-internal/native/engine/kv.go
-internal/native/engine/memory.go
-internal/native/engine/metrics.go
-internal/native/engine/model.go
-internal/native/engine/model_test.go
-internal/native/engine/phase4_integration_test.go
-internal/native/engine/platform.go
-internal/native/engine/protocol.go
-internal/native/engine/runtime.go
-internal/native/engine/scheduler.go
-internal/native/engine/tokenizer.go
-internal/native/filedialog_other.go
-internal/native/filedialog_windows.go
-internal/native/native.go
-internal/netcheck/netcheck.go
-internal/proc/env.go
-internal/proc/proc.go
-internal/proc/proc_other.go
-internal/proc/proc_windows.go
-internal/recall/recall.go
-internal/recall/recall_phase3_test.go
-internal/recall/recall_test.go
-internal/releasegate/releasegate_test.go
-internal/research/backend_alias_test.go
-internal/research/cache.go
-internal/research/cache_test.go
-internal/research/duckduckgo.go
-internal/research/github.go
-internal/research/github_test.go
-internal/research/provider.go
-internal/research/reddit.go
-internal/research/reddit_test.go
-internal/research/searxng.go
-internal/research/security_test.go
-internal/research/service.go
-internal/research/service_test.go
-internal/research/tool.go
-internal/research/tool_test.go
-internal/research/web_test.go
-internal/resources/resources.go
-internal/resources/resources_other.go
-internal/resources/resources_test.go
-internal/resources/resources_windows.go
-internal/runtime/runtime.go
-internal/sandbox/sandbox.go
-internal/sandbox/sandbox_other.go
-internal/sandbox/sandbox_windows.go
-internal/screen/screen_other.go
-internal/screen/screen_windows.go
-internal/sessions/sessions.go
-internal/sessions/sessions_test.go
-internal/sysinfo/sysinfo.go
-internal/termshell/termshell.go
-internal/termshell/termshell_test.go
-internal/tools/archive.go
-internal/tools/basedir.go
-internal/tools/browser.go
-internal/tools/data.go
-internal/tools/data_analysis.go
-internal/tools/data_tool.go
-internal/tools/datachart.go
-internal/tools/diff.go
-internal/tools/fetch.go
-internal/tools/json_tool.go
-internal/tools/linux.go
-internal/tools/parse_test.go
-internal/tools/screenshot.go
-internal/tools/testhooks.go
-internal/tools/tools.go
-internal/updater/updater.go
-internal/updater/zipsafe_test.go
-internal/vision/vision.go
-internal/vision/vision_test.go
-main.go
-main_headless.go
-main_other.go
-main_stderr.go
-main_windows.go
-native/engine/CMakeLists.txt
-native/engine/Makefile
-native/engine/README.md
-native/engine/include/shtn/engine.h
-native/engine/include/shtn/types.h
-native/engine/include/shtn/version.h
-native/engine/src/engine.cpp
-native/engine/src/gguf.cpp
-native/engine/src/gguf.h
-native/engine/src/hardware.cpp
-native/engine/src/hardware.h
-native/engine/src/host_main.cpp
-native/engine/src/json.cpp
-native/engine/src/json.h
-native/engine/src/kv_cache.cpp
-native/engine/src/kv_cache.h
-native/engine/src/model.cpp
-native/engine/src/model.h
-native/engine/src/protocol.cpp
-native/engine/src/protocol.h
-native/engine/src/sampler.cpp
-native/engine/src/sampler.h
-native/engine/src/scheduler.cpp
-native/engine/src/scheduler.h
-native/engine/src/tokenizer.cpp
-native/engine/src/tokenizer.h
-native/engine/src/util.h
-native/engine/tests/gguf_writer.h
-native/engine/tests/test_engine.cpp
-native/engine/tests/test_gguf.cpp
-native/engine/tests/test_host.cpp
-native/engine/tests/test_kv_cache.cpp
-native/engine/tests/test_model.cpp
-native/engine/tests/test_protocol.cpp
-native/engine/tests/test_sampler.cpp
-native/engine/tests/test_scheduler.cpp
-native/engine/tests/test_tokenizer.cpp
-package-lock.json
-package.json
-scripts/browser-smoke/main.go
-scripts/build-and-zip.sh
-scripts/data-smoke/main.go
-scripts/gen-license.go
-scripts/gen-signature.go
-scripts/gen-syso/logo-512.png
-scripts/gen-syso/main.go
-scripts/release-version.mjs
-scripts/stress-main/main.go
-scripts/sync-web.mjs
-scripts/ws-smoke/main.go
-sheytan-local-agent.bat
-src/ActivityStream.tsx
-src/AgentBody.tsx
-src/AgentHeader.tsx
-src/AgentSidebar.tsx
-src/App.tsx
-src/LabPanel.tsx
-src/MessageStream.tsx
-src/ResearchPanel.tsx
-src/SettingsPanel.tsx
-src/agent-init.ts
-src/api.ts
-src/config.ts
-src/layers.css
-src/main.tsx
-src/motion.css
-src/perf-hud.ts
-src/settings.css
-src/store.ts
-src/styles.css
-src/vite-env.d.ts
-src/workspace.ts
-tsconfig.app.json
-tsconfig.json
-tsconfig.node.json
-vite.config.ts
-web/embed.go
-web/static/.vite/manifest.json
-web/static/assets/AgentBody-2-br3YvV.js
-web/static/assets/AgentHeader-B8b76u9o.js
-web/static/assets/AgentSidebar-DJaBwMC5.js
-web/static/assets/LabPanel-CW_A6EcB.js
-web/static/assets/ResearchPanel-Qeb2hrAX.js
-web/static/assets/SettingsPanel-C5Hpkvys.js
-web/static/assets/index-C1xyllm1.js
-web/static/assets/index-n0UF0DI4.css
-web/static/index.html
-worklog.md
+.github/workflows/build-desktop.yml	unchanged	CI workflow (unchanged)
+.gitignore	unchanged	repository source (required for complete replacement state)
+.oxlintrc.json	unchanged	repository source (required for complete replacement state)
+.prettierignore	unchanged	repository source (required for complete replacement state)
+ARCHITECTURE.md	modified	architecture truth table + Part I native engine section — Phase 5 row, capability reporting, protocol v4
+FIX-README.md	unchanged	historical fix notes (unchanged)
+LICENSE	unchanged	license (unchanged)
+README.md	unchanged	project overview (unchanged)
+SIGNATURE	unchanged	release signature surface (release-version.mjs audits it)
+agent.md	modified	engineering handoff context — Phase 5 truth update (native generation real; scope + fallback documented)
+cmd/ask.go	unchanged	command entrypoints (unchanged)
+cmd/context.go	unchanged	command entrypoints (unchanged)
+cmd/diagnostics.go	unchanged	command entrypoints (unchanged)
+cmd/license.go	unchanged	command entrypoints (unchanged)
+cmd/logs.go	unchanged	command entrypoints (unchanged)
+cmd/root.go	unchanged	command entrypoints (unchanged)
+cmd/serve.go	unchanged	command entrypoints (unchanged)
+cmd/setup.go	unchanged	command entrypoints (unchanged)
+cmd/stress.go	unchanged	command entrypoints (unchanged)
+cmd/stress_zeta.go	unchanged	command entrypoints (unchanged)
+cmd/update.go	unchanged	command entrypoints (unchanged)
+go.mod	unchanged	repository source (required for complete replacement state)
+go.sum	unchanged	repository source (required for complete replacement state)
+index.html	unchanged	repository source (required for complete replacement state)
+internal/agent/orchestrator.go	modified	Phase 5 modified orchestrator (generation router seam) + seam test
+internal/agent/orchestrator_test.go	modified	Phase 5 modified orchestrator (generation router seam) + seam test
+internal/aicontext/AI-CONTEXT.md	unchanged	repository source (required for complete replacement state)
+internal/aicontext/aicontext.go	unchanged	repository source (required for complete replacement state)
+internal/aicontext/aicontext_test.go	unchanged	repository source (required for complete replacement state)
+internal/api/attachments.go	unchanged	repository source (required for complete replacement state)
+internal/api/engine.go	unchanged	repository source (required for complete replacement state)
+internal/api/lab.go	unchanged	repository source (required for complete replacement state)
+internal/api/lifecycle.go	unchanged	repository source (required for complete replacement state)
+internal/api/research.go	unchanged	repository source (required for complete replacement state)
+internal/api/server.go	unchanged	repository source (required for complete replacement state)
+internal/api/server_native_test.go	unchanged	repository source (required for complete replacement state)
+internal/api/server_test.go	unchanged	repository source (required for complete replacement state)
+internal/api/server_v114_test.go	unchanged	repository source (required for complete replacement state)
+internal/api/timeout_test.go	unchanged	repository source (required for complete replacement state)
+internal/api/ws.go	unchanged	repository source (required for complete replacement state)
+internal/artifacts/artifacts.go	unchanged	repository source (required for complete replacement state)
+internal/brand/brand.go	unchanged	repository source (required for complete replacement state)
+internal/browser/browser.go	unchanged	repository source (required for complete replacement state)
+internal/chunking/bench_compare_test.go	unchanged	repository source (required for complete replacement state)
+internal/chunking/chunker.go	unchanged	repository source (required for complete replacement state)
+internal/chunking/chunker_test.go	unchanged	repository source (required for complete replacement state)
+internal/chunking/chunking.go	unchanged	repository source (required for complete replacement state)
+internal/chunking/chunking_test.go	unchanged	repository source (required for complete replacement state)
+internal/config/config.go	unchanged	repository source (required for complete replacement state)
+internal/config/source.go	unchanged	repository source (required for complete replacement state)
+internal/config/source_test.go	unchanged	repository source (required for complete replacement state)
+internal/contextcache/contextcache.go	unchanged	repository source (required for complete replacement state)
+internal/contextcache/contextcache_phase3_test.go	unchanged	repository source (required for complete replacement state)
+internal/contextcache/contextcache_test.go	unchanged	repository source (required for complete replacement state)
+internal/contextplan/contextplan.go	unchanged	repository source (required for complete replacement state)
+internal/contextplan/contextplan_test.go	unchanged	repository source (required for complete replacement state)
+internal/continuum/continuum.go	unchanged	repository source (required for complete replacement state)
+internal/continuum/continuum_test.go	unchanged	repository source (required for complete replacement state)
+internal/continuum/rollover.go	unchanged	repository source (required for complete replacement state)
+internal/desktop/desktop.go	unchanged	repository source (required for complete replacement state)
+internal/desktop/headless.go	unchanged	repository source (required for complete replacement state)
+internal/humanize/humanize.go	unchanged	repository source (required for complete replacement state)
+internal/installer/installer.go	unchanged	repository source (required for complete replacement state)
+internal/installer/lookpath.go	unchanged	repository source (required for complete replacement state)
+internal/lab/api.go	unchanged	repository source (required for complete replacement state)
+internal/lab/lab_test.go	unchanged	repository source (required for complete replacement state)
+internal/lab/policy.go	unchanged	repository source (required for complete replacement state)
+internal/lab/policy_v114_test.go	unchanged	repository source (required for complete replacement state)
+internal/lab/repair.go	unchanged	repository source (required for complete replacement state)
+internal/lab/repair_test.go	unchanged	repository source (required for complete replacement state)
+internal/lab/runner.go	unchanged	repository source (required for complete replacement state)
+internal/lab/runner_test.go	unchanged	repository source (required for complete replacement state)
+internal/lab/session.go	unchanged	repository source (required for complete replacement state)
+internal/lab/task.go	unchanged	repository source (required for complete replacement state)
+internal/lab/tool.go	unchanged	repository source (required for complete replacement state)
+internal/lab/verifier.go	unchanged	repository source (required for complete replacement state)
+internal/lab/workspace.go	unchanged	repository source (required for complete replacement state)
+internal/llm/backend.go	unchanged	llm package (unchanged; the Backend contract + selection the router uses)
+internal/llm/backend_test.go	unchanged	llm package (unchanged; the Backend contract + selection the router uses)
+internal/llm/client.go	unchanged	llm package (unchanged; the Backend contract + selection the router uses)
+internal/llm/client_response_test.go	unchanged	llm package (unchanged; the Backend contract + selection the router uses)
+internal/llm/client_v114_test.go	unchanged	llm package (unchanged; the Backend contract + selection the router uses)
+internal/llm/gguf.go	unchanged	llm package (unchanged; the Backend contract + selection the router uses)
+internal/llm/llama.go	unchanged	llm package (unchanged; the Backend contract + selection the router uses)
+internal/llm/llama_test.go	unchanged	llm package (unchanged; the Backend contract + selection the router uses)
+internal/llm/llamabackend.go	unchanged	llm package (unchanged; the Backend contract + selection the router uses)
+internal/llm/models.go	unchanged	llm package (unchanged; the Backend contract + selection the router uses)
+internal/llm/presets.go	unchanged	llm package (unchanged; the Backend contract + selection the router uses)
+internal/llm/speed.go	unchanged	llm package (unchanged; the Backend contract + selection the router uses)
+internal/logging/logging.go	unchanged	repository source (required for complete replacement state)
+internal/multiagent/multiagent.go	unchanged	repository source (required for complete replacement state)
+internal/native/engine/backend.go	modified	Phase 5 modified Go native-engine source (streaming IPC, real generation backend, capability, protocol v4)
+internal/native/engine/cpp_integration_test.go	modified	Phase 5 modified Go native-engine source (streaming IPC, real generation backend, capability, protocol v4)
+internal/native/engine/doc.go	unchanged	Go native-engine source (unchanged; required for reconstruction)
+internal/native/engine/engine_test.go	modified	Phase 5 modified Go native-engine source (streaming IPC, real generation backend, capability, protocol v4)
+internal/native/engine/generation.go	modified	Phase 5 modified Go native-engine source (streaming IPC, real generation backend, capability, protocol v4)
+internal/native/engine/kv.go	unchanged	Go native-engine source (unchanged; required for reconstruction)
+internal/native/engine/memory.go	unchanged	Go native-engine source (unchanged; required for reconstruction)
+internal/native/engine/metrics.go	unchanged	Go native-engine source (unchanged; required for reconstruction)
+internal/native/engine/model.go	modified	Phase 5 modified Go native-engine source (streaming IPC, real generation backend, capability, protocol v4)
+internal/native/engine/model_test.go	unchanged	Go native-engine source (unchanged; required for reconstruction)
+internal/native/engine/phase4_integration_test.go	unchanged	Go native-engine source (unchanged; required for reconstruction)
+internal/native/engine/phase5_bench_test.go	new	Phase 5 NEW Go tests (real-host e2e + measured benchmark evidence)
+internal/native/engine/phase5_integration_test.go	new	Phase 5 NEW Go tests (real-host e2e + measured benchmark evidence)
+internal/native/engine/platform.go	unchanged	Go native-engine source (unchanged; required for reconstruction)
+internal/native/engine/protocol.go	modified	Phase 5 modified Go native-engine source (streaming IPC, real generation backend, capability, protocol v4)
+internal/native/engine/runtime.go	modified	Phase 5 modified Go native-engine source (streaming IPC, real generation backend, capability, protocol v4)
+internal/native/engine/scheduler.go	unchanged	Go native-engine source (unchanged; required for reconstruction)
+internal/native/engine/tokenizer.go	unchanged	Go native-engine source (unchanged; required for reconstruction)
+internal/native/filedialog_other.go	unchanged	repository source (required for complete replacement state)
+internal/native/filedialog_windows.go	unchanged	repository source (required for complete replacement state)
+internal/native/native.go	unchanged	repository source (required for complete replacement state)
+internal/netcheck/netcheck.go	unchanged	repository source (required for complete replacement state)
+internal/proc/env.go	unchanged	repository source (required for complete replacement state)
+internal/proc/proc.go	unchanged	repository source (required for complete replacement state)
+internal/proc/proc_other.go	unchanged	repository source (required for complete replacement state)
+internal/proc/proc_windows.go	unchanged	repository source (required for complete replacement state)
+internal/recall/recall.go	unchanged	repository source (required for complete replacement state)
+internal/recall/recall_phase3_test.go	unchanged	repository source (required for complete replacement state)
+internal/recall/recall_test.go	unchanged	repository source (required for complete replacement state)
+internal/releasegate/releasegate_test.go	unchanged	repository source (required for complete replacement state)
+internal/research/backend_alias_test.go	unchanged	repository source (required for complete replacement state)
+internal/research/cache.go	unchanged	repository source (required for complete replacement state)
+internal/research/cache_test.go	unchanged	repository source (required for complete replacement state)
+internal/research/duckduckgo.go	unchanged	repository source (required for complete replacement state)
+internal/research/github.go	unchanged	repository source (required for complete replacement state)
+internal/research/github_test.go	unchanged	repository source (required for complete replacement state)
+internal/research/provider.go	unchanged	repository source (required for complete replacement state)
+internal/research/reddit.go	unchanged	repository source (required for complete replacement state)
+internal/research/reddit_test.go	unchanged	repository source (required for complete replacement state)
+internal/research/searxng.go	unchanged	repository source (required for complete replacement state)
+internal/research/security_test.go	unchanged	repository source (required for complete replacement state)
+internal/research/service.go	unchanged	repository source (required for complete replacement state)
+internal/research/service_test.go	unchanged	repository source (required for complete replacement state)
+internal/research/tool.go	unchanged	repository source (required for complete replacement state)
+internal/research/tool_test.go	unchanged	repository source (required for complete replacement state)
+internal/research/web_test.go	unchanged	repository source (required for complete replacement state)
+internal/resources/resources.go	unchanged	repository source (required for complete replacement state)
+internal/resources/resources_other.go	unchanged	repository source (required for complete replacement state)
+internal/resources/resources_test.go	unchanged	repository source (required for complete replacement state)
+internal/resources/resources_windows.go	unchanged	repository source (required for complete replacement state)
+internal/runtime/runtime.go	modified	Phase 5 modified runtime stack (backend-aware generation router + native model pre-warm)
+internal/runtime/runtime_test.go	new	Phase 5 NEW runtime router tests (native selection, shape gating, fallback policy)
+internal/screen/screen_other.go	unchanged	repository source (required for complete replacement state)
+internal/screen/screen_windows.go	unchanged	repository source (required for complete replacement state)
+internal/sysinfo/sysinfo.go	unchanged	repository source (required for complete replacement state)
+internal/termshell/termshell.go	unchanged	repository source (required for complete replacement state)
+internal/termshell/termshell_test.go	unchanged	repository source (required for complete replacement state)
+internal/tools/archive.go	unchanged	repository source (required for complete replacement state)
+internal/tools/basedir.go	unchanged	repository source (required for complete replacement state)
+internal/tools/browser.go	unchanged	repository source (required for complete replacement state)
+internal/tools/data.go	unchanged	repository source (required for complete replacement state)
+internal/tools/data_analysis.go	unchanged	repository source (required for complete replacement state)
+internal/tools/data_tool.go	unchanged	repository source (required for complete replacement state)
+internal/tools/datachart.go	unchanged	repository source (required for complete replacement state)
+internal/tools/diff.go	unchanged	repository source (required for complete replacement state)
+internal/tools/fetch.go	unchanged	repository source (required for complete replacement state)
+internal/tools/json_tool.go	unchanged	repository source (required for complete replacement state)
+internal/tools/linux.go	unchanged	repository source (required for complete replacement state)
+internal/tools/parse_test.go	unchanged	repository source (required for complete replacement state)
+internal/tools/screenshot.go	unchanged	repository source (required for complete replacement state)
+internal/tools/testhooks.go	unchanged	repository source (required for complete replacement state)
+internal/tools/tools.go	unchanged	repository source (required for complete replacement state)
+internal/updater/updater.go	unchanged	repository source (required for complete replacement state)
+internal/updater/zipsafe_test.go	unchanged	repository source (required for complete replacement state)
+internal/vision/vision.go	unchanged	repository source (required for complete replacement state)
+internal/vision/vision_test.go	unchanged	repository source (required for complete replacement state)
+main.go	unchanged	repository source (required for complete replacement state)
+main_headless.go	unchanged	repository source (required for complete replacement state)
+main_other.go	unchanged	repository source (required for complete replacement state)
+main_stderr.go	unchanged	repository source (required for complete replacement state)
+main_windows.go	unchanged	repository source (required for complete replacement state)
+native/engine/CMakeLists.txt	modified	native engine build definition / docs — Phase 5 sources + suites (CMake, Makefile, README)
+native/engine/Makefile	modified	native engine build definition / docs — Phase 5 sources + suites (CMake, Makefile, README)
+native/engine/README.md	modified	native engine build definition / docs — Phase 5 sources + suites (CMake, Makefile, README)
+native/engine/include/shtn/engine.h	modified	Phase 5 modified native engine source (KV cache correction, scheduler worker, host generation lanes, ABI v4, capability verdict)
+native/engine/include/shtn/types.h	modified	Phase 5 modified native engine source (KV cache correction, scheduler worker, host generation lanes, ABI v4, capability verdict)
+native/engine/include/shtn/version.h	modified	Phase 5 modified native engine source (KV cache correction, scheduler worker, host generation lanes, ABI v4, capability verdict)
+native/engine/src/engine.cpp	modified	Phase 5 modified native engine source (KV cache correction, scheduler worker, host generation lanes, ABI v4, capability verdict)
+native/engine/src/forward.cpp	new	Phase 5 NEW native engine source (forward pass / generation / tensor dequant / llama graph / fp16)
+native/engine/src/forward.h	new	Phase 5 NEW native engine source (forward pass / generation / tensor dequant / llama graph / fp16)
+native/engine/src/fp16.h	new	Phase 5 NEW native engine source (forward pass / generation / tensor dequant / llama graph / fp16)
+native/engine/src/generate.cpp	new	Phase 5 NEW native engine source (forward pass / generation / tensor dequant / llama graph / fp16)
+native/engine/src/generate.h	new	Phase 5 NEW native engine source (forward pass / generation / tensor dequant / llama graph / fp16)
+native/engine/src/gguf.cpp	unchanged	native engine source (unchanged; required for reconstruction)
+native/engine/src/gguf.h	unchanged	native engine source (unchanged; required for reconstruction)
+native/engine/src/hardware.cpp	unchanged	native engine source (unchanged; required for reconstruction)
+native/engine/src/hardware.h	unchanged	native engine source (unchanged; required for reconstruction)
+native/engine/src/host_main.cpp	modified	Phase 5 modified native engine source (KV cache correction, scheduler worker, host generation lanes, ABI v4, capability verdict)
+native/engine/src/json.cpp	modified	Phase 5 modified native engine source (KV cache correction, scheduler worker, host generation lanes, ABI v4, capability verdict)
+native/engine/src/json.h	modified	Phase 5 modified native engine source (KV cache correction, scheduler worker, host generation lanes, ABI v4, capability verdict)
+native/engine/src/kv_cache.cpp	modified	Phase 5 modified native engine source (KV cache correction, scheduler worker, host generation lanes, ABI v4, capability verdict)
+native/engine/src/kv_cache.h	modified	Phase 5 modified native engine source (KV cache correction, scheduler worker, host generation lanes, ABI v4, capability verdict)
+native/engine/src/llama.cpp	new	Phase 5 NEW native engine source (forward pass / generation / tensor dequant / llama graph / fp16)
+native/engine/src/llama.h	new	Phase 5 NEW native engine source (forward pass / generation / tensor dequant / llama graph / fp16)
+native/engine/src/model.cpp	modified	Phase 5 modified native engine source (KV cache correction, scheduler worker, host generation lanes, ABI v4, capability verdict)
+native/engine/src/model.h	modified	Phase 5 modified native engine source (KV cache correction, scheduler worker, host generation lanes, ABI v4, capability verdict)
+native/engine/src/protocol.cpp	unchanged	native engine source (unchanged; required for reconstruction)
+native/engine/src/protocol.h	unchanged	native engine source (unchanged; required for reconstruction)
+native/engine/src/sampler.cpp	unchanged	native engine source (unchanged; required for reconstruction)
+native/engine/src/sampler.h	unchanged	native engine source (unchanged; required for reconstruction)
+native/engine/src/scheduler.cpp	modified	Phase 5 modified native engine source (KV cache correction, scheduler worker, host generation lanes, ABI v4, capability verdict)
+native/engine/src/scheduler.h	modified	Phase 5 modified native engine source (KV cache correction, scheduler worker, host generation lanes, ABI v4, capability verdict)
+native/engine/src/tensor.cpp	new	Phase 5 NEW native engine source (forward pass / generation / tensor dequant / llama graph / fp16)
+native/engine/src/tensor.h	new	Phase 5 NEW native engine source (forward pass / generation / tensor dequant / llama graph / fp16)
+native/engine/src/tokenizer.cpp	unchanged	native engine source (unchanged; required for reconstruction)
+native/engine/src/tokenizer.h	unchanged	native engine source (unchanged; required for reconstruction)
+native/engine/src/util.h	unchanged	native engine source (unchanged; required for reconstruction)
+native/engine/tests/fixtures/tiny-llama-f32.gguf	new	deterministic test fixtures (generated by tests/reference/make_fixture.py; reference-verified model + slow cancellation model)
+native/engine/tests/fixtures/tiny-llama-ref.json	new	deterministic test fixtures (generated by tests/reference/make_fixture.py; reference-verified model + slow cancellation model)
+native/engine/tests/fixtures/tiny-llama-ref.txt	new	deterministic test fixtures (generated by tests/reference/make_fixture.py; reference-verified model + slow cancellation model)
+native/engine/tests/fixtures/tiny-llama-slow.gguf	new	deterministic test fixtures (generated by tests/reference/make_fixture.py; reference-verified model + slow cancellation model)
+native/engine/tests/gguf_writer.h	unchanged	native engine test (unchanged; required for reconstruction)
+native/engine/tests/reference/make_fixture.py	new	independent Python reference implementation + fixture generator (numerical-correctness authority)
+native/engine/tests/test_engine.cpp	modified	Phase 5 modified C++ tests (fp16 byte-accounting regressions, streaming host generate/cancel, v4 expectations)
+native/engine/tests/test_forward.cpp	new	Phase 5 NEW C++ test suite (tensor dequant, forward vs Python reference, generation loop)
+native/engine/tests/test_generate.cpp	new	Phase 5 NEW C++ test suite (tensor dequant, forward vs Python reference, generation loop)
+native/engine/tests/test_gguf.cpp	unchanged	native engine test (unchanged; required for reconstruction)
+native/engine/tests/test_host.cpp	modified	Phase 5 modified C++ tests (fp16 byte-accounting regressions, streaming host generate/cancel, v4 expectations)
+native/engine/tests/test_kv_cache.cpp	modified	Phase 5 modified C++ tests (fp16 byte-accounting regressions, streaming host generate/cancel, v4 expectations)
+native/engine/tests/test_model.cpp	unchanged	native engine test (unchanged; required for reconstruction)
+native/engine/tests/test_protocol.cpp	unchanged	native engine test (unchanged; required for reconstruction)
+native/engine/tests/test_sampler.cpp	unchanged	native engine test (unchanged; required for reconstruction)
+native/engine/tests/test_scheduler.cpp	unchanged	native engine test (unchanged; required for reconstruction)
+native/engine/tests/test_tensor.cpp	new	Phase 5 NEW C++ test suite (tensor dequant, forward vs Python reference, generation loop)
+native/engine/tests/test_tokenizer.cpp	unchanged	native engine test (unchanged; required for reconstruction)
+package-lock.json	unchanged	repository source (required for complete replacement state)
+package.json	unchanged	repository source (required for complete replacement state)
+scripts/browser-smoke/main.go	unchanged	build/release scripts (unchanged; release-version check enforces no version drift)
+scripts/build-and-zip.sh	unchanged	build/release scripts (unchanged; release-version check enforces no version drift)
+scripts/data-smoke/main.go	unchanged	build/release scripts (unchanged; release-version check enforces no version drift)
+scripts/gen-license.go	unchanged	build/release scripts (unchanged; release-version check enforces no version drift)
+scripts/gen-signature.go	unchanged	build/release scripts (unchanged; release-version check enforces no version drift)
+scripts/gen-syso/logo-512.png	unchanged	build/release scripts (unchanged; release-version check enforces no version drift)
+scripts/gen-syso/main.go	unchanged	build/release scripts (unchanged; release-version check enforces no version drift)
+scripts/release-version.mjs	unchanged	build/release scripts (unchanged; release-version check enforces no version drift)
+scripts/stress-main/main.go	unchanged	build/release scripts (unchanged; release-version check enforces no version drift)
+scripts/sync-web.mjs	unchanged	build/release scripts (unchanged; release-version check enforces no version drift)
+scripts/ws-smoke/main.go	unchanged	build/release scripts (unchanged; release-version check enforces no version drift)
+sheytan-local-agent.bat	unchanged	repository source (required for complete replacement state)
+src/ActivityStream.tsx	unchanged	React frontend source (unchanged — Phase 4 streaming coalescing contract intact)
+src/AgentBody.tsx	unchanged	React frontend source (unchanged — Phase 4 streaming coalescing contract intact)
+src/AgentHeader.tsx	unchanged	React frontend source (unchanged — Phase 4 streaming coalescing contract intact)
+src/AgentSidebar.tsx	unchanged	React frontend source (unchanged — Phase 4 streaming coalescing contract intact)
+src/App.tsx	unchanged	React frontend source (unchanged — Phase 4 streaming coalescing contract intact)
+src/LabPanel.tsx	unchanged	React frontend source (unchanged — Phase 4 streaming coalescing contract intact)
+src/MessageStream.tsx	unchanged	React frontend source (unchanged — Phase 4 streaming coalescing contract intact)
+src/ResearchPanel.tsx	unchanged	React frontend source (unchanged — Phase 4 streaming coalescing contract intact)
+src/SettingsPanel.tsx	unchanged	React frontend source (unchanged — Phase 4 streaming coalescing contract intact)
+src/agent-init.ts	unchanged	React frontend source (unchanged — Phase 4 streaming coalescing contract intact)
+src/api.ts	unchanged	React frontend source (unchanged — Phase 4 streaming coalescing contract intact)
+src/config.ts	unchanged	React frontend source (unchanged — Phase 4 streaming coalescing contract intact)
+src/layers.css	unchanged	React frontend source (unchanged — Phase 4 streaming coalescing contract intact)
+src/main.tsx	unchanged	React frontend source (unchanged — Phase 4 streaming coalescing contract intact)
+src/motion.css	unchanged	React frontend source (unchanged — Phase 4 streaming coalescing contract intact)
+src/perf-hud.ts	unchanged	React frontend source (unchanged — Phase 4 streaming coalescing contract intact)
+src/settings.css	unchanged	React frontend source (unchanged — Phase 4 streaming coalescing contract intact)
+src/store.ts	unchanged	React frontend source (unchanged — Phase 4 streaming coalescing contract intact)
+src/styles.css	unchanged	React frontend source (unchanged — Phase 4 streaming coalescing contract intact)
+src/vite-env.d.ts	unchanged	React frontend source (unchanged — Phase 4 streaming coalescing contract intact)
+src/workspace.ts	unchanged	React frontend source (unchanged — Phase 4 streaming coalescing contract intact)
+tsconfig.app.json	unchanged	repository source (required for complete replacement state)
+tsconfig.json	unchanged	repository source (required for complete replacement state)
+tsconfig.node.json	unchanged	repository source (required for complete replacement state)
+vite.config.ts	unchanged	repository source (required for complete replacement state)
+web/embed.go	unchanged	repository source (required for complete replacement state)
+web/static/.vite/manifest.json	unchanged	embedded frontend assets (regenerated by npm run build; go:embed source)
+web/static/assets/AgentBody-2-br3YvV.js	unchanged	embedded frontend assets (regenerated by npm run build; go:embed source)
+web/static/assets/AgentHeader-B8b76u9o.js	unchanged	embedded frontend assets (regenerated by npm run build; go:embed source)
+web/static/assets/AgentSidebar-DJaBwMC5.js	unchanged	embedded frontend assets (regenerated by npm run build; go:embed source)
+web/static/assets/LabPanel-CW_A6EcB.js	unchanged	embedded frontend assets (regenerated by npm run build; go:embed source)
+web/static/assets/ResearchPanel-Qeb2hrAX.js	unchanged	embedded frontend assets (regenerated by npm run build; go:embed source)
+web/static/assets/SettingsPanel-C5Hpkvys.js	unchanged	embedded frontend assets (regenerated by npm run build; go:embed source)
+web/static/assets/index-C1xyllm1.js	unchanged	embedded frontend assets (regenerated by npm run build; go:embed source)
+web/static/assets/index-n0UF0DI4.css	unchanged	embedded frontend assets (regenerated by npm run build; go:embed source)
+web/static/index.html	unchanged	embedded frontend assets (regenerated by npm run build; go:embed source)
+worklog.md	modified	full phase implementation log — Phase 5 entry (implementation, verification, measured performance, limitations)
+REPLACEMENT-MANIFEST.txt	new	THIS Phase 5 archive's manifest (path / status / purpose for every member)
+REPLACEMENT-SHA256.txt	new	THIS Phase 5 archive's SHA-256 record for every member (the file itself cannot contain its own hash)

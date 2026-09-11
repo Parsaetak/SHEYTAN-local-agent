@@ -54,7 +54,7 @@
 extern "C" {
 #endif
 
-/* Error codes (stable ABI values; Phase 4 additions are appended —
+/* Error codes (stable ABI values; Phase 4/5 additions are appended —
  * existing values are never renumbered). */
 enum {
     SHTN_OK = 0,
@@ -65,7 +65,11 @@ enum {
     SHTN_ERR_MODEL_FORMAT = -5,  /* malformed / unsupported GGUF file */
     SHTN_ERR_MODEL_STATE = -6,   /* model state rejects the operation */
     SHTN_ERR_NO_MODEL = -7,      /* operation requires a loaded model */
-    SHTN_ERR_QUEUE_FULL = -8     /* Phase 4: scheduler queue is full */
+    SHTN_ERR_QUEUE_FULL = -8,    /* Phase 4: scheduler queue is full */
+    SHTN_ERR_CANCELLED = -9,     /* Phase 5: request cancelled (not error) */
+    SHTN_ERR_CONTEXT_OVERFLOW = -10, /* Phase 5: prompt+max_tokens exceeds
+                                        the model context */
+    SHTN_ERR_GENERATION = -11    /* Phase 5: generation failed mid-flight */
 };
 
 /* Opaque engine handle. */
@@ -179,6 +183,59 @@ int32_t shtn_engine_kv_cache_info(const shtn_engine* engine,
  * (queued requests, totals since create); active is 0 in Phase 4. */
 int32_t shtn_engine_scheduler_info(const shtn_engine* engine,
                                    shtn_scheduler_info* out);
+
+/* --- Phase 5: REAL native generation surface ---------------------------- *
+ *
+ * shtn_engine_generate performs a REAL transformer forward pass (llama
+ * architecture: RMSNorm, RoPE, GQA causal self-attention over the fp16
+ * KV cache, SwiGLU FFN, logits) and generates tokens with the Phase 4
+ * sampler consuming the REAL logits. The call BLOCKS until generation
+ * completes (EOS / max_tokens / context bound / cancellation / error)
+ * and streams coarse-grained chunks through `emit` (one frame per
+ * emission window, never one per token). It executes on the engine's
+ * single-slot scheduler (queued behind any earlier request; bounded
+ * queue). Cancellation: shtn_engine_cancel_generation sets the active
+ * request's flag; the generation loop observes it at every token and at
+ * every prefill window boundary.
+ */
+
+/* Generate. opts->prompt (UTF-8) is tokenized by the engine's own GGUF
+ * tokenizer (materialized on demand). out (optional) receives the final
+ * result (finish reason + measured metrics). Returns:
+ *   SHTN_OK                    generation completed (any finish reason);
+ *   SHTN_ERR_INVALID_ARG       NULL/bad options (prompt, max_tokens...);
+ *   SHTN_ERR_NO_MODEL          no model loaded;
+ *   SHTN_ERR_UNSUPPORTED       model not natively executable / tokenizer
+ *                              unsupported (reason in `detail`);
+ *   SHTN_ERR_CONTEXT_OVERFLOW  prompt+max_tokens exceeds the context;
+ *   SHTN_ERR_CANCELLED         cancelled by request;
+ *   SHTN_ERR_QUEUE_FULL        scheduler queue full;
+ *   SHTN_ERR_MODEL_STATE       unload/reload in flight;
+ *   SHTN_ERR_GENERATION        mid-flight inference failure;
+ *   SHTN_ERR_INTERNAL          internal failure.
+ *
+ * `detail` (optional, 256 bytes) receives a human-readable reason on any
+ * non-OK return. Thread-safe: concurrent callers queue on the scheduler. */
+int32_t shtn_engine_generate(shtn_engine* engine,
+                             const shtn_generation_options* opts,
+                             shtn_generation_emit_fn emit, void* user,
+                             shtn_generation_result* out, char* detail);
+
+/* Cancel the in-flight (or queued) generation request with this id.
+ * Returns SHTN_OK for a valid engine (arguments validated); *cancelled is
+ * 1 when a matching request was found and marked for cancellation (the
+ * blocked generate call then returns SHTN_ERR_CANCELLED), 0 when no such
+ * request exists, with `reason` filled (bounded 128 bytes). Always safe
+ * to call; a miss never disturbs the engine. */
+int32_t shtn_engine_cancel_generation(shtn_engine* engine,
+                                       const char* request_id,
+                                       int32_t* cancelled, char* reason);
+
+/* Fill out with the generation concern snapshot (active request count,
+ * totals, last request's measured metrics). Always succeeds for a valid
+ * engine. */
+int32_t shtn_engine_generation_stats(const shtn_engine* engine,
+                                      shtn_generation_stats* out);
 
 /* Report the ABI version this engine was built with. */
 uint32_t shtn_abi_version(void);

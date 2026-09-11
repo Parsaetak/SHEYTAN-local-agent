@@ -109,9 +109,12 @@ func TestRealCppHostEndToEnd(t *testing.T) {
 		t.Fatal("uptime not measured")
 	}
 
-	// Cancel is a real round-trip that honestly misses in Phase 1.
+	// Cancel is a real round-trip. In Phase 5 there are no in-flight
+	// requests yet in this test, so the cancel honestly reports a miss
+	// for an unknown id (the real cancellation path — active request —
+	// is covered by the Phase 5 generation tests below).
 	err = e.Cancel(ctx, "req-e2e")
-	if err == nil || !strings.Contains(err.Error(), "no active") {
+	if err == nil || !strings.Contains(err.Error(), "no queued or active") {
 		t.Fatalf("cancel against real host: %v", err)
 	}
 

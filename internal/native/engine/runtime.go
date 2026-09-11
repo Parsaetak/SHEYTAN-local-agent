@@ -816,19 +816,47 @@ func (e *Engine) logf(format string, args ...any) {
 
 // ipcConn is the request/response multiplexer over the host's
 // stdin/stdout: serialized writers, a single reader goroutine dispatching
-// to pending callers by id, bounded per-op timeouts.
+// to pending callers by id, bounded per-op timeouts, plus STREAMING
+// calls (Phase 5): a generate request receives intermediate event frames
+// (same id, "event" member) on its event channel and exactly one final
+// frame on its outcome channel.
 type ipcConn struct {
 	wmu    sync.Mutex // serializes frame writes
 	stdin  io.WriteCloser
 	stdout io.Reader
 
 	pendingMu sync.Mutex
-	pending   map[int64]chan *ipcOutcome
+	pending   map[int64]*ipcPending
 
 	nextID atomic.Int64
 
 	closed   chan struct{}
 	closeOne sync.Once
+}
+
+// ipcPending is one registered caller. events is non-nil ONLY for
+// streaming calls; the final frame always arrives on ch.
+//
+// Lifecycle rules (the concurrency contract):
+//   - events is NEVER closed (a concurrent in-flight dispatch send must
+//     never panic); consumers finish through the abort signal and a
+//     bounded drain; late stragglers fit in the 256-frame buffer.
+//   - abort wakes the consumer; deliver (atomic) selects whether
+//     buffered events are still delivered to onEvent (final path: yes —
+//     the caller only returns after every buffered event is delivered;
+//     abandon path: no — the caller is gone).
+type ipcPending struct {
+	ch     chan *ipcOutcome
+	events chan *Response // streamed event frames (nil for plain calls)
+	abort  chan struct{}
+	once   sync.Once
+
+	deliver atomic.Bool // consumer still forwards events to onEvent
+}
+
+// signalAbort wakes the consumer exactly once (idempotent).
+func (p *ipcPending) signalAbort() {
+	p.once.Do(func() { close(p.abort) })
 }
 
 type ipcOutcome struct {
@@ -840,7 +868,7 @@ func newIPCConn(stdin io.WriteCloser, stdout io.Reader) *ipcConn {
 	c := &ipcConn{
 		stdin:   stdin,
 		stdout:  stdout,
-		pending: make(map[int64]chan *ipcOutcome),
+		pending: make(map[int64]*ipcPending),
 		closed:  make(chan struct{}),
 	}
 
@@ -871,16 +899,28 @@ func (c *ipcConn) readLoop() {
 
 func (c *ipcConn) dispatch(resp *Response) {
 	c.pendingMu.Lock()
-	ch, ok := c.pending[resp.ID]
-	if ok {
+	p, ok := c.pending[resp.ID]
+	if ok && resp.IsFinal() {
 		delete(c.pending, resp.ID)
 	}
 	c.pendingMu.Unlock()
 
-	if ok {
-		ch <- &ipcOutcome{resp: resp}
+	if !ok {
+		// Unknown id (timed-out caller) — drop.
+		return
 	}
-	// Unknown id (timed-out caller) — drop.
+
+	if !resp.IsFinal() && p.events != nil {
+		// Streaming event frame: delivered to the consumer's event
+		// channel. Bounded buffer; a full channel blocks the read loop
+		// (backpressure — the consumer must drain; abandoned consumers
+		// switch to drain-only mode so the loop can never wedge). The
+		// channel is never closed (see ipcPending lifecycle rules).
+		p.events <- resp
+		return
+	}
+
+	p.ch <- &ipcOutcome{resp: resp}
 }
 
 func (c *ipcConn) failAll(err error) {
@@ -888,11 +928,18 @@ func (c *ipcConn) failAll(err error) {
 
 	c.pendingMu.Lock()
 	pending := c.pending
-	c.pending = make(map[int64]chan *ipcOutcome)
+	c.pending = make(map[int64]*ipcPending)
 	c.pendingMu.Unlock()
 
-	for _, ch := range pending {
-		ch <- &ipcOutcome{err: fmt.Errorf("native engine connection lost: %w", err)}
+	for _, p := range pending {
+		// Connection lost: stop delivering (the caller gets an error),
+		// wake the consumer.
+		p.deliver.Store(false)
+		p.signalAbort()
+		select {
+		case p.ch <- &ipcOutcome{err: fmt.Errorf("native engine connection lost: %w", err)}:
+		default:
+		}
 	}
 }
 
@@ -917,10 +964,13 @@ func (c *ipcConn) call(ctx context.Context, op string, payload json.RawMessage) 
 
 	id := c.nextID.Add(1)
 
-	ch := make(chan *ipcOutcome, 1)
+	p := &ipcPending{
+		ch:    make(chan *ipcOutcome, 1),
+		abort: make(chan struct{}),
+	}
 
 	c.pendingMu.Lock()
-	c.pending[id] = ch
+	c.pending[id] = p
 	c.pendingMu.Unlock()
 
 	defer func() {
@@ -940,7 +990,7 @@ func (c *ipcConn) call(ctx context.Context, op string, payload json.RawMessage) 
 	}
 
 	select {
-	case out := <-ch:
+	case out := <-p.ch:
 		if out.err != nil {
 			return nil, out.err
 		}
@@ -955,6 +1005,183 @@ func (c *ipcConn) call(ctx context.Context, op string, payload json.RawMessage) 
 	case <-c.closed:
 		return nil, fmt.Errorf("%s: connection lost", op)
 	}
+}
+
+// streamCall performs one STREAMING call (the generate op): event frames
+// are delivered to onEvent until the final frame arrives, which becomes
+// the return value. There is NO per-op timeout by design (generation is
+// bounded by max_tokens plus the caller's context and the stall
+// watchdog); a context abort or a consumer error asks the host to cancel
+// the request cooperatively and switches the consumer to drain-only mode
+// (bounded; the engine finishes the request with a "cancelled" final
+// frame that the abandon path waits for).
+func (c *ipcConn) streamCall(ctx context.Context, op string,
+	payload json.RawMessage,
+	onEvent func(*Response) error) (*Response, error) {
+
+	select {
+	case <-c.closed:
+		return nil, fmt.Errorf("native engine connection is closed")
+	default:
+	}
+
+	id := c.nextID.Add(1)
+
+	p := &ipcPending{
+		ch:     make(chan *ipcOutcome, 1),
+		events: make(chan *Response, 256),
+		abort:  make(chan struct{}),
+	}
+	p.deliver.Store(true)
+
+	c.pendingMu.Lock()
+	c.pending[id] = p
+	c.pendingMu.Unlock()
+
+	unregister := func() {
+		c.pendingMu.Lock()
+		delete(c.pending, id)
+		c.pendingMu.Unlock()
+	}
+
+	req := &Request{ID: id, Op: op, Payload: payload}
+
+	c.wmu.Lock()
+	err := EncodeRequest(c.stdin, req)
+	c.wmu.Unlock()
+
+	if err != nil {
+		unregister()
+		return nil, fmt.Errorf("send %s: %w", op, err)
+	}
+
+	consumerErr := make(chan error, 1)
+	consumerDone := make(chan struct{})
+
+	// Event consumer: forwards streamed frames to onEvent until aborted.
+	// On abort it drains what remains (delivering ONLY while the caller
+	// is still interested) and exits — the read loop can never wedge.
+	go func() {
+		defer close(consumerDone)
+		for {
+			select {
+			case ev := <-p.events:
+				if !p.deliver.Load() || onEvent == nil {
+					continue
+				}
+				if err := onEvent(ev); err != nil {
+					consumerErr <- err
+					// Stop delivering; keep draining so the read loop
+					// never blocks on a full buffer.
+					p.deliver.Store(false)
+				}
+
+			case <-p.abort:
+				// Drain the remainder (bounded: buffered events + at
+				// most one in-flight dispatch send; the 256-frame
+				// buffer absorbs any straggler). Deliver while the
+				// caller still wants events.
+				for {
+					select {
+					case ev := <-p.events:
+						if p.deliver.Load() && onEvent != nil {
+							if err := onEvent(ev); err != nil {
+								select {
+								case consumerErr <- err:
+								default:
+								}
+								p.deliver.Store(false)
+							}
+						}
+					default:
+						return
+					}
+				}
+			}
+		}
+	}()
+
+	// waitForConsumer returns once every buffered event has been handed
+	// to onEvent (bounded — a stuck consumer callback is the caller's
+	// own code; 5 s is generous).
+	waitForConsumer := func() {
+		select {
+		case <-consumerDone:
+		case <-time.After(5 * time.Second):
+		}
+	}
+
+	// abandon: the caller gave up — stop delivering, cancel the request
+	// on the host (cooperative; the engine emits a cancelled final frame)
+	// and wait for that final frame so the host-side lane finishes.
+	abandon := func(reason string) (*Response, error) {
+		p.deliver.Store(false)
+		unregister()
+		p.signalAbort()
+		waitForConsumer()
+
+		if op == OpGenerate {
+			if m, merr := json.Marshal(struct {
+				RequestID string `json:"requestId"`
+			}{RequestID: requestIDOf(payload)}); merr == nil {
+				cancelCtx, cancel := context.WithTimeout(context.Background(), opTimeout)
+				_, _ = c.call(cancelCtx, OpCancel, m)
+				cancel()
+			}
+		}
+
+		// The host lane writes the final frame after cancellation; it is
+		// dropped here (unregistered) — the engine is free to serve the
+		// next request immediately.
+		return nil, fmt.Errorf("%s: %s", op, reason)
+	}
+
+	for {
+		select {
+		case out := <-p.ch:
+			unregister()
+			p.signalAbort()
+
+			// Deliver every buffered event before returning (the final
+			// frame ends the stream; the consumer drains + delivers).
+			p.deliver.Store(true)
+			waitForConsumer()
+
+			if out.err != nil {
+				return nil, out.err
+			}
+			if !out.resp.OK {
+				return nil, fmt.Errorf("%s failed: %s", op, out.resp.Error)
+			}
+			return out.resp, nil
+
+		case err := <-consumerErr:
+			_ = err
+			return abandon("consumer aborted the stream")
+
+		case <-ctx.Done():
+			return abandon(ctx.Err().Error())
+
+		case <-c.closed:
+			p.deliver.Store(false)
+			unregister()
+			p.signalAbort()
+			waitForConsumer()
+			return nil, fmt.Errorf("%s: connection lost", op)
+		}
+	}
+}
+
+// requestIDOf extracts the requestId from a generate payload (for the
+// cancel round-trip). Returns "" when absent.
+func requestIDOf(payload json.RawMessage) string {
+	var probe struct {
+		RequestID string `json:"requestId"`
+	}
+	if err := json.Unmarshal(payload, &probe); err != nil {
+		return ""
+	}
+	return probe.RequestID
 }
 
 // ipcStdin exposes the stdin writer for EOF-signaling on stop.

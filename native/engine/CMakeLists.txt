@@ -24,7 +24,11 @@ if(SHTN_BUILD_SHARED)
         src/tokenizer.cpp
         src/kv_cache.cpp
         src/scheduler.cpp
-        src/sampler.cpp)
+        src/sampler.cpp
+        src/tensor.cpp
+        src/llama.cpp
+        src/forward.cpp
+        src/generate.cpp)
 else()
     add_library(shtn_engine STATIC
         src/engine.cpp
@@ -34,7 +38,11 @@ else()
         src/tokenizer.cpp
         src/kv_cache.cpp
         src/scheduler.cpp
-        src/sampler.cpp)
+        src/sampler.cpp
+        src/tensor.cpp
+        src/llama.cpp
+        src/forward.cpp
+        src/generate.cpp)
 endif()
 
 target_include_directories(shtn_engine PUBLIC
@@ -90,6 +98,8 @@ if(SHTN_BUILD_TESTS)
 
     add_executable(test_host tests/test_host.cpp)
     target_link_libraries(test_host PRIVATE shtn_engine shtn_protocol)
+    target_compile_definitions(test_host PRIVATE
+        SHTN_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
     add_test(NAME host COMMAND test_host)
 
     add_executable(test_gguf tests/test_gguf.cpp)
@@ -116,4 +126,21 @@ if(SHTN_BUILD_TESTS)
     add_executable(test_sampler tests/test_sampler.cpp)
     target_link_libraries(test_sampler PRIVATE shtn_engine)
     add_test(NAME sampler COMMAND test_sampler)
+
+    # Phase 5 test binaries.
+    add_executable(test_tensor tests/test_tensor.cpp)
+    target_link_libraries(test_tensor PRIVATE shtn_engine)
+    add_test(NAME tensor COMMAND test_tensor)
+
+    add_executable(test_forward tests/test_forward.cpp)
+    target_link_libraries(test_forward PRIVATE shtn_engine)
+    target_compile_definitions(test_forward PRIVATE
+        SHTN_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
+    add_test(NAME forward COMMAND test_forward)
+
+    add_executable(test_generate tests/test_generate.cpp)
+    target_link_libraries(test_generate PRIVATE shtn_engine)
+    target_compile_definitions(test_generate PRIVATE
+        SHTN_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
+    add_test(NAME generate COMMAND test_generate)
 endif()

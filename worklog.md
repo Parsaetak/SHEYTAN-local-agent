@@ -2,7 +2,7 @@
 
 ## Current State
 
-Date: 2026-09-10
+Date: 2026-09-11
 
 Repository:
 
@@ -27,15 +27,204 @@ the `ModelInfo` surface through Go. Phase 3 rebuilt the **local data
 pipeline for memory efficiency**: a shared chunk engine with full
 provenance metadata, single-flight content caching, streaming attachment
 staging, append-aware memory-store caching and allocation-free recall
-scoring — all measured with before/after benchmarks. Phase 4 (this log,
-first below) added the **native engine foundation primitives**: a real
-GGUF-backed tokenizer (BPE/Unigram/WPM), a real KV-cache data structure
-sized from model dims (GQA-aware, bounded), a real bounded scheduler,
-real sampling primitives, and a frame-budget-aware streaming UI with a
-diagnostic perf HUD. The transformer forward pass remains a later
-phase — native GENERATION is still NOT implemented. llama.cpp remains
-fully functional as the fallback (and the default generation engine).
-Full phase logs below.
+scoring — all measured with before/after benchmarks. Phase 4 added the
+**native engine foundation primitives**: a real GGUF-backed tokenizer
+(BPE/Unigram/WPM), a real KV-cache data structure sized from model dims
+(GQA-aware, bounded), a real bounded scheduler, real sampling
+primitives, and a frame-budget-aware streaming UI with a diagnostic
+perf HUD. Phase 5 (this log, first below) implemented the **REAL native
+transformer inference path**: the llama-architecture forward pass
+(RMSNorm / RoPE / GQA causal attention over a true fp16 KV cache /
+SwiGLU / logits), the sampler consuming REAL logits, REAL token-by-token
+generation with coarse-grained streamed chunks over the IPC protocol,
+REAL cooperative cancellation, measured generation metrics, the
+load-time llama-graph capability verdict, and the backend selection
+router wired through the orchestrator (native when selected AND capable
+AND plain-text; llama.cpp otherwise with a logged, inspectable reason).
+Native generation support is deliberately narrow and honest: llama
+architecture only, F32/F16/Q4_0/Q4_1/Q5_0/Q5_1/Q8_0 tensor types only,
+and the current forward pass is portable scalar C++ measured SLOWER
+than llama.cpp (the numbers are below — no native-speed claim is
+made). llama.cpp remains fully functional as the fallback (and the
+default generation engine for everything the native path does not
+support). Full phase logs below.
+
+---
+
+# v1.1.5Z Phase 5 Implementation Log (2026-09-11)
+
+## What was implemented (REAL native transformer inference + generation)
+
+1. **KV cache correction first** (the Phase 4 defect): the cache was a
+   `unique_ptr<float[]>` while documenting/reporting fp16 — the actual
+   allocation was 2x the reported `capacity_bytes`, and per-layer
+   pointer math used `sizeof(float)` against f16-byte counts so
+   adjacent layers overlapped. Rewritten as TRUE `uint16_t` fp16-bit
+   storage (software round-to-nearest-even conversion in `fp16.h`,
+   bit-exact vs numpy across 65k random values + boundary cases):
+   `capacity_bytes` IS the allocation size, layer offsets are
+   element-exact, `used_bytes` equals positions × per-position
+   K+V footprint, `reset()` clears counters only (no memset),
+   allocation bounds-checked (context cap 1M, total 16 GiB, RAM check).
+   Regression tests pin expected == allocation == reported.
+2. **Tensor access layer** (`src/tensor.*`): lookup, type/shape/
+   byte-range validation, row dequantization for EXACTLY
+   F32/F16/Q4_0/Q4_1/Q5_0/Q5_1/Q8_0 (per-row block padding per the GGML
+   nbytes formula; block tail discarded). Everything else fails with an
+   explicit unsupported error — never a reinterpretation.
+3. **Llama graph derivation + validation** (`src/llama.*`): hyper
+   parameters from real GGUF metadata — required keys must exist (both
+   historical rms_eps spellings accepted; disagreement fails closed as
+   ambiguous; rope.freq_base required, no default invented);
+   head_dim from attention.key_length or the documented emb/heads
+   derivation; GQA divisibility checked; the full tensor set
+   (token_embd, output [tied or untied], output_norm, per-layer
+   attn_norm/ffn_norm/attn_q/k/v/output/ffn_gate/up/down) validated for
+   presence/shape/type at LOAD time → `generationCapable` + reason in
+   model_info (metadata-level; nothing allocated).
+4. **Transformer forward pass** (`src/forward.*`): the actual llama
+   computation — embeddings → per-layer [RMSNorm → Q/K/V matvec →
+   RoPE (NORM pairing, freq base from metadata) → causal GQA attention
+   reading the fp16 KV cache → output projection + residual → RMSNorm
+   → SwiGLU FFN + residual] → final norm → logits. Double
+   accumulators; scratch reused (no per-token heap allocations); norm
+   weights dequantized once per model binding; per-token (not
+   per-layer) KV position advance.
+5. **Generation runner** (`src/generate.*`): prompt encoded by the
+   engine's own GGUF tokenizer (BOS-primed, llama-style ▁ handling);
+   context bound is a REJECT policy (prompt + max_tokens > context →
+   explicit error, no silent truncation); per-request KV reset (no
+   state leaks between requests); prefill (cancellation observed every
+   16 tokens) + decode loop (cancellation observed EVERY token);
+   sampler consumes the REAL logits (temperature/top-k/top-p/
+   repetition-penalty/seed — Phase 4 primitives); stop conditions: EOS
+   (sampled EOS is never emitted into the text), max_tokens, context
+   exhaustion, cancellation, error; UTF-8-complete chunk emission
+   (first token immediate for honest TTFT, then ≥8-token/24-byte
+   windows — never one IPC frame per token); metrics from the
+   monotonic clock only (prompt/decode/TTFT/tok/s/KV positions; zero
+   = not measured).
+6. **Scheduler worker thread** (`src/scheduler.*`): single slot (max
+   concurrent 1), FIFO queue with cap, real active/completed/cancelled/
+   failed counters; queued cancels remove, active cancels set the
+   cooperative flag; graceful shutdown cancels + joins. Without a
+   worker the Phase 4 semantics are preserved (tests unchanged).
+7. **Engine ABI v4** (`engine.cpp`): `shtn_engine_generate` (blocking
+   submit to the scheduler; work registry by request id; the emit
+   callback fires per streamed chunk), `shtn_engine_cancel_generation`,
+   `shtn_engine_generation_stats`; unload/load rejected while a
+   generation holds the mapping (SHTN_ERR_MODEL_STATE); metrics report
+   the real scheduler active count; new error codes -9 CANCELLED,
+   -10 CONTEXT_OVERFLOW, -11 GENERATION.
+8. **Host generation lanes** (`host_main.cpp`): the `generate` op
+   spawns a bounded lane (≤16; the engine's queue bounds acceptance
+   anyway) that calls the ABI and writes event frames
+   (`{"id":N,"ok":true,"event":"chunk","result":{requestId,text,token,
+   final}}`) followed by one final frame (finish reason + measured
+   metrics, or a bounded error frame). All frame writes share one mutex
+   so event frames never interleave mid-frame with dispatch responses.
+   `cancel` is real. EOF/shutdown cancels in-flight lanes and joins
+   them BEFORE exit (no writes to dead streams). The dispatch loop
+   stays fully responsive during generation.
+9. **Go streaming IPC** (`internal/native/engine`): protocol v4;
+   `ipcConn.streamCall` — event channel per pending request (never
+   closed; late stragglers absorb into the bounded buffer), consumer
+   goroutine forwarding to the callback with backpressure, a
+   deliver-then-drain abort protocol, and a final-frame guarantee
+   (every buffered event is delivered before the call returns).
+   `Engine.StreamGeneration` (busy-state cycling in the existing
+   vocabulary, 5-minute zero-progress stall watchdog mirroring the
+   llama stream contract, ContextExhaustedError mapping).
+10. **Backend + routing** (`backend.go`, `internal/runtime`, `internal/
+    agent`): `Generate`/`StreamGenerate` real (llm.StreamEvent with
+    finish reason + measured usage; PerfStats from measured metrics);
+    `GenerationCapable` = alive + loaded + validated; tools/images
+    requests return `llm.ErrNotImplemented` (the explicit fallback
+    signal); the orchestrator gained a `GenerationStream` seam wired to
+    `Stack.streamGeneration` — native when selected + capable +
+    plain-text, llama.cpp otherwise, pre-first-token native failures
+    fall back with the reason logged; pre-warm loads the selected model
+    natively and logs the capability verdict.
+11. **Fixtures + independent reference** (`tests/reference/
+    make_fixture.py`): deterministic tiny llama GGUFs (F32; llama.cpp-
+    loadable — verified with llama-bench; both rms_eps key spellings
+    now the canonical one) + a numpy reference implementation computing
+    the staged values and final logits WITHOUT the C++ code, including
+    the exact fp16 K/V round-trip semantics.
+12. **Prompt format note (honest limitation)**: the native path renders
+    messages with a plain role-labeled format ("System:/User:/Assistant:")
+    — it does NOT interpret the model's chat template. llama.cpp keeps
+    full template fidelity; the router only sends plain-text requests
+    natively.
+
+## Runtime verification performed (Phase 5)
+
+- ctest: 12/12 suites green — engine, protocol, host (streaming
+  generate + cancel through real OS pipes), gguf, model, tokenizer,
+  kv_cache (byte-accounting regressions), scheduler, sampler, tensor
+  (hand-computed dequant values), forward (independent Python
+  reference: staged values within 1e-5, logits within 1e-3, greedy
+  argmax matches), generate (greedy determinism, seed reproducibility,
+  EOS/max-tokens/context/cancel, metrics sanity, KV reset between
+  requests, non-llama fallback, unload guard, engine reusability after
+  every failure).
+- Go: 23 packages `go test -tags headless` green; `-race` green on
+  agent/llm/api/native-engine/runtime; `go vet` clean.
+- Real Go↔C++ boundary: 5 e2e tests (generation + streamed chunks +
+  measured metrics + KV/scheduler accounting; mid-decode cancellation;
+  context-overflow rejection + reuse; unsupported-model fallback
+  signal; backend contract incl. llm.StreamEvent/PerfStats).
+- Frontend gates: typecheck, lint, build green (frontend untouched —
+  the Phase 4 coalescing contract is intact by construction).
+- Stress gate 30/0; release-version check consistent (NO version bump —
+  §34 discipline: the release workflow decides version changes).
+
+## Measured performance (same fixtures, single thread, no claims beyond these numbers)
+
+| fixture | engine | prompt (pp5) | decode (tg) |
+|---|---|---|---|
+| tiny-llama-f32 (85KB) | llama.cpp (llama-bench @df03399) | 56810 tok/s | 28643 tok/s |
+| tiny-llama-f32 | NATIVE (this phase) | 17695 tok/s | 20708 tok/s |
+| tiny-llama-slow (5.7MB) | llama.cpp | 5888 tok/s | 2656 tok/s |
+| tiny-llama-slow | NATIVE | 285 tok/s | 611 tok/s |
+
+Native model load: 301–437µs (fixtures); TTFT 0.3ms (tiny) / 17.6ms
+(slow); KV accounting measured exactly (8192B cap / 4352B used / 34
+positions on the tiny fixture). Host RSS: idle 2044KB, +144KB after
+load+generate (tiny fixture).
+
+**Honest conclusion: the native engine is SLOWER than llama.cpp on
+these fixtures** (pp ~3.2x, tg ~1.4x on the tiny; pp ~20x, tg ~4.3x on
+the slow). Expected — llama.cpp has heavily optimized kernels (SIMD,
+fused quantized compute, layout-aware access) while Phase 5 is portable
+scalar dequant-then-dot C++ with correctness as the priority. The
+numerical correctness is pinned by the Python reference; optimization
+is future work (agent.md §13 task 1).
+
+## Known limitations (Phase 5, read literally)
+
+- Native generation: llama architecture ONLY; F32/F16/Q4_0/Q4_1/Q5_0/
+  Q5_1/Q8_0 tensors ONLY; rope.freq_scale 1.0 ONLY; plain prompt
+  format (no chat-template interpretation); tools/images stay on
+  llama.cpp.
+- Native forward pass is scalar C++ — slower than llama.cpp (numbers
+  above); performance optimization is future work.
+- shtn-engine-host is not shipped/auto-downloaded yet (build from
+  native/engine; packaging is agent.md §13 task 3).
+- Windows: the numerical engine is platform-neutral C++ (no
+  platform-specific inference code added); Windows RUNTIME execution
+  was not exercised in this environment (Linux-only here; Windows CI
+  cross-build remains the verification path).
+- The Wails/GTK desktop build still cannot compile in this environment
+  (no GTK4/WebKit dev libs); Windows CI job builds it.
+- Vision (mmproj) path not exercised with a real projector model.
+- Small instruct models may not emit formal tool calls; loop mechanics
+  covered by deterministic tests.
+- The API is loopback-only without an auth token — the OS user account
+  is the trust boundary.
+- The Lab command policy is lexical (denylists + env pinning), not a
+  kernel sandbox.
+- Agent tool calls execute sequentially by design.
 
 ---
 

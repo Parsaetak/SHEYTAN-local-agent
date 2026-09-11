@@ -94,33 +94,6 @@ typedef struct shtn_model_load_options {
     uint32_t reserved;       /* must be 0 */
 } shtn_model_load_options;
 
-/* shtn_model_info is a snapshot of the engine's model concern. Fields
- * are filled ONLY with values actually read from the GGUF header or
- * derived from the tensor table; unknowns stay 0/empty. `state` uses the
- * SHTN_MODEL_STATE_* vocabulary; `error` carries the last load failure
- * detail (empty when the model did not fail). */
-typedef struct shtn_model_info {
-    char path[1024];
-    char architecture[64];    /* general.architecture */
-    char name[256];           /* general.name */
-    char quantization[64];    /* human name for general.file_type */
-    char state[16];           /* SHTN_MODEL_STATE_* */
-    char error[256];          /* last load failure detail; empty otherwise */
-    uint64_t file_size_bytes;      /* measured on-disk size */
-    uint64_t parameter_count;      /* derived from tensor table, or read */
-    uint64_t context_length;       /* <arch>.context_length */
-    uint64_t vocabulary_size;      /* <arch>.vocab_size / tokenizer array */
-    uint64_t embedding_length;     /* <arch>.embedding_length */
-    uint64_t layer_count;          /* <arch>.block_count */
-    uint64_t kv_cache_bytes;       /* planned estimate (f16 K+V) */
-    uint64_t workspace_bytes;      /* planned estimate (logits row) */
-    uint64_t total_plan_bytes;     /* full memory-plan total */
-    uint32_t tensor_count;         /* tensor table entries */
-    uint32_t gguf_version;         /* 2 or 3 */
-    uint32_t general_file_type;    /* raw general.file_type (when present) */
-    int32_t  has_file_type;        /* 1 = general.file_type was present */
-} shtn_model_info;
-
 /* shtn_memory_plan is the load-time budget the engine computes from the
  * GGUF header + tensor table. NOTHING is allocated to produce this plan
  * — every number is arithmetic on parsed metadata. Bytes semantics:
@@ -146,7 +119,124 @@ typedef struct shtn_memory_plan {
     int32_t  reserved;       /* always 0 */
 } shtn_memory_plan;
 
-/* --- Phase 4: tokenizer / KV / scheduler surfaces ------------------------ */
+/* --- Phase 5: native generation surface -----------------------------------
+ *
+ * ABI v4: shtn_model_info is EXTENDED IN PLACE (appended fields — the
+ * Phase 4 comment block describing it moved up unchanged). The ABI and
+ * protocol versions are bumped together on both sides (Go + C++). */
+
+/* shtn_model_info is a snapshot of the engine's model concern. Fields
+ * are filled ONLY with values actually read from the GGUF header or
+ * derived from the tensor table; unknowns stay 0/empty. `state` uses the
+ * SHTN_MODEL_STATE_* vocabulary; `error` carries the last load failure
+ * detail (empty when the model did not fail).
+ *
+ * Phase 5 additions: generation_capable is the load-time native-inference
+ * verdict (the llama graph validated against real GGUF metadata —
+ * presence/shape/type of every required tensor; metadata only, nothing
+ * allocated). 1 = the transformer forward pass can execute this model
+ * natively; 0 = the Go core must select the llama.cpp fallback, with
+ * generation_reason carrying the explicit, inspectable reason. */
+typedef struct shtn_model_info {
+    char path[1024];
+    char architecture[64];    /* general.architecture */
+    char name[256];           /* general.name */
+    char quantization[64];    /* human name for general.file_type */
+    char state[16];           /* SHTN_MODEL_STATE_* */
+    char error[256];          /* last load failure detail; empty otherwise */
+    uint64_t file_size_bytes;      /* measured on-disk size */
+    uint64_t parameter_count;      /* derived from tensor table, or read */
+    uint64_t context_length;       /* <arch>.context_length */
+    uint64_t vocabulary_size;      /* <arch>.vocab_size / tokenizer array */
+    uint64_t embedding_length;     /* <arch>.embedding_length */
+    uint64_t layer_count;          /* <arch>.block_count */
+    uint64_t kv_cache_bytes;       /* planned estimate (f16 K+V) */
+    uint64_t workspace_bytes;      /* planned estimate (logits row) */
+    uint64_t total_plan_bytes;     /* full memory-plan total */
+    uint32_t tensor_count;         /* tensor table entries */
+    uint32_t gguf_version;         /* 2 or 3 */
+    uint32_t general_file_type;    /* raw general.file_type (when present) */
+    int32_t  has_file_type;        /* 1 = general.file_type was present */
+    int32_t  generation_capable;   /* 1 = native inference validated */
+    char generation_reason[256];   /* why not (empty when capable) */
+} shtn_model_info;
+
+/* Generation finish reasons (stable values). */
+#define SHTN_FINISH_EOS        "eos"
+#define SHTN_FINISH_LENGTH     "length"
+#define SHTN_FINISH_CANCELLED  "cancelled"
+#define SHTN_FINISH_STOP       "stop"
+
+/* shtn_generation_options configures one native generation request. The
+ * caller (host worker lane) supplies the prompt as UTF-8 text; the
+ * engine tokenizes it with its own materialized GGUF tokenizer. */
+typedef struct shtn_generation_options {
+    const char* request_id;   /* caller-supplied id (cancel address); NULL ok */
+    const char* prompt;       /* UTF-8 prompt text (required) */
+    uint64_t prompt_len;      /* prompt bytes (required) */
+    uint32_t max_tokens;      /* hard generation cap (> 0) */
+    float temperature;        /* 0 = greedy; typical 0..2 */
+    int32_t top_k;            /* 0 = disabled */
+    float top_p;              /* 1.0 = disabled */
+    float repetition_penalty; /* 1.0 = disabled */
+    uint32_t repeat_last_n;   /* repetition window (0 = 64 default) */
+    uint64_t seed;            /* 0 = fixed default (deterministic) */
+    uint32_t reserved;        /* must be 0 */
+} shtn_generation_options;
+
+/* shtn_generation_chunk is ONE streamed generation event. text is NUL-
+ * terminated with text_len valid bytes; token_id is the sampled token;
+ * final != 0 marks the last chunk (metrics then valid). */
+typedef struct shtn_generation_chunk {
+    const char* text;         /* decoded delta (UTF-8 complete sequences) */
+    uint32_t text_len;
+    uint32_t token_id;
+    int32_t final;            /* 1 = last chunk */
+} shtn_generation_chunk;
+
+/* shtn_generation_metrics — every field is a MEASURED value from the
+ * monotonic (steady) clock; zero means "not measured" (never a guess). */
+typedef struct shtn_generation_metrics {
+    uint32_t prompt_tokens;        /* measured: encoded prompt length */
+    uint32_t generated_tokens;     /* measured: tokens sampled */
+    double prompt_seconds;         /* prefill duration */
+    double ttft_seconds;           /* start → first sampled token */
+    double decode_seconds;         /* first token → last token */
+    double total_seconds;          /* start → completion */
+    double tokens_per_second;      /* generated / decode window (0 if n/a) */
+    double prompt_tokens_per_second; /* prompt / prefill (0 if n/a) */
+    uint64_t kv_positions_used;    /* prompt + generated positions */
+} shtn_generation_metrics;
+
+/* shtn_generation_result is the final outcome of one generation. */
+typedef struct shtn_generation_result {
+    char finish_reason[16];   /* SHTN_FINISH_* */
+    shtn_generation_metrics metrics;
+} shtn_generation_result;
+
+/* The streaming callback: called once per chunk from the generation
+ * worker. Return 0 to continue; non-zero aborts generation with
+ * SHTN_ERR_INTERNAL (consumer failure — never a crash). */
+typedef int32_t (*shtn_generation_emit_fn)(void* user,
+                                           const shtn_generation_chunk* chunk);
+
+/* shtn_generation_stats is the engine-level snapshot of the generation
+ * concern (reported through the metrics op). */
+typedef struct shtn_generation_stats {
+    uint32_t active_requests;      /* in-flight right now */
+    uint64_t total_requests;       /* since engine create */
+    uint64_t total_completed;      /* finished (any finish reason) */
+    uint64_t total_cancelled;
+    uint64_t total_failed;
+    /* Last completed request's measured stats (zeros before any). */
+    double ttft_seconds;
+    double tokens_per_second;
+    double prompt_tokens_per_second;
+    uint32_t last_prompt_tokens;
+    uint32_t last_generated_tokens;
+} shtn_generation_stats;
+
+
 
 /* shtn_tokenizer_info is the materialized tokenizer snapshot. Fields
  * are filled ONLY with values actually read from the GGUF header; a

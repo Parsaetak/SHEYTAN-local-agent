@@ -1,4 +1,4 @@
-# SHEYTAN Native AI Engine — C++ Engine Core (v1.1.5Z Phase 2)
+# SHEYTAN Native AI Engine — C++ Engine Core (v1.1.5Z Phase 5)
 
 This is the C++ side of the **SHEYTAN Native AI Engine architecture**:
 
@@ -70,6 +70,73 @@ op set reserves `cancel` for generation requests, and llama.cpp remains
 the only generation engine. The host's `cancel` op honestly answers "no
 active generation requests".
 
+**IMPLEMENTED + TESTED in Phase 5 (REAL native transformer inference + generation):**
+
+- a safe **tensor access layer** (`src/tensor.*`): name lookup,
+  type/shape/byte-range validation and row dequantization for EXACTLY
+  these GGML types: F32, F16, Q4_0, Q4_1, Q5_0, Q5_1, Q8_0 (anything
+  else — K-quants, IQ, BF16 — fails with an explicit unsupported error,
+  never a silent reinterpretation)
+- **llama-architecture graph derivation + validation** (`src/llama.*`):
+  hyper parameters from REAL GGUF metadata (missing required keys —
+  rms_eps, rope.freq_base — fail clearly; no defaults are invented; both
+  historical rms_eps key spellings accepted, ambiguity fails closed),
+  GQA divisibility checks, and full tensor presence/shape/type
+  validation at LOAD time (the `generationCapable` + reason verdict in
+  model_info)
+- a REAL **transformer forward pass** (`src/forward.*`): token
+  embeddings → per-layer [RMSNorm → Q/K/V matvec → RoPE (NORM pairing,
+  freq from the model's rope base) → causal GQA attention over the fp16
+  KV cache → output projection + residual → RMSNorm → SwiGLU FFN +
+  residual] → final RMSNorm → logits (output.weight; token_embd when
+  tied); double accumulators; scratch reused across steps (no per-token
+  allocations); the KV cache is TRUE fp16 storage (uint16 bits —
+  Phase 5 corrected the Phase 4 float[]-but-reported-f16 defect, pinned
+  by byte-accounting regression tests)
+- a REAL **generation runner** (`src/generate.*`): prompt tokenized by
+  the engine's own GGUF tokenizer; context-bound REJECT policy
+  (prompt + max_tokens > context fails explicitly — no silent
+  truncation); per-request KV reset; prefill + decode loop with
+  per-token cancellation observation; the Phase 4 sampler consuming
+  REAL logits; stops: EOS (never emitted into text), max_tokens,
+  context exhaustion, cancellation, error; UTF-8-complete chunk
+  emission (first token immediate for honest TTFT, then batched
+  windows — never one frame per token); measured metrics from the
+  monotonic clock (prompt/decode/TTFT/tok/s/KV positions — zero means
+  not measured, never a guess)
+- a REAL **scheduler worker** (`src/scheduler.*`): single-slot thread
+  executing queued generation requests; active/completed/cancelled/
+  failed counts are real; cancel addresses queued (removed) and active
+  (cooperative flag) requests
+- **host generation lanes** (`src/host_main.cpp`): the `generate` op
+  streams event frames (same request id, `"event":"chunk"`) before its
+  final frame; bounded lanes (≤16; the engine queue bounds
+  acceptance); every frame write under a shared mutex so responses
+  never interleave mid-frame; `cancel` is REAL; EOF/shutdown cancels
+  in-flight lanes and joins before exit
+- **numerical correctness pinned against an independent Python
+  reference** (`tests/reference/make_fixture.py` + `tests/fixtures/`):
+  the tiny llama GGUF's staged values (embedding, rmsnorm output, q/k/v
+  projections, attention) and final logits are computed by a numpy
+  implementation that never calls the C++ code; `test_forward` compares
+  within documented tolerances (1e-5 staged, 1e-3 logits after fp16
+  K/V + accumulation-order differences)
+
+Fixtures (checked in, deterministic — regenerate with
+`python3 tests/reference/make_fixture.py`):
+- `tests/fixtures/tiny-llama-f32.gguf` — the reference-verified model
+  (llama.cpp-loadable: the same file runs under llama-bench)
+- `tests/fixtures/tiny-llama-ref.json` / `.txt` — the reference values
+- `tests/fixtures/tiny-llama-slow.gguf` — bigger dims (deterministic
+  cancellation windows for the mid-flight tests)
+
+**Phase 5 honest limits (read literally):** architecture llama only;
+tensor types F32/F16/Q4_0/Q4_1/Q5_0/Q5_1/Q8_0 only; rope.freq_scale 1.0
+only; no chat-template interpretation (plain prompts); the forward pass
+is portable scalar C++ — measured SLOWER than llama.cpp on the fixtures
+(see worklog.md Phase 5 performance table) — correctness was the
+priority; optimization is future work.
+
 ## Build
 
 CMake (preferred):
@@ -77,7 +144,9 @@ CMake (preferred):
 ```bash
 cmake -S native/engine -B native/engine/build
 cmake --build native/engine/build
-ctest --test-dir native/engine/build          # engine + protocol + host + gguf + model suites
+ctest --test-dir native/engine/build          # 12 suites: engine, protocol, host, gguf, model,
+                                               # tokenizer, kv_cache, scheduler, sampler,
+                                               # tensor, forward (vs the Python reference), generate
 ```
 
 Plain make (no CMake required):
@@ -100,12 +169,25 @@ Copy `shtn-engine-host` to `{DataDir}/bin/` (or configure
 the Go core will supervise it. Without the binary the native path reports
 unavailable and llama.cpp remains the engine (the default anyway).
 
-## Protocol (v2)
+## Protocol (v4)
 
 Frame: `[4-byte LE length][JSON payload]` (cap 1 MiB), over the host's
-stdin/stdout. Ops: `ping`, `health`, `hwinfo`, `metrics`, `cancel`,
-`load_model` (payload `{"path": "...", "contextLength": 0}`),
-`unload_model`, `model_info`, `shutdown`. Bump `SHTN_PROTOCOL_VERSION` /
-`SHTN_ABI_VERSION` (`include/shtn/version.h`) whenever the wire or ABI
-changes — the Go core fails closed on mismatch (v2 was bumped together
-on both sides in Phase 2; pre-existing op shapes are unchanged).
+stdin/stdout. Ops: `ping`, `health`, `hwinfo`, `metrics`, `cancel`
+(payload `{"requestId": "..."}` — real cooperative cancellation),
+`load_model`, `unload_model`, `model_info`, `tokenizer_init`,
+`tokenizer_info`, `tokenizer_encode`, `tokenizer_decode`,
+`kv_cache_info`, `scheduler_info`,
+`generate` (payload
+`{"requestId": "...", "prompt": "...", "maxTokens": N, "temperature": f,
+"topK": n, "topP": f, "repetitionPenalty": f, "repeatLastN": n, "seed": n}` —
+streams `{"id":N,"ok":true,"event":"chunk","result":{"requestId":...,
+"text":...,"token":...,"final":...}}` frames before its final
+`{"id":N,"ok":true,"result":{"requestId":...,"finishReason":...,
+"promptTokens":...,"generatedTokens":...,"metrics":{...}}}`), and
+`shutdown`. A request id receives one or more frames: every frame with
+an `"event"` member is intermediate; the frame without it is final.
+Bump `SHTN_PROTOCOL_VERSION` / `SHTN_ABI_VERSION`
+(`include/shtn/version.h`) whenever the wire or ABI changes — the Go
+core fails closed on mismatch (v4 was bumped together on both sides in
+Phase 5: generate/cancel + streamed event frames; v3 was Phase 4; v2 was
+Phase 2).

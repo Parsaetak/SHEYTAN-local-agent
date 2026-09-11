@@ -63,9 +63,10 @@ stress suite; see the exact commands in `agent.md` §10.
 | Release engineering (single-source version sync, CI gates, zip-slip-safe updater) | `scripts/release-version.mjs`, `.github/workflows/build-desktop.yml`, `internal/updater` | IMPLEMENTED + TESTED | `package.json` is the single source of truth for the version |
 | Frontend (React 19 + TS + Vite, embedded via `go:embed`) | `src/`, `web/static` | IMPLEMENTED + TESTED | `npm run build` must be re-run after frontend changes |
 | **LLM backend contract** (v1.1.5Z Phase 1): engine-agnostic interface — Start/Stop/Health/LoadModel/UnloadModel/Generate/StreamGenerate/Cancel/ModelInfo/HardwareInfo/Metrics — plus generation-backend selection with automatic llama.cpp fallback | `internal/llm` (`backend.go`, `llamabackend.go`) | IMPLEMENTED + TESTED | `LlamaBackend` delegates to the existing LlamaServer+Client paths (no behavior change); selection resolves to llama in Phase 1 because the native backend honestly reports generation-incapable |
-| **SHEYTAN Native Engine foundation** (v1.1.5Z Phase 1): supervised `shtn-engine-host` subprocess (spawn → protocol/ABI handshake → health → ready → bounded auto-restart), length-prefixed JSON IPC, platform-neutral hardware profile (native probe + sysinfo merge), native metrics (measured values only), C++ engine with a narrow C ABI (create/destroy/health/hwinfo/metrics) and its own test suite | `internal/native/engine`, `native/engine/` | IMPLEMENTED + TESTED | **No native inference exists** — Generate/StreamGenerate return `ErrNotImplemented` and generation runs on llama.cpp; opt-in via `engineBackend: "native"`; default behavior identical to v1.1.4Z |
-| **Native GGUF model loading** (v1.1.5Z Phase 2): bounds-checked, overflow-safe C++ GGUF reader (magic/version/metadata/tensor-table validation, hostile-input bounds, mmap-backed lazy access), `LoadModel`/`UnloadModel` with replace semantics and clean resource release, real metadata extraction (architecture, parameter count, context, vocab, embedding, layers, quantization, tensor count, file size), load-time memory plan (file/mapped/weights/workspace/KV estimate/overhead — computed, never allocated), model states `unloaded/loading/loaded/failed` with host-restart resets, `model_info`/`load_model`/`unload_model` wire ops (protocol v2) and the `llm.ModelInfo` mapping with additive fields | `internal/native/engine` (`model.go`, `protocol.go`, `backend.go`), `native/engine/src/{gguf,model}.*`, `native/engine/include/shtn/*` | IMPLEMENTED + TESTED (loading/metadata/planning only) | **No native inference exists** — loading a model does NOT enable generation; `GenerationCapable()` stays false and Generate/StreamGenerate still return `ErrNotImplemented` |
-| **Native engine foundation primitives** (v1.1.5Z Phase 4): real GGUF-backed tokenizer (BPE/Unigram/WPM with merges, special tokens, BOS/EOS/UNK, bounded encode/decode — materialized by re-walking the mmap on demand), real KV-cache data structure (sized from real model dims, GQA-aware, contiguous K+V allocation, capacity/usage/used-positions measured — used_positions stays 0 until a forward pass exists, never fabricated), real bounded scheduler (single-slot, FIFO, queue cap, cancel, drain, no busy poll), real sampling primitives (greedy/temperature/top-k/top-p/repetition penalty/seedable xorshift64* RNG — deterministic), streaming UI coalescing (rAF-boundary batching of token chunks — one setState per frame regardless of token rate), frame-budget diagnostic perf HUD (auto-detects refresh rate, measures real frame time, dropped frames, longtask count, coalesced stream-update frequency) | `internal/native/engine` (`tokenizer.go`), `native/engine/src/{tokenizer,kv_cache,scheduler,sampler}.*`, `src/store.ts` (coalescer), `src/perf-hud.ts`, `src/main.tsx` | IMPLEMENTED + TESTED (foundation primitives + UI coalescing) | **No native inference exists** — the transformer forward pass is not implemented; `GenerationCapable()` stays false and Generate/StreamGenerate still return `ErrNotImplemented`; the KV cache is NOT auto-allocated on model load (it reports the honest zero-state until a future op explicitly allocates it); the scheduler executes nothing in Phase 4 (active=0; the queue is measurable but no worker thread runs). ABI/protocol bumped v2 → v3 (additive — v2-era hosts can still build against the new header by ignoring the new functions). The perf HUD reports `optimized for high-refresh displays / frame-budget aware / 120 Hz-capable presentation where hardware permits` — it does NOT claim guaranteed 120 FPS. |
+| **SHEYTAN Native Engine foundation** (v1.1.5Z Phase 1): supervised `shtn-engine-host` subprocess (spawn → protocol/ABI handshake → health → ready → bounded auto-restart), length-prefixed JSON IPC, platform-neutral hardware profile (native probe + sysinfo merge), native metrics (measured values only), C++ engine with a narrow C ABI (create/destroy/health/hwinfo/metrics) and its own test suite | `internal/native/engine`, `native/engine/` | IMPLEMENTED + TESTED | Superseded by Phase 5: the same subprocess now serves REAL native generation (see below); supervision/protocol/bounds unchanged |
+| **Native GGUF model loading** (v1.1.5Z Phase 2): bounds-checked, overflow-safe C++ GGUF reader (magic/version/metadata/tensor-table validation, hostile-input bounds, mmap-backed lazy access), `LoadModel`/`UnloadModel` with replace semantics and clean resource release, real metadata extraction (architecture, parameter count, context, vocab, embedding, layers, quantization, tensor count, file size), load-time memory plan, model states `unloaded/loading/loaded/failed` with host-restart resets, wire ops and the `llm.ModelInfo` mapping with additive fields; Phase 5 adds the llama-graph VALIDATION verdict (`generationCapable` + inspectable reason) at load time | `internal/native/engine` (`model.go`, `protocol.go`, `backend.go`), `native/engine/src/{gguf,model,llama}.*`, `native/engine/include/shtn/*` | IMPLEMENTED + TESTED | Loading alone still does not serve generation — but since Phase 5 a VALIDATED llama model DOES: `GenerationCapable()` is true for alive + validated models and generation routes natively (see the Phase 5 row) |
+| **Native engine foundation primitives** (v1.1.5Z Phase 4): real GGUF-backed tokenizer (BPE/Unigram/WPM with merges, special tokens, BOS/EOS/UNK, bounded encode/decode — materialized by re-walking the mmap on demand), real KV-cache, real bounded scheduler, real sampling primitives (greedy/temperature/top-k/top-p/repetition penalty/seedable RNG), streaming UI coalescing (rAF-boundary batching — one setState per frame regardless of token rate), frame-budget perf HUD | `internal/native/engine` (`tokenizer.go`), `native/engine/src/{tokenizer,kv_cache,scheduler,sampler}.*`, `src/store.ts` (coalescer), `src/perf-hud.ts`, `src/main.tsx` | IMPLEMENTED + TESTED | Superseded/completed by Phase 5: the KV cache now holds real fp16 data populated by the forward pass; the scheduler runs a real worker thread; the sampler consumes real logits. UI coalescing contract unchanged. Phase 5 measured the HUD claims honestly (no guaranteed-FPS claims) |
+| **REAL native transformer inference + generation** (v1.1.5Z Phase 5): llama-architecture forward pass in portable C++ (embeddings → per-layer RMSNorm → Q/K/V matvec → RoPE NORM → causal GQA attention over the fp16 KV cache → output projection + residual → RMSNorm → SwiGLU FFN + residual → final norm → logits; double accumulators; scratch reuse; norm weights dequantized once), tensor access layer with row dequant for F32/F16/Q4_0/Q4_1/Q5_0/Q5_1/Q8_0 (anything else fails explicitly), generation runner (engine-tokenized prompt, context-bound REJECT policy, per-request KV reset, prefill + decode loop with per-token cancellation observation, sampler over real logits, EOS/max/context/cancel stops with EOS never emitted into text, UTF-8-complete chunk emission, monotonic-clock metrics), REAL scheduler worker (single slot, real active/completed/cancelled/failed counts), host generation lanes with streamed event frames + real cancel (protocol/ABI v4), Go ipcConn streaming (event channel per request, backpressure, cooperative-cancel abandon path), Backend Generate/StreamGenerate over llm.StreamEvent/PerfStats, generation router wired through the orchestrator (native when selected+capable+plain-text; llama.cpp otherwise; pre-first-token fallback logged), numerical correctness pinned against an independent Python reference (staged values + final logits within tolerance), e2e acceptance through the real Go↔C++ boundary | `native/engine/src/{tensor,llama,forward,generate}.*`, `native/engine/src/{kv_cache,scheduler,engine}.*` (upgraded), `native/engine/tests/{test_tensor,test_forward,test_generate}.cpp` + `tests/reference/make_fixture.py`, `internal/native/engine/{generation,backend,runtime,protocol}.*` (upgraded), `internal/runtime/runtime.go` (router), `internal/agent/orchestrator.go` (seam) | IMPLEMENTED + TESTED (12 C++ suites + Go fake-host suite + 5 real-host e2e tests + router tests, all green) | Support is NARROW and honest: llama architecture only; F32/F16/Q4_0/Q4_1/Q5_0/Q5_1/Q8_0 tensors only; rope.freq_scale 1.0 only; plain role-labeled prompt (no chat-template interpretation); tools/images stay on llama.cpp; measured SLOWER than llama.cpp on the fixtures (pp 56810 vs 17695 tok/s, tg 28643 vs 20708 tok/s on the tiny fixture — see worklog Phase 5 table; no native-speed claim made) |
 
 Explicit non-goals of the **current** runtime (do not mistake these for
 missing features):
@@ -117,11 +118,14 @@ cap, protocol + ABI version handshake that fails closed on mismatch,
 malformed requests answered with bounded errors — never a crash). The
 underlying engine core is a narrow C ABI (`include/shtn/engine.h`):
 create/destroy/health/hardware_info/metrics since Phase 1,
-load_model/unload_model/model_info/memory_plan since Phase 2 (protocol
-v2 / ABI v2, both sides bumped together),
+load_model/unload_model/model_info/memory_plan since Phase 2,
 tokenizer_init/tokenizer_info/tokenizer_encode/tokenizer_decode/
-kv_cache_info/scheduler_info since Phase 4 (protocol v3 / ABI v3 —
-additive, never broken — by later phases).
+kv_cache_info/scheduler_info since Phase 4, and
+generate/cancel/generation_stats since Phase 5 (protocol v4 / ABI v4;
+every bump lands on both sides together, mismatches fail closed; the
+generate op streams event frames with the request id before its final
+frame — one lane per request, bounded, so the dispatch loop stays
+responsive mid-generation).
 
 ### Native model lifecycle (Phase 2, IMPLEMENTED)
 
@@ -157,21 +161,27 @@ The native engine's state lives in `internal/native/engine` using the
 as the llama.cpp engine. There is no second, conflicting engine-state
 system: each engine owns its authoritative state, the API layer reads one
 snapshot per engine, and native transitions reach the same WS activity
-pipeline with "Native engine …" captions. The UI badge keeps reading the
-llama.cpp snapshot state until the native engine actually serves
-generation.
+pipeline with "Native engine …" captions. Generation on the native path
+cycles ready → busy → ready (the existing vocabulary — no
+"inferencing"/"generating" states were invented in Phase 5).
 
 ### Honest capability reporting
 
-`engine.Backend.GenerationCapable()` returns `false` — in Phase 2 as in
-Phase 1 — because model LOADING is not generation. This single boolean is
-what `llm.SelectGenerationBackend` uses to route generation to the llama
-fallback — when a later phase implements native generation, the routing
-flips by changing that boolean (and implementing the methods), not by
-editing call sites. Generation-related metrics (TTFT, prompt/decode
-speed) are omitted — never zero-filled — until a backend actually
-measures them. Native `ModelInfo` reports only values the C++ reader
-actually read or derived; absent GGUF keys stay zero.
+Since Phase 5, `engine.Backend.GenerationCapable()` returns `true` ONLY
+when the engine is alive AND the loaded model's llama graph validated at
+load time (every required tensor present with the right shape and a
+supported type) — the same boolean `llm.SelectGenerationBackend` reads to
+route generation (native when additionally selected and the request is
+plain text; llama.cpp otherwise, with tools/images and pre-first-token
+native failures falling back with a logged reason). A host restart or
+model unload flips it back to false — capability tracks reality. The
+Phase 1-4 rules still hold underneath: generation metrics (TTFT,
+prompt/decode speed) are reported only from MEASURED values (the C++
+engine's monotonic clock since Phase 5), and native `ModelInfo` reports
+only values the C++ reader actually read or derived; absent GGUF keys
+stay zero. An unsupported model reports `generationCapable=false` with an
+inspectable reason (architecture, missing tensor, unsupported type) —
+never a silent llama.cpp switch without evidence.
 
 ---
 

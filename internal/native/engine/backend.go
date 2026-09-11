@@ -1,28 +1,35 @@
 package engine
 
 // backend.go — the native engine adapter for the llm.Backend contract
-// (v1.1.5Z Phase 2).
+// (v1.1.5Z Phase 5: REAL generation).
 //
-// NativeBackend implements the full Backend method set. The lifecycle,
-// health, hardware, metrics, cancel and MODEL surfaces (LoadModel /
-// UnloadModel / ModelInfo — native GGUF loading with metadata + memory
-// plan) are REAL, backed by the supervised host subprocess and the IPC
-// protocol. The generation surface (Generate / StreamGenerate) still
-// returns llm.ErrNotImplemented — that error is the fallback signal
-// llm.SelectGenerationBackend and the runtime act on. Phase 2 never fakes
-// inference, and GenerationCapable stays false until generation exists.
+// The lifecycle, health, hardware, metrics, cancel and MODEL surfaces
+// (LoadModel / UnloadModel / ModelInfo — native GGUF loading with
+// metadata + memory plan + the generation-capability verdict) are REAL,
+// backed by the supervised host subprocess and the IPC protocol.
+//
+// Phase 5: Generate / StreamGenerate are REAL — the native engine runs
+// the actual transformer forward pass (llama architecture) and streams
+// coarse chunks back. GenerationCapable() reports true only when the
+// engine is alive AND the loaded model validated natively executable
+// (llama graph + supported tensor types + tokenizer). Requests the native
+// path cannot serve (tools, images — documented Phase 5 limits) return
+// llm.ErrNotImplemented, which the selection layer maps to the llama.cpp
+// fallback.
 
 import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
+	"time"
 
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
 )
 
 // ABIVersionExpected is the C ABI version the Go core expects from the
 // native engine (must match include/shtn/version.h).
-const ABIVersionExpected uint32 = 3
+const ABIVersionExpected uint32 = 4
 
 // Backend adapts an *Engine to the llm.Backend contract.
 type Backend struct {
@@ -53,8 +60,8 @@ func (b *Backend) Health(ctx context.Context) (llm.HealthReport, error) {
 }
 
 // LoadModel implements Backend: the engine validates the file, loads it
-// natively (GGUF validate → memory-map → metadata → memory plan) and
-// reports real model state. Requires a running engine.
+// natively (GGUF validate → memory-map → metadata → memory plan → llama
+// graph validation) and reports real model state.
 func (b *Backend) LoadModel(ctx context.Context, spec llm.ModelSpec) error {
 	if spec.Path == "" {
 		return fmt.Errorf("model spec path is empty")
@@ -71,39 +78,218 @@ func (b *Backend) LoadModel(ctx context.Context, spec llm.ModelSpec) error {
 }
 
 // UnloadModel implements Backend: releases the natively loaded model
-// (mapping, handles, cached metadata). Idempotent.
+// (mapping, handles, cached metadata, generation binding). Idempotent.
 func (b *Backend) UnloadModel(ctx context.Context) error {
 	return b.eng.UnloadModel(ctx)
 }
 
-// Generate implements Backend (NOT implemented — generation is a later
-// phase; callers fall back to the llama backend via
-// SelectGenerationBackend).
+// buildNativePrompt renders a ChatRequest's messages into the plain
+// prompt text the native engine tokenizes.
+//
+// KNOWN LIMITATION (documented, not hidden): the native path uses a
+// simple deterministic role-labeled format — it does NOT interpret the
+// model's chat template (no Jinja engine exists in the native backend).
+// llama.cpp retains full chat-template fidelity on its path; instruct
+// models generate usable-but-not-template-perfect continuations here.
+func buildNativePrompt(req *llm.ChatRequest) string {
+	var sb strings.Builder
+	for _, m := range req.Messages {
+		content := m.Content
+		if content == "" {
+			continue
+		}
+		switch m.Role {
+		case "system":
+			sb.WriteString("System: ")
+			sb.WriteString(content)
+			sb.WriteString("\n\n")
+		case "user":
+			sb.WriteString("User: ")
+			sb.WriteString(content)
+			sb.WriteString("\n\n")
+		case "assistant":
+			sb.WriteString("Assistant: ")
+			sb.WriteString(content)
+			sb.WriteString("\n\n")
+		case "tool":
+			sb.WriteString("Tool: ")
+			sb.WriteString(content)
+			sb.WriteString("\n\n")
+		default:
+			sb.WriteString(content)
+			sb.WriteString("\n\n")
+		}
+	}
+	sb.WriteString("Assistant:")
+	return sb.String()
+}
+
+// nativeSupportedRequest reports whether the native generation path can
+// serve this request shape (Phase 5: plain text only — tool schemas and
+// multimodal content stay on llama.cpp, returned as the explicit
+// ErrNotImplemented fallback signal).
+func nativeSupportedRequest(req *llm.ChatRequest) (bool, string) {
+	if len(req.Tools) > 0 {
+		return false, "request carries tool schemas (native tool-call formatting is a later phase)"
+	}
+	for _, m := range req.Messages {
+		if len(m.Images) > 0 {
+			return false, "request carries images (native vision is a later phase)"
+		}
+	}
+	if strings.TrimSpace(req.Model) != "" {
+		// A model alias is fine (the engine serves the loaded model);
+		// remote-provider-only fields are ignored by design.
+		_ = req.Model
+	}
+	return true, ""
+}
+
+// Generate implements Backend (Phase 5: REAL native generation — full
+// forward pass, sampler over real logits, EOS/max-token/context stops).
 func (b *Backend) Generate(ctx context.Context, req *llm.ChatRequest) (*llm.ChatResponse, error) {
-	_ = ctx
-	_ = req
-	return nil, fmt.Errorf("%w: native engine generation", llm.ErrNotImplemented)
+	if ok, reason := nativeSupportedRequest(req); !ok {
+		return nil, fmt.Errorf("%w: native engine generation: %s", llm.ErrNotImplemented, reason)
+	}
+
+	var text strings.Builder
+	result, err := b.eng.StreamGeneration(ctx, b.generationRequest(req), func(chunk GenerationChunk) error {
+		text.WriteString(chunk.Text)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	finish := mapFinish(result.FinishReason)
+
+	resp := &llm.ChatResponse{}
+	resp.Choices = append(resp.Choices, struct {
+		Message      llm.Message `json:"message"`
+		FinishReason string      `json:"finish_reason"`
+	}{Message: llm.Message{Role: "assistant", Content: text.String()},
+		FinishReason: finish})
+	resp.Usage.PromptTokens = int(result.PromptTokens)
+	resp.Usage.CompletionTokens = int(result.GeneratedTokens)
+	resp.Usage.TotalTokens = int(result.PromptTokens + result.GeneratedTokens)
+	return resp, nil
 }
 
-// StreamGenerate implements Backend (NOT implemented — see Generate).
+// StreamGenerate implements Backend (Phase 5: REAL native streaming —
+// coarse event chunks from the engine, converted to llm.StreamEvent).
 func (b *Backend) StreamGenerate(ctx context.Context, req *llm.ChatRequest, onEvent func(llm.StreamEvent) error) (llm.PerfStats, error) {
-	_ = ctx
-	_ = req
-	_ = onEvent
-	return llm.PerfStats{}, fmt.Errorf("%w: native engine streaming generation", llm.ErrNotImplemented)
+	if ok, reason := nativeSupportedRequest(req); !ok {
+		return llm.PerfStats{}, fmt.Errorf("%w: native engine streaming generation: %s", llm.ErrNotImplemented, reason)
+	}
+
+	start := time.Now()
+	var ttft time.Time
+
+	perf := llm.PerfStats{}
+
+	result, err := b.eng.StreamGeneration(ctx, b.generationRequest(req), func(chunk GenerationChunk) error {
+		if chunk.Text == "" && !chunk.Final {
+			return nil
+		}
+		if ttft.IsZero() && chunk.Text != "" {
+			ttft = time.Now()
+		}
+		return onEvent(llm.StreamEvent{
+			Content: chunk.Text,
+		})
+	})
+	if err != nil {
+		return perf, err
+	}
+
+	// Terminal event: carries finish reason + measured usage.
+	_ = onEvent(llm.StreamEvent{
+		FinishReason: mapFinish(result.FinishReason),
+		Usage: &struct {
+			PromptTokens     int `json:"prompt_tokens"`
+			CompletionTokens int `json:"completion_tokens"`
+			TotalTokens      int `json:"total_tokens"`
+		}{
+			PromptTokens:     int(result.PromptTokens),
+			CompletionTokens: int(result.GeneratedTokens),
+			TotalTokens:      int(result.PromptTokens + result.GeneratedTokens),
+		},
+	})
+
+	wall := time.Since(start)
+	perf.Tokens = int(result.GeneratedTokens)
+	perf.PromptTokens = int(result.PromptTokens)
+	perf.WallMs = int(wall.Milliseconds())
+	if !ttft.IsZero() {
+		perf.TTFTMs = int(ttft.Sub(start).Milliseconds())
+	}
+	if result.GeneratedTokens > 0 && result.Metrics.DecodeSeconds > 0 {
+		perf.TokensPerSec = float64(result.GeneratedTokens) / result.Metrics.DecodeSeconds
+	} else if wall.Seconds() > 0 {
+		perf.TokensPerSec = float64(result.GeneratedTokens) / wall.Seconds()
+	}
+
+	return perf, nil
 }
 
-// Cancel implements Backend with a real protocol round-trip. In this
-// phase the host answers "no active requests" for any id, which surfaces
-// as a cancel miss (an error naming the reason), not a fake success.
+// generationRequest maps the llm request onto the native payload.
+func (b *Backend) generationRequest(req *llm.ChatRequest) GenerationRequest {
+	g := GenerationRequest{
+		RequestID:         newRequestID("shtn"),
+		Prompt:            buildNativePrompt(req),
+		MaxTokens:         uint32(req.MaxTokens),
+		Temperature:       req.Temperature,
+		TopK:              int32(req.TopK),
+		TopP:              req.TopP,
+		RepetitionPenalty: 1.0,
+		Seed:              uint64(req.Seed),
+	}
+	if g.MaxTokens == 0 {
+		g.MaxTokens = 256
+	}
+	// Repetition penalty: the shared contract exposes frequency/presence
+	// penalties; the native sampler takes the classic repetition penalty.
+	// Use frequency penalty as the repetition multiplier when set (same
+	// scale, 1.0 = disabled), otherwise presence penalty, else 1.0.
+	switch {
+	case req.FrequencyPenalty > 0:
+		g.RepetitionPenalty = 1.0 + req.FrequencyPenalty
+	case req.PresencePenalty > 0:
+		g.RepetitionPenalty = 1.0 + req.PresencePenalty
+	default:
+		g.RepetitionPenalty = 1.0
+	}
+	if req.RepeatLastN > 0 {
+		g.RepeatLastN = uint32(req.RepeatLastN)
+	} else {
+		g.RepeatLastN = 64
+	}
+	return g
+}
+
+// mapFinish converts the native finish reason onto the shared contract
+// vocabulary.
+func mapFinish(reason string) string {
+	switch reason {
+	case FinishEOS:
+		return "stop"
+	case FinishCancelled:
+		return "cancelled"
+	case FinishLength:
+		return "length"
+	default:
+		return "stop"
+	}
+}
+
+// Cancel implements Backend: REAL cooperative cancellation of the
+// in-flight native generation (observed by the native loop per token).
 func (b *Backend) Cancel(ctx context.Context, requestID string) error {
 	return b.eng.Cancel(ctx, requestID)
 }
 
 // ModelInfo implements Backend: a real round-trip to the engine's model
-// concern, mapped onto the shared llm.ModelInfo contract. Additive
-// native fields (vocab size, layers, tensor count, memory plan summary)
-// are carried in the shared struct; the llama path leaves them zero.
+// concern, mapped onto the shared llm.ModelInfo contract.
 func (b *Backend) ModelInfo(ctx context.Context) (llm.ModelInfo, error) {
 	info := llm.ModelInfo{Backend: b.Name()}
 
@@ -152,16 +338,23 @@ func (b *Backend) HardwareInfo(ctx context.Context) (llm.HardwareInfo, error) {
 }
 
 // Metrics implements Backend: measured lifecycle facts + the engine's own
-// metrics reading.
+// metrics reading (real generation stats since Phase 5).
 func (b *Backend) Metrics(ctx context.Context) (llm.Metrics, error) {
 	return b.eng.MetricsSnapshot(ctx)
 }
 
-// GenerationCapable implements llm.GenerationCapable. Phase 2: still
-// false — model LOADING exists, generation does not. This single boolean
-// keeps generation requests on the llama.cpp fallback; flipping it (with
-// a real generation implementation) is the Phase 3+ trigger.
-func (b *Backend) GenerationCapable() bool { return false }
+// GenerationCapable implements llm.GenerationCapable (Phase 5: REAL).
+// True only when the engine is ALIVE and the loaded model validated as
+// natively executable at load time (llama graph + supported tensor
+// types). A host restart or model unload flips it back to false —
+// capability tracks reality, not hope. Mid-flight failures still fall
+// back through the router's pre-first-token retry policy.
+func (b *Backend) GenerationCapable() bool {
+	if b.eng == nil || !b.eng.IsAlive() {
+		return false
+	}
+	return b.eng.NativeGenerationCapable()
+}
 
 // statRegularFile validates that path exists and is a regular file
 // (no directory, no dangling symlink).

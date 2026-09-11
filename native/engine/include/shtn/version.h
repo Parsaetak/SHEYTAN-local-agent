@@ -21,12 +21,23 @@
 // scheduler_info) and the matching C ABI functions. Pre-existing ops
 // and structs keep their shapes (additive change — a v2 host can still
 // be built against this header by ignoring the new functions).
+//
+// Phase 5 (v1.1.5Z): both are 4 — REAL native generation. Wire: the
+// generate op streams event frames ({"id":N,"ok":true,"event":"chunk",
+// "result":{...}}) followed by one final frame; the cancel op now
+// addresses real generation requests. C ABI:
+// shtn_engine_generate / shtn_engine_cancel_generation /
+// shtn_engine_generation_stats; shtn_model_info extended with
+// generation_capable + generation_reason (appended fields); new error
+// codes -9..-11. Pre-existing op RESULT shapes stay compatible (the
+// generate/cancel semantics changed from Phase 4's honest "no generation"
+// stubs to real behaviour — that is the point of this phase).
 
 #ifndef SHTN_VERSION_H
 #define SHTN_VERSION_H
 
-#define SHTN_ABI_VERSION 3u
-#define SHTN_PROTOCOL_VERSION 3
+#define SHTN_ABI_VERSION 4u
+#define SHTN_PROTOCOL_VERSION 4
 
 /* Engine identity reported by the ping op. */
 #define SHTN_ENGINE_NAME "shtn-native-engine"

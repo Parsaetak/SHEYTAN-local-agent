@@ -304,6 +304,30 @@ func (e *Engine) NativeModelState() string {
 	return e.modelState
 }
 
+// NativeGenerationCapable reports whether the CURRENTLY loaded model
+// validated as natively executable at load time (the C++ engine's
+// llama-graph verdict, cached from the load result). False when no
+// model is loaded, the model failed to load, or the loaded model is not
+// natively executable — the llama.cpp fallback signal the backend layer
+// acts on.
+func (e *Engine) NativeGenerationCapable() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.modelState == ModelStateLoaded && e.modelInfo != nil &&
+		e.modelInfo.GenerationCapable
+}
+
+// NativeGenerationReason returns the inspectable reason a loaded model
+// is NOT natively executable (empty when capable or nothing is loaded).
+func (e *Engine) NativeGenerationReason() string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.modelInfo == nil {
+		return ""
+	}
+	return e.modelInfo.GenerationReason
+}
+
 // setModelFailedLocked records a failed load (callers hold modelMu; the
 // engine mu guards the fields themselves).
 func (e *Engine) setModelFailedLocked(path, detail string) {

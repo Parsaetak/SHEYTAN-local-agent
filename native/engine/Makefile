@@ -1,4 +1,4 @@
-# SHEYTAN Native AI Engine — C++ engine core (v1.1.5Z Phase 2)
+# SHEYTAN Native AI Engine — C++ engine core (v1.1.5Z Phase 5)
 #
 # Build with CMake (preferred):
 #
@@ -28,13 +28,23 @@ all: host library
 
 library: $(BUILD)/libshtn_engine.a
 
-$(BUILD)/libshtn_engine.a: src/engine.cpp src/model.cpp src/gguf.cpp src/hardware.cpp include/shtn/engine.h include/shtn/types.h include/shtn/version.h src/model.h src/gguf.h src/util.h
+ENGINE_SRCS := src/engine.cpp src/model.cpp src/gguf.cpp src/hardware.cpp \
+	src/tokenizer.cpp src/kv_cache.cpp src/scheduler.cpp src/sampler.cpp \
+	src/tensor.cpp src/llama.cpp src/forward.cpp src/generate.cpp
+
+ENGINE_OBJS := $(patsubst src/%.cpp,$(BUILD)/%.o,$(ENGINE_SRCS))
+
+ENGINE_HDRS := include/shtn/engine.h include/shtn/types.h include/shtn/version.h \
+	src/model.h src/gguf.h src/util.h src/tokenizer.h src/kv_cache.h \
+	src/scheduler.h src/sampler.h src/tensor.h src/llama.h src/forward.h \
+	src/generate.h src/fp16.h
+
+$(BUILD)/%.o: src/%.cpp $(ENGINE_HDRS)
 	mkdir -p $(BUILD)
-	$(CXX) $(CXXFLAGS) -Iinclude -Isrc -c src/engine.cpp -o $(BUILD)/engine.o
-	$(CXX) $(CXXFLAGS) -Iinclude -Isrc -c src/model.cpp -o $(BUILD)/model.o
-	$(CXX) $(CXXFLAGS) -Iinclude -Isrc -c src/gguf.cpp -o $(BUILD)/gguf.o
-	$(CXX) $(CXXFLAGS) -Iinclude -Isrc -c src/hardware.cpp -o $(BUILD)/hardware.o
-	ar rcs $@ $(BUILD)/engine.o $(BUILD)/model.o $(BUILD)/gguf.o $(BUILD)/hardware.o
+	$(CXX) $(CXXFLAGS) -Iinclude -Isrc -c $< -o $@
+
+$(BUILD)/libshtn_engine.a: $(ENGINE_OBJS)
+	ar rcs $@ $(ENGINE_OBJS)
 
 $(BUILD)/libshtn_protocol.a: src/protocol.cpp src/json.cpp src/protocol.h src/json.h
 	mkdir -p $(BUILD)
@@ -48,12 +58,12 @@ $(BUILD)/shtn-engine-host: src/host_main.cpp $(BUILD)/libshtn_engine.a $(BUILD)/
 	mkdir -p $(BUILD)
 	$(CXX) $(CXXFLAGS) -Iinclude -Isrc src/host_main.cpp $(BUILD)/libshtn_engine.a $(BUILD)/libshtn_protocol.a -o $@
 
-test: $(BUILD)/test_engine $(BUILD)/test_protocol $(BUILD)/test_host $(BUILD)/test_gguf $(BUILD)/test_model
-	$(BUILD)/test_engine
-	$(BUILD)/test_protocol
-	$(BUILD)/test_host
-	$(BUILD)/test_gguf
-	$(BUILD)/test_model
+TESTS := test_engine test_protocol test_host test_gguf test_model \
+	test_tokenizer test_kv_cache test_scheduler test_sampler \
+	test_tensor test_forward test_generate
+
+test: $(patsubst %,$(BUILD)/%,$(TESTS))
+	@for t in $(TESTS); do echo "== $$t"; $(BUILD)/$$t || exit 1; done
 
 $(BUILD)/test_engine: tests/test_engine.cpp $(BUILD)/libshtn_engine.a
 	mkdir -p $(BUILD)
@@ -77,3 +87,24 @@ $(BUILD)/test_model: tests/test_model.cpp $(BUILD)/libshtn_engine.a
 
 clean:
 	rm -rf $(BUILD)
+
+$(BUILD)/test_tokenizer: tests/test_tokenizer.cpp $(BUILD)/libshtn_engine.a
+	$(CXX) $(CXXFLAGS) -Iinclude -Isrc tests/test_tokenizer.cpp $(BUILD)/libshtn_engine.a -o $@
+
+$(BUILD)/test_kv_cache: tests/test_kv_cache.cpp $(BUILD)/libshtn_engine.a
+	$(CXX) $(CXXFLAGS) -Iinclude -Isrc tests/test_kv_cache.cpp $(BUILD)/libshtn_engine.a -o $@
+
+$(BUILD)/test_scheduler: tests/test_scheduler.cpp $(BUILD)/libshtn_engine.a
+	$(CXX) $(CXXFLAGS) -Iinclude -Isrc tests/test_scheduler.cpp $(BUILD)/libshtn_engine.a -lpthread -o $@
+
+$(BUILD)/test_sampler: tests/test_sampler.cpp $(BUILD)/libshtn_engine.a
+	$(CXX) $(CXXFLAGS) -Iinclude -Isrc tests/test_sampler.cpp $(BUILD)/libshtn_engine.a -o $@
+
+$(BUILD)/test_tensor: tests/test_tensor.cpp $(BUILD)/libshtn_engine.a
+	$(CXX) $(CXXFLAGS) -Iinclude -Isrc tests/test_tensor.cpp $(BUILD)/libshtn_engine.a -o $@
+
+$(BUILD)/test_forward: tests/test_forward.cpp $(BUILD)/libshtn_engine.a
+	$(CXX) $(CXXFLAGS) -Iinclude -Isrc -DSHTN_FIXTURES_DIR='"$(CURDIR)/tests/fixtures"' tests/test_forward.cpp $(BUILD)/libshtn_engine.a -lpthread -o $@
+
+$(BUILD)/test_generate: tests/test_generate.cpp $(BUILD)/libshtn_engine.a
+	$(CXX) $(CXXFLAGS) -Iinclude -Isrc -DSHTN_FIXTURES_DIR='"$(CURDIR)/tests/fixtures"' tests/test_generate.cpp $(BUILD)/libshtn_engine.a -lpthread -o $@

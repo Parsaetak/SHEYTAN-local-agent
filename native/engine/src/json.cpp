@@ -498,3 +498,234 @@ std::string quote(const std::string& src) {
 
 } // namespace json
 } // namespace shtn
+
+// --- Phase 5: generate / cancel payload extraction -----------------------------
+// (definitions live back inside the shtn::json namespace)
+
+namespace shtn {
+namespace json {
+
+bool extract_generate_payload(const std::string& bytes,
+                              std::string& request_id, std::string& prompt,
+                              uint32_t& max_tokens, float& temperature,
+                              int32_t& top_k, float& top_p,
+                              float& repetition_penalty,
+                              uint32_t& repeat_last_n, uint64_t& seed,
+                              std::string& error) {
+    request_id.clear();
+    prompt.clear();
+    max_tokens = 0;
+    temperature = 1.0f;
+    top_k = 0;
+    top_p = 1.0f;
+    repetition_penalty = 1.0f;
+    repeat_last_n = 0;
+    seed = 0;
+
+    detail::Scanner scanner(bytes.data(), bytes.size());
+
+    scanner.skip_ws();
+    if (!scanner.consume('{')) {
+        error = "payload is not a JSON object";
+        return false;
+    }
+
+    bool have_prompt = false;
+    bool have_max_tokens = false;
+
+    scanner.skip_ws();
+    if (scanner.consume('}')) {
+        error = "payload is empty";
+        return false;
+    }
+
+    for (;;) {
+        scanner.skip_ws();
+
+        std::string key;
+        if (!scanner.read_string(key)) {
+            error = "malformed payload key";
+            return false;
+        }
+
+        scanner.skip_ws();
+        if (!scanner.consume(':')) {
+            error = "expected ':' after payload key";
+            return false;
+        }
+
+        scanner.skip_ws();
+
+        if (key == "requestId") {
+            if (!scanner.read_string(request_id) || request_id.size() > 128) {
+                error = "payload requestId is not a string (or too long)";
+                return false;
+            }
+        } else if (key == "prompt") {
+            if (!scanner.read_string(prompt) || prompt.empty() ||
+                prompt.size() > (1u << 20)) {
+                error = "payload prompt is not a string (or empty/oversized)";
+                return false;
+            }
+            have_prompt = true;
+        } else if (key == "maxTokens") {
+            double value = 0;
+            if (!scanner.read_number(value) || value < 1 ||
+                value > static_cast<double>(UINT32_MAX)) {
+                error = "payload maxTokens is out of range";
+                return false;
+            }
+            max_tokens = static_cast<uint32_t>(value);
+            have_max_tokens = true;
+        } else if (key == "temperature") {
+            double value = 0;
+            if (!scanner.read_number(value) || value < 0 ||
+                value > 100.0) {
+                error = "payload temperature is out of range";
+                return false;
+            }
+            temperature = static_cast<float>(value);
+        } else if (key == "topK") {
+            double value = 0;
+            if (!scanner.read_number(value) || value < 0 ||
+                value > static_cast<double>(INT32_MAX)) {
+                error = "payload topK is out of range";
+                return false;
+            }
+            top_k = static_cast<int32_t>(value);
+        } else if (key == "topP") {
+            double value = 0;
+            if (!scanner.read_number(value) || value < 0 ||
+                value > 1.0) {
+                error = "payload topP is out of range";
+                return false;
+            }
+            top_p = static_cast<float>(value);
+        } else if (key == "repetitionPenalty") {
+            double value = 0;
+            if (!scanner.read_number(value) || value < 0 ||
+                value > 100.0) {
+                error = "payload repetitionPenalty is out of range";
+                return false;
+            }
+            repetition_penalty = static_cast<float>(value);
+        } else if (key == "repeatLastN") {
+            double value = 0;
+            if (!scanner.read_number(value) || value < 0 ||
+                value > static_cast<double>(UINT32_MAX)) {
+                error = "payload repeatLastN is out of range";
+                return false;
+            }
+            repeat_last_n = static_cast<uint32_t>(value);
+        } else if (key == "seed") {
+            double value = 0;
+            if (!scanner.read_number(value) || value < 0 ||
+                value > 1.8e19) {
+                error = "payload seed is out of range";
+                return false;
+            }
+            seed = static_cast<uint64_t>(value);
+        } else {
+            if (!scanner.skip_value()) {
+                error = "malformed payload value";
+                return false;
+            }
+        }
+
+        scanner.skip_ws();
+        if (scanner.consume(',')) {
+            continue;
+        }
+        scanner.skip_ws();
+        if (scanner.consume('}')) {
+            break;
+        }
+        error = "expected ',' or '}' in payload";
+        return false;
+    }
+
+    if (!have_prompt) {
+        error = "payload has no prompt";
+        return false;
+    }
+    if (!have_max_tokens) {
+        error = "payload has no maxTokens";
+        return false;
+    }
+
+    return true;
+}
+
+bool extract_request_id_payload(const std::string& bytes,
+                                std::string& request_id, std::string& error) {
+    request_id.clear();
+
+    detail::Scanner scanner(bytes.data(), bytes.size());
+
+    scanner.skip_ws();
+    if (!scanner.consume('{')) {
+        error = "payload is not a JSON object";
+        return false;
+    }
+
+    bool have_id = false;
+
+    scanner.skip_ws();
+    if (scanner.consume('}')) {
+        error = "payload has no requestId";
+        return false;
+    }
+
+    for (;;) {
+        scanner.skip_ws();
+
+        std::string key;
+        if (!scanner.read_string(key)) {
+            error = "malformed payload key";
+            return false;
+        }
+
+        scanner.skip_ws();
+        if (!scanner.consume(':')) {
+            error = "expected ':' after payload key";
+            return false;
+        }
+
+        scanner.skip_ws();
+
+        if (key == "requestId") {
+            if (!scanner.read_string(request_id) || request_id.empty() ||
+                request_id.size() > 128) {
+                error = "payload requestId is not a string (or wrong size)";
+                return false;
+            }
+            have_id = true;
+        } else {
+            if (!scanner.skip_value()) {
+                error = "malformed payload value";
+                return false;
+            }
+        }
+
+        scanner.skip_ws();
+        if (scanner.consume(',')) {
+            continue;
+        }
+        scanner.skip_ws();
+        if (scanner.consume('}')) {
+            break;
+        }
+        error = "expected ',' or '}' in payload";
+        return false;
+    }
+
+    if (!have_id) {
+        error = "payload has no requestId";
+        return false;
+    }
+
+    return true;
+}
+
+} // namespace json
+} // namespace shtn

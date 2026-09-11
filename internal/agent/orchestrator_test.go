@@ -349,3 +349,100 @@ func TestExtractImageMarkers(t *testing.T) {
 		t.Fatalf("clean text = %q", clean)
 	}
 }
+
+// TestGenerationRouterSeamDrivesTheLoop (Phase 5): with a router
+// installed, the agent loop's generation flows THROUGH it (the runtime's
+// backend-aware selection), while the loop mechanics (streaming events,
+// activity, completion) stay identical. With no router, the direct
+// client path serves (pinned by every other test in this file).
+func TestGenerationRouterSeamDrivesTheLoop(t *testing.T) {
+	server, turns := newFakeEngine(t, func(turn int, _ map[string]any) string {
+		var b strings.Builder
+		b.WriteString(sseChunk("via "))
+		b.WriteString(sseChunk("client."))
+		b.WriteString(sseDone)
+		return b.String()
+	})
+
+	cfg := remoteConfig(t, server.URL)
+	client := llm.NewClient(config.NewSource(cfg))
+	orch := New(config.NewSource(cfg), client)
+
+	routerCalls := 0
+	orch.SetGenerationStream(func(ctx context.Context, req *llm.ChatRequest,
+		onEvent func(llm.StreamEvent) error) (llm.PerfStats, error) {
+
+		routerCalls++
+
+		// The router "selects" a backend — this stub emulates the native
+		// one: streams two chunks then the terminal event, exactly like
+		// the native backend adapter does.
+		if err := onEvent(llm.StreamEvent{Content: "via "}); err != nil {
+			return llm.PerfStats{}, err
+		}
+		if err := onEvent(llm.StreamEvent{Content: "router."}); err != nil {
+			return llm.PerfStats{}, err
+		}
+		_ = onEvent(llm.StreamEvent{
+			FinishReason: "stop",
+			Usage: &struct {
+				PromptTokens     int `json:"prompt_tokens"`
+				CompletionTokens int `json:"completion_tokens"`
+				TotalTokens      int `json:"total_tokens"`
+			}{PromptTokens: 3, CompletionTokens: 2, TotalTokens: 5},
+		})
+
+		return llm.PerfStats{Tokens: 2, TokensPerSec: 10, TTFTMs: 5, WallMs: 200}, nil
+	})
+
+	var events []Activity
+	result, err := orch.RunDetailed(context.Background(), []llm.Message{
+		{Role: "user", Content: "say hi"},
+	}, func(a Activity) {
+		events = append(events, a)
+	})
+	if err != nil {
+		t.Fatalf("RunDetailed: %v", err)
+	}
+
+	if routerCalls == 0 {
+		t.Fatal("the generation router was never invoked — the loop bypassed the seam")
+	}
+
+	if result.Text != "via router." {
+		t.Fatalf("final text = %q, want %q (router-served)", result.Text, "via router.")
+	}
+
+	sawResponse := false
+	sawDone := false
+	for _, ev := range events {
+		if ev.Type == "response" {
+			sawResponse = true
+		}
+		if ev.Type == "done" {
+			sawDone = true
+		}
+	}
+	if !sawResponse || !sawDone {
+		t.Fatalf("streaming activity missing: response=%v done=%v", sawResponse, sawDone)
+	}
+
+	// The fake client engine never served a request in this run.
+	if *turns != 0 {
+		t.Fatalf("client served %d requests, want 0 (router owns generation)", *turns)
+	}
+
+	// Removing the router restores the direct client path.
+	orch.SetGenerationStream(nil)
+
+	var result2 RunResult
+	result2, err = orch.RunDetailed(context.Background(), []llm.Message{
+		{Role: "user", Content: "say hi again"},
+	}, func(a Activity) {})
+	if err != nil {
+		t.Fatalf("second RunDetailed: %v", err)
+	}
+	if result2.Text != "via client." {
+		t.Fatalf("second text = %q, want the client-served output", result2.Text)
+	}
+}

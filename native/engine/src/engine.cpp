@@ -1,21 +1,27 @@
-// engine.cpp — SHEYTAN Native Engine core implementation (Phase 4).
+// engine.cpp — SHEYTAN Native Engine core implementation (Phase 5).
 //
-// Phase 4 adds the tokenizer / KV-cache / scheduler foundation:
-// shtn_engine_tokenizer_init / tokenizer_info / tokenizer_encode /
-// tokenizer_decode / kv_cache_info / scheduler_info. These are REAL:
-// the tokenizer reads GGUF arrays, the KV cache is a real allocation
-// sized from model dims, the scheduler is a real bounded queue. They
-// are NOT inference — no forward pass exists, no token is generated.
-// The llama.cpp fallback remains the generation backend.
+// Phase 5 adds REAL native generation:
+//   shtn_engine_generate          full transformer forward pass + decode
+//                                 loop + streaming chunks + measured
+//                                 metrics, executed on the scheduler's
+//                                 single-slot worker;
+//   shtn_engine_cancel_generation cooperative cancellation of the queued
+//                                 or active request;
+//   shtn_engine_generation_stats  the measured generation snapshot;
+//   shtn_engine_metrics           reports the scheduler's REAL active
+//                                 count; kv_cache_info reads the runner's
+//                                 REAL populated cache.
+// Model loads now validate the llama graph and report
+// generation_capable + reason (metadata-level; the Go core selects the
+// llama.cpp fallback for models this engine cannot execute).
 //
-// Phase 2 added the model concern: shtn_engine_load_model /
-// shtn_engine_unload_model / shtn_engine_model_info /
-// shtn_engine_memory_plan (see model.h). The lifecycle, health,
-// hardware and metrics surfaces are unchanged from Phase 1; health's
-// detail string now summarizes the model concern.
+// Phase 4 surface (tokenizer / KV / scheduler) is unchanged; Phase 2
+// (model loading) is unchanged except the capability verdict.
 
 #include "shtn/engine.h"
 
+#include "forward.h"
+#include "generate.h"
 #include "hardware.h"
 #include "kv_cache.h"
 #include "model.h"
@@ -23,12 +29,39 @@
 #include "tokenizer.h"
 #include "util.h"
 
+#include <atomic>
 #include <chrono>
 #include <cstring>
 #include <memory>
 #include <mutex>
 #include <new>
 #include <string>
+#include <unordered_map>
+
+// --- the engine object --------------------------------------------------------
+
+// GenWork is the per-request generation payload the scheduler executor
+// consumes (defined before the engine struct that stores it).
+struct GenWork {
+    shtn::gen::Spec spec;
+    shtn_generation_emit_fn emit = nullptr;
+    void* user = nullptr;
+    shtn_generation_result* result = nullptr; // caller's slot
+    int32_t rc = SHTN_ERR_INTERNAL;
+    std::string detail;
+};
+
+// The error-code enum lives at global scope in engine.h (C linkage); the
+// GenWork default above uses the global name.
+
+namespace shtn {
+namespace gen {
+// detail_runner_execute is defined at the bottom of this file (after the
+// engine internals are known); it runs one scheduled generation.
+int32_t detail_runner_execute(shtn_engine* engine,
+                              shtn::sched::RequestPtr req);
+} // namespace gen
+} // namespace shtn
 
 struct shtn_engine {
     std::mutex mu;
@@ -37,15 +70,42 @@ struct shtn_engine {
     bool hardware_cached;
 
     // Model concern (guarded by its own mutex inside Model). The Model
-    // owns the tokenizer vocab too (Phase 4).
+    // owns the tokenizer vocab (Phase 4) and the llama graph binding
+    // (Phase 5).
     shtn::model::Model model;
 
-    // Phase 4: KV cache + scheduler owned by the engine. The KV cache
-    // is NOT auto-allocated on model load — it exists as a real
-    // data structure but is only measured (and the host reports the
-    // honest zero-state until a forward pass exists).
-    shtn::kv::Cache kv_cache;
+    // Phase 5: the scheduler (real single-slot worker) + generation
+    // runner (KV cache binding, scratch, measured stats).
     shtn::sched::Scheduler scheduler;
+    shtn::gen::Runner generator;
+
+    // Generation lifecycle guards (one mutex, two jobs):
+    //   - work registry: request id → pending GenWork (executor lookup);
+    //   - active_generations: unload/reload rejection while a forward
+    //     pass holds the mapping.
+    std::mutex gen_mu;
+    std::unordered_map<std::string, std::shared_ptr<GenWork>> work;
+    uint32_t active_generations = 0;
+
+    // --- internal helpers (engine.cpp use only) -------------------------
+    bool insert_work(const std::string& id, std::shared_ptr<GenWork> w) {
+        return work.emplace(id, std::move(w)).second;
+    }
+    void erase_work(const std::string& id) { work.erase(id); }
+    std::shared_ptr<GenWork> find_work(const std::string& id) {
+        const auto it = work.find(id);
+        return it == work.end() ? nullptr : it->second;
+    }
+    int32_t submit_scheduled(shtn::sched::RequestPtr req, std::string& err) {
+        return scheduler.submit(std::move(req), err);
+    }
+    bool cancel_scheduled(const std::string& id) { return scheduler.cancel(id); }
+
+private:
+    // The executor closure needs engine internals; friended via the
+    // free function below (detail_runner_execute).
+    friend int32_t shtn::gen::detail_runner_execute(shtn_engine*,
+                                                    shtn::sched::RequestPtr);
 };
 
 namespace {
@@ -68,6 +128,12 @@ void summarize_model(const shtn::model::Model& model, char* dst, size_t cap) {
         s += " (";
         s += info.quantization[0] != '\0' ? info.quantization : "unknown quant";
         s += ")";
+        if (info.generation_capable) {
+            s += " — native generation capable";
+        } else if (info.generation_reason[0] != '\0') {
+            s += " — native generation unavailable: ";
+            s += info.generation_reason;
+        }
         copy_cstr(dst, cap, s.c_str());
         return;
     }
@@ -111,14 +177,32 @@ int32_t shtn_engine_create(const shtn_engine_options* opts, shtn_engine** out) {
     engine->started_at = std::chrono::steady_clock::now();
     engine->hardware_cached = false;
 
+    // Phase 5: start the REAL scheduler worker (single slot). Every
+    // submitted generation request executes through the runner on this
+    // worker; the executor records the outcome for the blocked submitter.
+    {
+        std::string err;
+        const int32_t rc = engine->scheduler.start_worker(
+            [engine](shtn::sched::RequestPtr req) -> int32_t {
+                return shtn::gen::detail_runner_execute(engine,
+                                                        std::move(req));
+            });
+        if (rc != SHTN_OK) {
+            delete engine;
+            return rc;
+        }
+    }
+
     *out = engine;
     return SHTN_OK;
 }
 
 void shtn_engine_destroy(shtn_engine* engine) {
-    // The Model destructor releases the mapping via its members; the
-    // explicit unload keeps the release path identical to the API path.
+    // The scheduler shutdown joins the worker (cooperatively cancelling
+    // the active generation) BEFORE the model mapping disappears.
     if (engine != nullptr) {
+        engine->scheduler.shutdown();
+        engine->generator.abort_model_cycle();
         engine->model.unload();
     }
     delete engine;
@@ -182,7 +266,12 @@ int32_t shtn_engine_metrics(shtn_engine* engine, shtn_metrics* out) {
     const auto uptime = std::chrono::steady_clock::now() - engine->started_at;
     out->uptime_seconds = std::chrono::duration<double>(uptime).count();
     out->process_rss_bytes = shtn::current_process_rss();
-    out->active_requests = 0; // measured: no generation exists yet
+    {
+        // Measured: the scheduler's active slot (1 while a generation
+        // executes, 0 otherwise) — real, never an artificial count.
+        const shtn::sched::Stats s = engine->scheduler.stats();
+        out->active_requests = s.active_requests;
+    }
     copy_cstr(out->state, sizeof(out->state), "ready");
 
     return SHTN_OK;
@@ -196,6 +285,16 @@ int32_t shtn_engine_load_model(shtn_engine* engine, const char* path,
         return SHTN_ERR_INVALID_ARG;
     }
 
+    // A load while a generation is executing would tear the mapping out
+    // from under the forward pass — reject it (the caller retries after
+    // the generation finishes).
+    {
+        std::lock_guard<std::mutex> lock(engine->gen_mu);
+        if (engine->active_generations > 0) {
+            return SHTN_ERR_MODEL_STATE;
+        }
+    }
+
     shtn_model_load_options defaults{};
     const shtn_model_load_options& options =
         opts != nullptr ? *opts : defaults;
@@ -205,6 +304,8 @@ int32_t shtn_engine_load_model(shtn_engine* engine, const char* path,
     if (rc != SHTN_OK && error.empty()) {
         error = "model load failed with error code " + std::to_string(rc);
     }
+    // The forward binding belongs to the previous load — invalidate it.
+    engine->generator.abort_model_cycle();
     return rc;
 }
 
@@ -213,7 +314,18 @@ int32_t shtn_engine_unload_model(shtn_engine* engine) {
         return SHTN_ERR_INVALID_ARG;
     }
 
-    return engine->model.unload();
+    // Same guard as load: the mapping cannot disappear under an active
+    // forward pass.
+    {
+        std::lock_guard<std::mutex> lock(engine->gen_mu);
+        if (engine->active_generations > 0) {
+            return SHTN_ERR_MODEL_STATE;
+        }
+    }
+
+    const int32_t rc = engine->model.unload();
+    engine->generator.abort_model_cycle();
+    return rc;
 }
 
 int32_t shtn_engine_model_info(const shtn_engine* engine,
@@ -238,8 +350,6 @@ int32_t shtn_engine_memory_plan(const shtn_engine* engine,
 
 // --- Phase 4: tokenizer / KV / scheduler surface --------------------------
 
-// fill_tokenizer_info copies the materialized vocab snapshot (or the
-// zero-state) into the ABI struct.
 namespace {
 
 void fill_tokenizer_info(const shtn_engine* engine,
@@ -248,8 +358,6 @@ void fill_tokenizer_info(const shtn_engine* engine,
 
     const shtn::tokenizer::Vocab* v = engine->model.tokenizer_vocab();
     if (v == nullptr) {
-        // Not initialized — leave everything zero. The host reports
-        // initialized=0 honestly.
         return;
     }
 
@@ -282,7 +390,11 @@ void fill_kv_cache_info(const shtn_engine* engine,
                         shtn_kv_cache_info* out) {
     std::memset(out, 0, sizeof(*out));
 
-    shtn::kv::Stats s = engine->kv_cache.stats();
+    // Phase 5: the REAL cache lives in the generation runner's forward
+    // binding — allocated at the first generate (sized from the model
+    // dims, f16) and populated by the forward pass. Before any generate
+    // this is the honest zero-state.
+    const shtn::kv::Stats s = engine->generator.kv_stats();
     out->allocated = s.allocated ? 1 : 0;
     out->capacity_bytes = s.capacity_bytes;
     out->used_bytes = s.used_bytes;
@@ -298,7 +410,7 @@ void fill_scheduler_info(const shtn_engine* engine,
                          shtn_scheduler_info* out) {
     std::memset(out, 0, sizeof(*out));
 
-    shtn::sched::Stats s = engine->scheduler.stats();
+    const shtn::sched::Stats s = engine->scheduler.stats();
     out->active_requests = s.active_requests;
     out->queued_requests = s.queued_requests;
     out->max_concurrent = s.max_concurrent;
@@ -321,7 +433,6 @@ int32_t shtn_engine_tokenizer_init(shtn_engine* engine,
     std::string error;
     const int32_t rc = engine->model.init_tokenizer(error);
 
-    // Always fill the info struct so the caller sees the result.
     fill_tokenizer_info(engine, out);
     if (rc != SHTN_OK && !error.empty()) {
         shtn::copy_cstr(out->error, sizeof(out->error), error.c_str());
@@ -375,7 +486,6 @@ int32_t shtn_engine_tokenizer_encode(const shtn_engine* engine,
         return rc;
     }
 
-    // Copy into the caller's buffer (bounded by max_tokens).
     uint32_t cap = opts->max_tokens;
     uint32_t n = static_cast<uint32_t>(er.ids.size());
     if (n > cap) {
@@ -434,7 +544,7 @@ int32_t shtn_engine_tokenizer_decode(const shtn_engine* engine,
     uint32_t cap = opts->max_bytes;
     uint32_t n = static_cast<uint32_t>(dr.text.size());
     if (n >= cap) {
-        n = cap - 1; // leave room for NUL
+        n = cap - 1;
         result->truncated = 1;
     } else if (dr.truncated) {
         result->truncated = 1;
@@ -464,4 +574,196 @@ int32_t shtn_engine_scheduler_info(const shtn_engine* engine,
     return SHTN_OK;
 }
 
+// --- Phase 5: REAL native generation -----------------------------------------
+
+int32_t shtn_engine_generate(shtn_engine* engine,
+                             const shtn_generation_options* opts,
+                             shtn_generation_emit_fn emit, void* user,
+                             shtn_generation_result* out, char* detail) {
+    if (engine == nullptr || opts == nullptr) {
+        return SHTN_ERR_INVALID_ARG;
+    }
+    if (detail != nullptr) {
+        detail[0] = '\0';
+    }
+    if (out != nullptr) {
+        std::memset(out, 0, sizeof(*out));
+    }
+    if (opts->prompt == nullptr || opts->prompt_len == 0 ||
+        opts->prompt_len > (1ull << 24)) {
+        if (detail != nullptr) {
+            copy_cstr(detail, 256, "generation: prompt missing or oversized");
+        }
+        return SHTN_ERR_INVALID_ARG;
+    }
+    if (opts->max_tokens == 0) {
+        if (detail != nullptr) {
+            copy_cstr(detail, 256, "generation: max_tokens must be > 0");
+        }
+        return SHTN_ERR_INVALID_ARG;
+    }
+    if (opts->reserved != 0) {
+        return SHTN_ERR_INVALID_ARG;
+    }
+
+    // Build the work + request.
+    auto work = std::make_shared<GenWork>();
+    work->spec.request_id =
+        opts->request_id != nullptr ? opts->request_id : "";
+    work->spec.prompt.assign(opts->prompt,
+                             static_cast<size_t>(opts->prompt_len));
+    work->spec.max_tokens = opts->max_tokens;
+    work->spec.temperature = opts->temperature;
+    work->spec.top_k = opts->top_k;
+    work->spec.top_p = opts->top_p;
+    work->spec.repetition_penalty = opts->repetition_penalty;
+    work->spec.repeat_last_n =
+        opts->repeat_last_n == 0 ? shtn::gen::kDefaultRepeatLastN
+                                 : opts->repeat_last_n;
+    work->spec.seed = opts->seed;
+    work->emit = emit;
+    work->user = user;
+    work->result = out;
+
+    // Request id: caller-supplied or a deterministic synthetic one.
+    std::string req_id = work->spec.request_id;
+    if (req_id.empty()) {
+        static std::atomic<uint64_t> next_anon{1};
+        req_id = "gen-" + std::to_string(next_anon.fetch_add(1));
+        work->spec.request_id = req_id;
+    }
+    if (req_id.size() > 128) {
+        if (detail != nullptr) {
+            copy_cstr(detail, 256, "generation: request id too long (>128)");
+        }
+        return SHTN_ERR_INVALID_ARG;
+    }
+
+    auto req = std::make_shared<shtn::sched::Request>(req_id, nullptr);
+
+    // Register the work so the executor can find it. A duplicate
+    // in-flight id would orphan the older entry — rejected.
+    {
+        std::lock_guard<std::mutex> lock(engine->gen_mu);
+        if (!engine->insert_work(req_id, work)) {
+            if (detail != nullptr) {
+                copy_cstr(detail, 256,
+                          "generation: request id already in flight");
+            }
+            return SHTN_ERR_MODEL_STATE;
+        }
+    }
+
+    // Queue on the scheduler (bounded).
+    {
+        std::string err;
+        const int32_t rc = engine->submit_scheduled(req, err);
+        if (rc != SHTN_OK) {
+            std::lock_guard<std::mutex> lock(engine->gen_mu);
+            engine->erase_work(req_id);
+            if (detail != nullptr) {
+                copy_cstr(detail, 256, ("generation: " + err).c_str());
+            }
+            return rc;
+        }
+    }
+
+    // Block until terminal (the executor records the outcome in the work
+    // entry, then the request state becomes terminal and wakes us).
+    req->wait_terminal();
+
+    // Collect the outcome.
+    int32_t rc = SHTN_ERR_INTERNAL;
+    std::string det;
+    {
+        std::lock_guard<std::mutex> lock(engine->gen_mu);
+        if (auto w = engine->find_work(req_id)) {
+            rc = w->rc;
+            det = w->detail;
+        }
+        engine->erase_work(req_id);
+    }
+
+    if (detail != nullptr && !det.empty()) {
+        copy_cstr(detail, 256, det.c_str());
+    }
+
+    return rc;
+}
+
+int32_t shtn_engine_cancel_generation(shtn_engine* engine,
+                                       const char* request_id,
+                                       int32_t* cancelled, char* reason) {
+    if (engine == nullptr || request_id == nullptr || cancelled == nullptr) {
+        return SHTN_ERR_INVALID_ARG;
+    }
+
+    *cancelled = 0;
+    if (reason != nullptr) {
+        reason[0] = '\0';
+    }
+
+    // The scheduler resolves both QUEUED (removed + cancelled) and ACTIVE
+    // (cooperative flag observed every token) requests.
+    const bool found = engine->cancel_scheduled(request_id);
+
+    if (!found) {
+        if (reason != nullptr) {
+            copy_cstr(reason, 128, "no queued or active request with this id");
+        }
+        return SHTN_OK;
+    }
+
+    *cancelled = 1;
+    return SHTN_OK;
+}
+
+int32_t shtn_engine_generation_stats(const shtn_engine* engine,
+                                     shtn_generation_stats* out) {
+    if (engine == nullptr || out == nullptr) {
+        return SHTN_ERR_INVALID_ARG;
+    }
+    *out = engine->generator.stats();
+    return SHTN_OK;
+}
+
 } // extern "C"
+
+namespace shtn {
+namespace gen {
+
+// detail_runner_execute is the scheduler executor body: it resolves the
+// request's work, runs the REAL generation through the runner and
+// records the outcome for the blocked submitter.
+int32_t detail_runner_execute(shtn_engine* engine,
+                              shtn::sched::RequestPtr req) {
+    std::shared_ptr<GenWork> work;
+    {
+        std::lock_guard<std::mutex> lock(engine->gen_mu);
+        work = engine->find_work(req->id);
+    }
+    if (work == nullptr) {
+        // Submitted but unregistered (should not happen; defensive).
+        return SHTN_ERR_INTERNAL;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(engine->gen_mu);
+        engine->active_generations += 1;
+    }
+
+    const int32_t rc = engine->generator.execute(
+        engine->model, work->spec, req->cancel_requested, work->emit,
+        work->user, work->result, work->detail);
+
+    {
+        std::lock_guard<std::mutex> lock(engine->gen_mu);
+        engine->active_generations -= 1;
+        work->rc = rc;
+    }
+
+    return rc;
+}
+
+} // namespace gen
+} // namespace shtn

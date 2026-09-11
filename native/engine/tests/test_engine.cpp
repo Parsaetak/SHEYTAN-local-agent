@@ -20,7 +20,7 @@ static int failures = 0;
 int main() {
     // ABI version sanity: must match the version the Go core pins.
     CHECK(shtn_abi_version() == SHTN_ABI_VERSION);
-    CHECK(shtn_abi_version() == 3u); // Phase 4 (tokenizer/KV/scheduler added)
+    CHECK(shtn_abi_version() == 4u); // Phase 5 (native generation added; v3 was Phase 4)
 
     // --- create/destroy round trip --------------------------------------
     {

@@ -66,6 +66,10 @@ func runFakeNativeHost() {
 	var modelPath string
 	var modelError string
 
+	// Fake generation registry (cancel addressing).
+	var fakeActiveGen string
+	var fakeGenCancel bool
+
 	ready := func() {
 		if mode == "crash" {
 			go func() {
@@ -143,11 +147,20 @@ func runFakeNativeHost() {
 			resp.Result = result
 
 		case OpCancel:
-			result, _ := json.Marshal(CancelResult{
-				Cancelled: false,
-				Reason:    "no active generation requests (fake host)",
-			})
-			resp.Result = result
+			var cp CancelPayload
+			_ = json.Unmarshal(req.Payload, &cp)
+
+			if cp.RequestID != "" && fakeActiveGen == cp.RequestID {
+				fakeGenCancel = true
+				result, _ := json.Marshal(CancelResult{Cancelled: true})
+				resp.Result = result
+			} else {
+				result, _ := json.Marshal(CancelResult{
+					Cancelled: false,
+					Reason:    "no active generation request with this id (fake host)",
+				})
+				resp.Result = result
+			}
 
 		case OpLoadModel:
 			if mode == "loadslow" {
@@ -178,24 +191,25 @@ func runFakeNativeHost() {
 			modelError = ""
 
 			info := NativeModelInfo{
-				Path:            modelPath,
-				Architecture:    "llama",
-				Name:            "fake-model",
-				Quantization:    "Q4_K_M",
-				State:           ModelStateLoaded,
-				FileSizeBytes:   4096,
-				ParameterCount:  123000,
-				ContextLength:   256,
-				VocabularySize:  96,
-				EmbeddingLength: 64,
-				LayerCount:      2,
-				TensorCount:     3,
-				GGUFVersion:     3,
-				FileType:        15,
-				HasFileType:     true,
-				KVCacheBytes:    2 * 2 * 256 * 64 * 2,
-				WorkspaceBytes:  256 * 96 * 4,
-				TotalPlanBytes:  4096 + 2*2*256*64*2 + 256*96*4 + 64<<20,
+				Path:              modelPath,
+				Architecture:      "llama",
+				Name:              "fake-model",
+				Quantization:      "Q4_K_M",
+				State:             ModelStateLoaded,
+				FileSizeBytes:     4096,
+				ParameterCount:    123000,
+				ContextLength:     256,
+				VocabularySize:    96,
+				EmbeddingLength:   64,
+				LayerCount:        2,
+				TensorCount:       3,
+				GGUFVersion:       3,
+				FileType:          15,
+				HasFileType:       true,
+				GenerationCapable: true,
+				KVCacheBytes:      2 * 2 * 256 * 64 * 2,
+				WorkspaceBytes:    256 * 96 * 4,
+				TotalPlanBytes:    4096 + 2*2*256*64*2 + 256*96*4 + 64<<20,
 			}
 			plan := NativeMemoryPlan{
 				ModelFileBytes:       4096,
@@ -237,21 +251,22 @@ func runFakeNativeHost() {
 			if modelLoaded {
 				result.State = ModelStateLoaded
 				result.Model = &NativeModelInfo{
-					Path:            modelPath,
-					Architecture:    "llama",
-					Name:            "fake-model",
-					Quantization:    "Q4_K_M",
-					State:           ModelStateLoaded,
-					FileSizeBytes:   4096,
-					ParameterCount:  123000,
-					ContextLength:   256,
-					VocabularySize:  96,
-					EmbeddingLength: 64,
-					LayerCount:      2,
-					TensorCount:     3,
-					GGUFVersion:     3,
-					FileType:        15,
-					HasFileType:     true,
+					Path:              modelPath,
+					Architecture:      "llama",
+					Name:              "fake-model",
+					Quantization:      "Q4_K_M",
+					State:             ModelStateLoaded,
+					FileSizeBytes:     4096,
+					ParameterCount:    123000,
+					ContextLength:     256,
+					VocabularySize:    96,
+					EmbeddingLength:   64,
+					LayerCount:        2,
+					TensorCount:       3,
+					GGUFVersion:       3,
+					FileType:          15,
+					HasFileType:       true,
+					GenerationCapable: true,
 				}
 				result.Memory = &NativeMemoryPlan{
 					ModelFileBytes:       4096,
@@ -275,6 +290,88 @@ func runFakeNativeHost() {
 
 			data, _ := json.Marshal(result)
 			resp.Result = data
+
+		case OpGenerate:
+			var gp GeneratePayload
+			if len(req.Payload) == 0 || json.Unmarshal(req.Payload, &gp) != nil || gp.Prompt == "" || gp.MaxTokens == 0 {
+				resp.OK = false
+				resp.Error = "generate requires a prompt and maxTokens (fake host)"
+				break
+			}
+
+			if !modelLoaded {
+				resp.OK = false
+				resp.Error = "generation: no model loaded"
+				break
+			}
+
+			if mode == "genfail" {
+				resp.OK = false
+				resp.Error = "generation: model is not natively executable - unsupported tensor type (fake host)"
+				break
+			}
+
+			// Stream event chunks, then the final frame (multiple frames
+			// for one id — the exact streaming shape the real host
+			// produces).
+			fakeActiveGen = gp.RequestID
+			fakeGenCancel = false
+
+			words := []string{"hello ", "world ", "from ", "the ", "fake ", "host"}
+
+			n := int(gp.MaxTokens)
+			if n > len(words) {
+				n = len(words)
+			}
+
+			if mode == "genstreamslow" {
+				time.Sleep(50 * time.Millisecond)
+			}
+
+			for i := 0; i < n; i++ {
+				if fakeGenCancel {
+					break
+				}
+				chunkResult, _ := json.Marshal(GenerationEventResult{
+					RequestID: gp.RequestID,
+					Text:      words[i],
+					Token:     uint32(i + 1),
+				})
+				ev := &Response{
+					ID:     req.ID,
+					OK:     true,
+					Event:  "chunk",
+					Result: chunkResult,
+				}
+				_ = EncodeResponse(out, ev)
+				_ = out.Flush()
+			}
+
+			finish := FinishLength
+			generated := uint32(n)
+			if fakeGenCancel {
+				finish = FinishCancelled
+				generated = 0
+			}
+
+			final := GenerationFinalResult{
+				RequestID:       gp.RequestID,
+				FinishReason:    finish,
+				PromptTokens:    5,
+				GeneratedTokens: generated,
+				Metrics: GenerationMetricsWire{
+					PromptSeconds:         0.001,
+					TTFTSeconds:           0.002,
+					DecodeSeconds:         0.003,
+					TotalSeconds:          0.004,
+					TokensPerSecond:       1000,
+					PromptTokensPerSecond: 5000,
+					KVPositionsUsed:       uint64(5 + generated),
+				},
+			}
+			finalData, _ := json.Marshal(final)
+			resp.Result = finalData
+			fakeActiveGen = ""
 
 		case OpShutdown:
 			_ = EncodeResponse(out, &Response{ID: req.ID, OK: true, Result: json.RawMessage("{}")})
@@ -868,17 +965,31 @@ func TestBackendGenerationNotImplemented(t *testing.T) {
 	}
 
 	if b.GenerationCapable() {
-		t.Fatal("native backend must not claim generation capability (generation is a later phase)")
+		t.Fatal("native backend without a running engine must not claim generation capability")
 	}
 
+	// Phase 5 semantics: generation is REAL now. With no running engine
+	// the error is the honest lifecycle one (the router checks
+	// GenerationCapable before ever calling); the ErrNotImplemented
+	// FALLBACK SIGNAL is reserved for request shapes the native path
+	// cannot serve (tools / images — see TestBackendGenerationContract).
 	if _, err := b.Generate(context.Background(), &llm.ChatRequest{}); err == nil {
-		t.Fatal("Generate must return ErrNotImplemented")
-	} else if !strings.Contains(err.Error(), "not implemented") {
-		t.Fatalf("Generate error must name the fallback signal, got %v", err)
+		t.Fatal("Generate must fail without a running engine")
+	} else if !strings.Contains(err.Error(), "not running") {
+		t.Fatalf("Generate error must name the lifecycle state, got %v", err)
 	}
 
 	if _, err := b.StreamGenerate(context.Background(), &llm.ChatRequest{}, nil); err == nil {
-		t.Fatal("StreamGenerate must return ErrNotImplemented")
+		t.Fatal("StreamGenerate must fail without a running engine")
+	}
+
+	// The explicit fallback signal for unsupported request shapes:
+	dummy := llm.ToolSpec{Type: "function"}
+	dummy.Function.Name = "x"
+	req := &llm.ChatRequest{Tools: []llm.ToolSpec{dummy}}
+	if _, err := b.Generate(context.Background(), req); err == nil ||
+		!strings.Contains(err.Error(), "not implemented") {
+		t.Fatalf("tool-carrying request must return the ErrNotImplemented fallback signal, got %v", err)
 	}
 }
 
@@ -952,5 +1063,345 @@ func TestValidateModelSpecPathJail(t *testing.T) {
 
 	if _, err := ValidateModelSpec(root, root); err == nil {
 		t.Fatal("directory accepted as model")
+	}
+}
+
+// --- Phase 5: generation streaming (fake host) --------------------------------
+
+// TestEngineStreamGenerationFakeHost exercises the full Go streaming path
+// (ipc streamCall + event dispatch + final frame) against the fake host:
+// chunks arrive in order, the final result carries finish reason and
+// measured metrics, and the engine returns to ready.
+func TestEngineStreamGenerationFakeHost(t *testing.T) {
+	e := newFakeEngine(t, "")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := e.Start(ctx); err != nil {
+		t.Fatalf("start fake host: %v", err)
+	}
+	t.Cleanup(func() {
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer stopCancel()
+		_ = e.Stop(stopCtx)
+	})
+
+	// Load the fake model first (capability + loaded state). The engine
+	// validates the file exists (the fake host supplies the metadata).
+	fakeModel := filepath.Join(t.TempDir(), "fake.gguf")
+	if err := os.WriteFile(fakeModel, []byte("placeholder"), 0o644); err != nil {
+		t.Fatalf("write placeholder model: %v", err)
+	}
+	if err := e.LoadModel(ctx, ModelSpec{Path: fakeModel}); err != nil {
+		t.Fatalf("load model: %v", err)
+	}
+
+	if !e.NativeGenerationCapable() {
+		t.Fatal("loaded fake model should report generation capable")
+	}
+
+	var mu sync.Mutex
+	var got strings.Builder
+	var chunks int
+
+	result, err := e.StreamGeneration(ctx, GenerationRequest{
+		RequestID: "test-gen-1",
+		Prompt:    "hello",
+		MaxTokens: 4,
+	}, func(chunk GenerationChunk) error {
+		mu.Lock()
+		defer mu.Unlock()
+		chunks++
+		got.WriteString(chunk.Text)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("stream generation: %v", err)
+	}
+
+	if result.FinishReason != FinishLength {
+		t.Fatalf("finish reason = %q, want length", result.FinishReason)
+	}
+	if result.GeneratedTokens != 4 {
+		t.Fatalf("generated tokens = %d, want 4", result.GeneratedTokens)
+	}
+	if result.PromptTokens != 5 {
+		t.Fatalf("prompt tokens = %d, want 5", result.PromptTokens)
+	}
+	if result.Metrics.TokensPerSecond != 1000 {
+		t.Fatalf("tokens/sec = %f, want 1000", result.Metrics.TokensPerSecond)
+	}
+	if result.Metrics.KVPositionsUsed != 9 {
+		t.Fatalf("kv positions = %d, want 9", result.Metrics.KVPositionsUsed)
+	}
+	if chunks != 4 {
+		t.Fatalf("chunks = %d, want 4", chunks)
+	}
+	if got.String() != "hello world from the " {
+		t.Fatalf("streamed text = %q", got.String())
+	}
+
+	// Engine state returned to ready after generation.
+	if e.State() != llm.StateReady {
+		t.Fatalf("state = %q, want ready", e.State())
+	}
+
+	// The engine is reusable for a second request.
+	result2, err := e.StreamGeneration(ctx, GenerationRequest{
+		RequestID: "test-gen-2",
+		Prompt:    "again",
+		MaxTokens: 2,
+	}, func(chunk GenerationChunk) error { return nil })
+	if err != nil {
+		t.Fatalf("second generation: %v", err)
+	}
+	if result2.GeneratedTokens != 2 {
+		t.Fatalf("second generation tokens = %d, want 2", result2.GeneratedTokens)
+	}
+}
+
+// TestEngineStreamGenerationNoModel verifies the no-model error path.
+func TestEngineStreamGenerationNoModel(t *testing.T) {
+	e := newFakeEngine(t, "")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := e.Start(ctx); err != nil {
+		t.Fatalf("start fake host: %v", err)
+	}
+	t.Cleanup(func() {
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer stopCancel()
+		_ = e.Stop(stopCtx)
+	})
+
+	_, err := e.StreamGeneration(ctx, GenerationRequest{
+		Prompt:    "hello",
+		MaxTokens: 4,
+	}, func(chunk GenerationChunk) error { return nil })
+	if err == nil {
+		t.Fatal("expected error without a loaded model")
+	}
+	if !strings.Contains(err.Error(), "no model") {
+		t.Fatalf("error = %v, want no-model", err)
+	}
+
+	// Capability is false with no model loaded.
+	if e.NativeGenerationCapable() {
+		t.Fatal("no model loaded should NOT be generation capable")
+	}
+}
+
+// TestEngineStreamGenerationCtxCancel verifies that a caller context
+// abort cancels the generation through the cancel op and returns a
+// context error (the engine stays usable).
+func TestEngineStreamGenerationCtxCancel(t *testing.T) {
+	e := newFakeEngine(t, "genstreamslow")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := e.Start(ctx); err != nil {
+		t.Fatalf("start fake host: %v", err)
+	}
+	t.Cleanup(func() {
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer stopCancel()
+		_ = e.Stop(stopCtx)
+	})
+
+	fakeModel := filepath.Join(t.TempDir(), "fake.gguf")
+	if err := os.WriteFile(fakeModel, []byte("placeholder"), 0o644); err != nil {
+		t.Fatalf("write placeholder model: %v", err)
+	}
+	if err := e.LoadModel(ctx, ModelSpec{Path: fakeModel}); err != nil {
+		t.Fatalf("load model: %v", err)
+	}
+
+	genCtx, genCancel := context.WithTimeout(ctx, 20*time.Millisecond)
+	defer genCancel()
+
+	_, err := e.StreamGeneration(genCtx, GenerationRequest{
+		RequestID: "cancel-target",
+		Prompt:    "hello",
+		MaxTokens: 6,
+	}, func(chunk GenerationChunk) error { return nil })
+	if err == nil {
+		t.Fatal("expected context cancellation error")
+	}
+	if ctxErr := genCtx.Err(); ctxErr == nil {
+		t.Fatalf("expected genCtx to be cancelled, err = %v", err)
+	}
+
+	// The engine is reusable after the cancellation.
+	result, err := e.StreamGeneration(ctx, GenerationRequest{
+		RequestID: "after-cancel",
+		Prompt:    "hello",
+		MaxTokens: 2,
+	}, func(chunk GenerationChunk) error { return nil })
+	if err != nil {
+		t.Fatalf("generation after cancellation: %v", err)
+	}
+	if result.GeneratedTokens != 2 {
+		t.Fatalf("tokens = %d, want 2", result.GeneratedTokens)
+	}
+}
+
+// TestBackendGenerationContract exercises the llm.Backend adapter's
+// generation surface (Generate + StreamGenerate + GenerationCapable)
+// against the fake host.
+func TestBackendGenerationContract(t *testing.T) {
+	e := newFakeEngine(t, "")
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	if err := e.Start(ctx); err != nil {
+		t.Fatalf("start fake host: %v", err)
+	}
+	t.Cleanup(func() {
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer stopCancel()
+		_ = e.Stop(stopCtx)
+	})
+
+	b := NewBackend(e)
+
+	if b.GenerationCapable() {
+		t.Fatal("fresh engine must not report generation capable")
+	}
+
+	fakeModel := filepath.Join(t.TempDir(), "fake.gguf")
+	if err := os.WriteFile(fakeModel, []byte("placeholder"), 0o644); err != nil {
+		t.Fatalf("write placeholder model: %v", err)
+	}
+	if err := b.LoadModel(ctx, llm.ModelSpec{Path: fakeModel}); err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	if !b.GenerationCapable() {
+		t.Fatal("loaded fake model must report generation capable")
+	}
+
+	req := &llm.ChatRequest{
+		Model:     "fake",
+		MaxTokens: 3,
+		Messages:  []llm.Message{{Role: "user", Content: "hi there"}},
+	}
+
+	// Generate (non-streaming).
+	resp, err := b.Generate(ctx, req)
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	if len(resp.Choices) != 1 {
+		t.Fatalf("choices = %d, want 1", len(resp.Choices))
+	}
+	if resp.Choices[0].Message.Content != "hello world from " {
+		t.Fatalf("content = %q", resp.Choices[0].Message.Content)
+	}
+	if resp.Choices[0].FinishReason != "length" {
+		t.Fatalf("finish = %q", resp.Choices[0].FinishReason)
+	}
+	if resp.Usage.PromptTokens != 5 || resp.Usage.CompletionTokens != 3 {
+		t.Fatalf("usage = %+v", resp.Usage)
+	}
+
+	// StreamGenerate (streaming).
+	var events []llm.StreamEvent
+	perf, err := b.StreamGenerate(ctx, req, func(ev llm.StreamEvent) error {
+		events = append(events, ev)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("stream generate: %v", err)
+	}
+	if len(events) != 4 { // 3 content + 1 terminal
+		t.Fatalf("events = %d, want 4", len(events))
+	}
+	if events[0].Content != "hello " {
+		t.Fatalf("first event content = %q", events[0].Content)
+	}
+	if events[3].FinishReason != "length" {
+		t.Fatalf("terminal finish = %q", events[3].FinishReason)
+	}
+	if events[3].Usage == nil || events[3].Usage.CompletionTokens != 3 {
+		t.Fatalf("terminal usage = %+v", events[3].Usage)
+	}
+	if perf.Tokens != 3 {
+		t.Fatalf("perf tokens = %d, want 3", perf.Tokens)
+	}
+	if perf.WallMs < 0 {
+		t.Fatalf("perf wall = %d", perf.WallMs)
+	}
+
+	// Tool-carrying requests: explicit not-implemented fallback signal.
+	var dummyTool llm.ToolSpec
+	dummyTool.Type = "function"
+	dummyTool.Function.Name = "dummy"
+
+	toolReq := &llm.ChatRequest{
+		Model:     "fake",
+		MaxTokens: 3,
+		Messages:  []llm.Message{{Role: "user", Content: "hi"}},
+		Tools:     []llm.ToolSpec{dummyTool},
+	}
+	if _, err := b.Generate(ctx, toolReq); err == nil ||
+		!strings.Contains(err.Error(), "not implemented") {
+		t.Fatalf("tool request error = %v, want ErrNotImplemented signal", err)
+	}
+	if _, err := b.StreamGenerate(ctx, toolReq, func(llm.StreamEvent) error { return nil }); err == nil ||
+		!strings.Contains(err.Error(), "not implemented") {
+		t.Fatalf("tool stream request error = %v, want ErrNotImplemented signal", err)
+	}
+
+	// Image-carrying requests: same signal.
+	imgReq := &llm.ChatRequest{
+		Model:     "fake",
+		MaxTokens: 3,
+		Messages:  []llm.Message{{Role: "user", Content: "hi", Images: []string{"/tmp/x.png"}}},
+	}
+	if _, err := b.Generate(ctx, imgReq); err == nil ||
+		!strings.Contains(err.Error(), "not implemented") {
+		t.Fatalf("image request error = %v, want ErrNotImplemented signal", err)
+	}
+}
+
+// TestBackendGenerationFailureFallback verifies the unsupported-model
+// error path (genfail mode) surfaces an inspectable error.
+func TestBackendGenerationFailureFallback(t *testing.T) {
+	e := newFakeEngine(t, "genfail")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := e.Start(ctx); err != nil {
+		t.Fatalf("start fake host: %v", err)
+	}
+	t.Cleanup(func() {
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer stopCancel()
+		_ = e.Stop(stopCtx)
+	})
+
+	b := NewBackend(e)
+
+	fakeModel := filepath.Join(t.TempDir(), "fake.gguf")
+	if err := os.WriteFile(fakeModel, []byte("placeholder"), 0o644); err != nil {
+		t.Fatalf("write placeholder model: %v", err)
+	}
+	if err := b.LoadModel(ctx, llm.ModelSpec{Path: fakeModel}); err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	// The fake host reports generationCapable on load, then generate
+	// fails — exactly the mid-flight failure the router handles by
+	// falling back before the first token.
+	_, err := b.Generate(ctx, &llm.ChatRequest{
+		MaxTokens: 4,
+		Messages:  []llm.Message{{Role: "user", Content: "hi"}},
+	})
+	if err == nil {
+		t.Fatal("expected generation failure")
+	}
+	if !strings.Contains(err.Error(), "natively executable") {
+		t.Fatalf("error = %v, want unsupported-model detail", err)
 	}
 }

@@ -99,6 +99,10 @@ static std::string frame(const std::string& payload) {
     return out;
 }
 
+// phase5_generate_tests (defined at the bottom of this file): streaming
+// generation through the real dispatch loop.
+static void phase5_generate_tests(const std::string& fixtures);
+
 int main() {
     // --- valid ops round-trip -------------------------------------------------
     {
@@ -109,8 +113,8 @@ int main() {
         const std::string resp = last_frame(out);
         CHECK(resp.find("\"id\":1") != std::string::npos);
         CHECK(resp.find("\"ok\":true") != std::string::npos);
-        CHECK(resp.find("\"protocolVersion\":3") != std::string::npos);
-        CHECK(resp.find("\"abiVersion\":3") != std::string::npos);
+        CHECK(resp.find("\"protocolVersion\":4") != std::string::npos);
+        CHECK(resp.find("\"abiVersion\":4") != std::string::npos);
     }
 
     {
@@ -583,6 +587,315 @@ int main() {
         return 1;
     }
 
+    // --- Phase 5: streaming generation through the real dispatch loop ---
+    {
+        const char* env = std::getenv("SHTN_FIXTURES_DIR");
+        std::string fixtures = env != nullptr ? env : "../tests/fixtures";
+        phase5_generate_tests(fixtures);
+    }
+
     std::printf("test_host: all checks passed\n");
     return 0;
+}
+
+// --- Phase 5: generate streaming through the REAL host loop -----------------
+//
+// The in-memory run() helper cannot keep stdin open while reading
+// streamed output, so these tests use OS pipes: the driver writes
+// request frames, then reads event + final frames until the request
+// completes, then closes.
+
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#define SHTN_READ  _read
+#define SHTN_WRITE _write
+#define SHTN_CLOSE _close
+using ShtnPipe = int;
+#else
+#include <fcntl.h>
+#include <unistd.h>
+#define SHTN_READ  read
+#define SHTN_WRITE write
+#define SHTN_CLOSE close
+using ShtnPipe = int;
+#endif
+
+#include <cerrno>
+#include <thread>
+
+namespace hostgen {
+
+#ifdef _WIN32
+inline bool make_pipe(ShtnPipe fds[2]) {
+    return _pipe(fds, 65536, _O_BINARY) == 0;
+}
+#else
+inline bool make_pipe(ShtnPipe fds[2]) {
+    return ::pipe(fds) == 0;
+}
+#endif
+
+// pipe istream: a streambuf reading raw bytes from a file descriptor.
+class PipeInBuf : public std::streambuf {
+public:
+    explicit PipeInBuf(ShtnPipe fd) : fd_(fd) {
+        setg(buf_, buf_, buf_);
+    }
+
+protected:
+    int_type underflow() override {
+        const auto n = SHTN_READ(fd_, buf_, sizeof(buf_));
+        if (n <= 0) {
+            return traits_type::eof();
+        }
+        setg(buf_, buf_, buf_ + static_cast<size_t>(n));
+        return traits_type::to_int_type(buf_[0]);
+    }
+
+private:
+    ShtnPipe fd_;
+    char buf_[4096];
+};
+
+// pipe ostream: a streambuf writing raw bytes to a file descriptor.
+class PipeOutBuf : public std::streambuf {
+public:
+    explicit PipeOutBuf(ShtnPipe fd) : fd_(fd) {
+        setp(buf_, buf_ + sizeof(buf_));
+    }
+    ~PipeOutBuf() override { sync(); }
+
+protected:
+    int_type overflow(int_type c) override {
+        if (!traits_type::eq_int_type(c, traits_type::eof())) {
+            *pptr() = static_cast<char>(c);
+            pbump(1);
+        }
+        return sync() == 0 ? traits_type::not_eof(c) : traits_type::eof();
+    }
+
+    int sync() override {
+        const size_t n = static_cast<size_t>(pptr() - pbase());
+        if (n > 0) {
+            size_t done = 0;
+            while (done < n) {
+                const auto w = SHTN_WRITE(fd_, pbase() + done, n - done);
+                if (w <= 0) return -1;
+                done += static_cast<size_t>(w);
+            }
+        }
+        setp(buf_, buf_ + sizeof(buf_));
+        return 0;
+    }
+
+private:
+    ShtnPipe fd_;
+    char buf_[4096];
+};
+
+// FrameReader parses length-prefixed frames from a descriptor.
+class FrameReader {
+public:
+    explicit FrameReader(ShtnPipe fd) : fd_(fd) {}
+
+    // next returns the next frame payload (blocking); false on EOF/error.
+    bool next(std::string& out) {
+        uint8_t hdr[4];
+        if (!read_exact(hdr, 4)) {
+            return false;
+        }
+        const uint32_t size =
+            static_cast<uint32_t>(hdr[0]) |
+            (static_cast<uint32_t>(hdr[1]) << 8) |
+            (static_cast<uint32_t>(hdr[2]) << 16) |
+            (static_cast<uint32_t>(hdr[3]) << 24);
+        out.resize(size);
+        if (size > 0 && !read_exact(reinterpret_cast<uint8_t*>(&out[0]),
+                                    size)) {
+            return false;
+        }
+        return true;
+    }
+
+private:
+    bool read_exact(uint8_t* dst, size_t n) {
+        size_t done = 0;
+        while (done < n) {
+            const auto r = SHTN_READ(fd_, dst + done, n - done);
+            if (r <= 0) {
+                return false;
+            }
+            done += static_cast<size_t>(r);
+        }
+        return true;
+    }
+
+    ShtnPipe fd_;
+};
+
+} // namespace hostgen
+
+static bool run_host_generate_test(const std::string& fixture_path,
+                                   const std::string& generate_frame,
+                                   std::vector<std::string>& frames_out,
+                                   const std::string& extra_frames = "") {
+    using namespace hostgen;
+
+    ShtnPipe req_pipe[2];
+    ShtnPipe resp_pipe[2];
+    if (!make_pipe(req_pipe) || !make_pipe(resp_pipe)) {
+        return false;
+    }
+
+    PipeInBuf in_buf(req_pipe[0]);
+    PipeOutBuf out_buf(resp_pipe[1]);
+    std::istream in(&in_buf);
+    std::ostream out(&out_buf);
+
+    std::thread host([&in, &out]() { shtn_host_run(in, out); });
+
+    // Write the generate request, keep stdin open while frames stream.
+    SHTN_WRITE(req_pipe[1], generate_frame.data(), generate_frame.size());
+
+    if (!extra_frames.empty()) {
+        SHTN_WRITE(req_pipe[1], extra_frames.data(), extra_frames.size());
+    }
+
+    FrameReader reader(resp_pipe[0]);
+    std::string frame;
+    while (reader.next(frame)) {
+        frames_out.push_back(frame);
+        // Stop once the generate request's FINAL frame arrives (has an id
+        // and no "event" member).
+        if (frame.find("\"event\":\"chunk\"") == std::string::npos) {
+            break;
+        }
+    }
+
+    // Close stdin (EOF) → host cancels any leftovers and exits.
+    SHTN_CLOSE(req_pipe[1]);
+    host.join();
+
+    SHTN_CLOSE(req_pipe[0]);
+    SHTN_CLOSE(resp_pipe[0]);
+    SHTN_CLOSE(resp_pipe[1]);
+    return true;
+}
+
+static void phase5_generate_tests(const std::string& fixtures) {
+    // 1. Load a model + generate → event frames + final frame with REAL
+    //    generated text and metrics.
+    {
+        std::string script;
+        script += frame("{\"id\":1,\"op\":\"load_model\",\"payload\":{\"path\":\"" +
+                       fixtures + "/tiny-llama-f32.gguf\"}}");
+        script += frame("{\"id\":2,\"op\":\"generate\",\"payload\":{" +
+                       std::string("\"requestId\":\"go-1\",\"prompt\":\"hello\",") +
+                       "\"maxTokens\":6,\"temperature\":0.0}}");
+
+        std::vector<std::string> frames;
+        CHECK(run_host_generate_test(fixtures, script, frames));
+
+        // Frame 0: load_model response.
+        CHECK(frames.size() >= 2);
+        if (frames.size() >= 1) {
+            CHECK(frames[0].find("\"id\":1") != std::string::npos);
+            CHECK(frames[0].find("\"ok\":true") != std::string::npos);
+            CHECK(frames[0].find("\"loaded\":true") != std::string::npos);
+            CHECK(frames[0].find("\"generationCapable\":true") !=
+                  std::string::npos);
+        }
+
+        // Then generate: at least one chunk event + the final frame.
+        bool saw_chunk = false;
+        bool saw_final = false;
+        for (size_t i = 1; i < frames.size(); ++i) {
+            const std::string& f = frames[i];
+            CHECK(f.find("\"id\":2") != std::string::npos);
+            CHECK(f.find("\"ok\":true") != std::string::npos);
+            if (f.find("\"event\":\"chunk\"") != std::string::npos) {
+                saw_chunk = true;
+                CHECK(f.find("\"requestId\":\"go-1\"") != std::string::npos);
+            } else {
+                saw_final = true;
+                CHECK(f.find("\"finishReason\":\"length\"") !=
+                      std::string::npos);
+                CHECK(f.find("\"generatedTokens\":6") != std::string::npos);
+                CHECK(f.find("\"promptTokens\":5") != std::string::npos);
+                CHECK(f.find("\"metrics\"") != std::string::npos);
+                CHECK(f.find("\"tokensPerSecond\"") != std::string::npos);
+            }
+        }
+        CHECK(saw_chunk);
+        CHECK(saw_final);
+    }
+
+    // 2. Cancel mid-generation (slow fixture): event frames stop, the
+    //    final frame reports "cancelled", the host stays alive and serves
+    //    a follow-up request.
+    {
+        std::string script;
+        script += frame("{\"id\":1,\"op\":\"load_model\",\"payload\":{\"path\":\"" +
+                       fixtures + "/tiny-llama-slow.gguf\"}}");
+        script += frame("{\"id\":2,\"op\":\"generate\",\"payload\":{" +
+                       std::string("\"requestId\":\"go-2\",\"prompt\":\"hello\",") +
+                       "\"maxTokens\":200,\"temperature\":1.1,\"seed\":5}}");
+        script += frame("{\"id\":3,\"op\":\"cancel\",\"payload\":{\"requestId\":\"go-2\"}}");
+
+        std::vector<std::string> frames;
+        CHECK(run_host_generate_test(fixtures, script, frames));
+
+        bool saw_cancel_ok = false;
+        bool saw_cancelled_final = false;
+        for (const std::string& f : frames) {
+            if (f.find("\"id\":3") != std::string::npos) {
+                CHECK(f.find("\"cancelled\":true") != std::string::npos);
+                saw_cancel_ok = true;
+            }
+            if (f.find("\"id\":2") != std::string::npos &&
+                f.find("\"event\"") == std::string::npos) {
+                CHECK(f.find("\"finishReason\":\"cancelled\"") !=
+                      std::string::npos);
+                saw_cancelled_final = true;
+            }
+        }
+        CHECK(saw_cancel_ok);
+        CHECK(saw_cancelled_final);
+    }
+
+    // 3. Malformed generate payload → bounded error frame; host alive.
+    {
+        std::string script;
+        script += frame("{\"id\":1,\"op\":\"load_model\",\"payload\":{\"path\":\"" +
+                       fixtures + "/tiny-llama-f32.gguf\"}}");
+        script += frame("{\"id\":2,\"op\":\"generate\",\"payload\":{\"prompt\":123}}");
+
+        std::vector<std::string> frames;
+        CHECK(run_host_generate_test(fixtures, script, frames));
+
+        if (frames.size() >= 2) {
+            CHECK(frames[1].find("\"id\":2") != std::string::npos);
+            CHECK(frames[1].find("\"ok\":false") != std::string::npos);
+            CHECK(frames[1].find("malformed generate payload") !=
+                  std::string::npos);
+        }
+    }
+
+    // 4. Generate with NO model → error frame (fallback signal).
+    {
+        std::string script;
+        script += frame("{\"id\":1,\"op\":\"generate\",\"payload\":{" +
+                       std::string("\"requestId\":\"go-x\",\"prompt\":\"hello\",") +
+                       "\"maxTokens\":4}}");
+
+        std::vector<std::string> frames;
+        CHECK(run_host_generate_test(fixtures, script, frames));
+
+        if (frames.size() >= 1) {
+            CHECK(frames[0].find("\"id\":1") != std::string::npos);
+            CHECK(frames[0].find("\"ok\":false") != std::string::npos);
+            CHECK(frames[0].find("no model") != std::string::npos);
+        }
+    }
 }

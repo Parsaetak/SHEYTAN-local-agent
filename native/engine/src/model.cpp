@@ -4,6 +4,7 @@
 
 #include "shtn/engine.h"
 
+#include "hardware.h"
 #include "util.h"
 
 namespace shtn {
@@ -185,6 +186,43 @@ int32_t Model::load(const std::string& path,
 
     plan_ = compute_plan(header_, facts, mapping_.size(), effective_context);
 
+    // --- Phase 5: native-inference capability (llama graph validation) ---
+    // Metadata-level only: derive hyper parameters and validate every
+    // required tensor's presence/shape/type. Nothing is allocated and no
+    // tensor data is read. A model that fails any check stays LOADED
+    // (Phase 2 semantics) but reports generation_capable=0 with the
+    // explicit reason — the Go core then selects llama.cpp.
+    hyper_ = llama::Hyper{};
+    generation_capable_ = false;
+    generation_reason_.clear();
+    {
+        std::string reason;
+        if (llama::derive(header_.metadata, hyper_, reason)) {
+            if (llama::validate(header_, hyper_, reason)) {
+                generation_capable_ = true;
+            } else {
+                generation_reason_ = reason;
+            }
+        } else {
+            generation_reason_ = reason;
+        }
+    }
+
+    // Bind the tensor access view to the (new) header + mapping. The
+    // previous view pointed at the replaced header — rebuild ALWAYS.
+    weights_ = tensor::Weights(header_);
+    weights_.bind_data(mapping_.data(), mapping_.size());
+
+    // Measure available RAM once per load (bounds the KV allocation at
+    // generation time; 0 = unknown → check skipped).
+    {
+        shtn_ram_info ram{};
+        shtn::detect_ram(ram);
+        available_ram_ = ram.available_bytes;
+    }
+
+    epoch_ += 1;
+
     state_ = SHTN_MODEL_STATE_LOADED;
     path_ = path;
     error.clear();
@@ -200,6 +238,11 @@ int32_t Model::unload() {
     plan_ = shtn_memory_plan{};
     vocab_ = tokenizer::Vocab{};
     vocab_initialized_ = false;
+    weights_ = tensor::Weights{};
+    hyper_ = llama::Hyper{};
+    generation_capable_ = false;
+    generation_reason_.clear();
+    available_ram_ = 0;
     error_.clear();
     path_.clear();
     state_ = SHTN_MODEL_STATE_UNLOADED;
@@ -252,6 +295,12 @@ void Model::fill_info(shtn_model_info* out) const {
         out->workspace_bytes = plan_.workspace_bytes;
         out->total_plan_bytes = plan_.total_bytes;
     }
+
+    // Phase 5: capability verdict + reason (filled whenever a load was
+    // attempted — the zero-state stays 0/empty).
+    out->generation_capable = generation_capable_ ? 1 : 0;
+    copy_cstr(out->generation_reason, sizeof(out->generation_reason),
+              generation_reason_.c_str());
 }
 
 void Model::fill_plan(shtn_memory_plan* out) const {
@@ -309,6 +358,44 @@ const tokenizer::Vocab* Model::tokenizer_vocab() const {
 bool Model::tokenizer_initialized() const {
     std::lock_guard<std::mutex> lock(mu_);
     return vocab_initialized_;
+}
+
+// --- Phase 5 accessors -------------------------------------------------------
+
+uint64_t Model::epoch() const {
+    std::lock_guard<std::mutex> lock(mu_);
+    return epoch_;
+}
+
+const tensor::Weights* Model::weights() const {
+    std::lock_guard<std::mutex> lock(mu_);
+    if (state_ != SHTN_MODEL_STATE_LOADED || weights_.find("token_embd.weight") == nullptr) {
+        return nullptr;
+    }
+    // NOTE: the returned pointer is a member address — stable for the
+    // object lifetime, but its CONTENTS (header binding) change on
+    // load/unload. Callers must re-check epoch() after acquiring it.
+    return &weights_;
+}
+
+llama::Hyper Model::hyper() const {
+    std::lock_guard<std::mutex> lock(mu_);
+    return hyper_;
+}
+
+bool Model::generation_capable() const {
+    std::lock_guard<std::mutex> lock(mu_);
+    return generation_capable_;
+}
+
+std::string Model::generation_reason() const {
+    std::lock_guard<std::mutex> lock(mu_);
+    return generation_reason_;
+}
+
+uint64_t Model::available_ram_bytes() const {
+    std::lock_guard<std::mutex> lock(mu_);
+    return available_ram_;
 }
 
 } // namespace model

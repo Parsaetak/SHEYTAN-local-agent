@@ -63,6 +63,22 @@ bool extract_decode_payload(const std::string& bytes,
                             int32_t& skip_special, uint32_t& max_bytes,
                             std::string& error);
 
+// ExtractGeneratePayload parses the generate op payload:
+// {"requestId": "...", "prompt": "...", "maxTokens": N, "temperature": f,
+//  "topK": n, "topP": f, "repetitionPenalty": f, "repeatLastN": n,
+//  "seed": n}. prompt and maxTokens are REQUIRED; the rest optional.
+bool extract_generate_payload(const std::string& bytes,
+                              std::string& request_id, std::string& prompt,
+                              uint32_t& max_tokens, float& temperature,
+                              int32_t& top_k, float& top_p,
+                              float& repetition_penalty,
+                              uint32_t& repeat_last_n, uint64_t& seed,
+                              std::string& error);
+
+// ExtractRequestIdPayload parses {"requestId": "..."} (cancel op).
+bool extract_request_id_payload(const std::string& bytes,
+                                std::string& request_id, std::string& error);
+
 // Escape returns src quoted and escaped as a JSON string literal
 // (control characters, quotes, backslashes, and invalid UTF-8 bytes).
 std::string quote(const std::string& src);
