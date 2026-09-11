@@ -101,9 +101,11 @@ type Config struct {
         //             inference engine)
         //   "native" — SHEYTAN Native Engine path: the supervised
         //             shtn-engine-host subprocess is started with real
-        //             lifecycle/health/metrics, but generation is NOT
-        //             implemented yet, so generation requests still fall
-        //             back to the llama backend.
+        //             lifecycle/health/metrics. Since Phase 5 the native
+        //             backend performs REAL generation for validated
+        //             llama-architecture models (plain-text requests);
+        //             anything it cannot serve still falls back to the
+        //             llama backend.
         //
         // The default preserves v1.1.4Z behavior exactly: no native
         // subprocess is spawned unless the user explicitly opts in.

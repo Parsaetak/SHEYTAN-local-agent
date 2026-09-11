@@ -51,6 +51,119 @@ support). Full phase logs below.
 
 ---
 
+# v1.1.5Z Phase 5 Repair Log (2026-09-11, post-phase5 CI failure)
+
+## Root failure (GitHub Actions run 34546418321)
+
+`Source & frontend audit → Verify repository shape and release identity`
+failed with `[sheytan-release] ERROR: unable to read build/config.yml:
+ENOENT`. Root cause: the v1.1.5Z-phase5 commit (eedb766) DELETED
+`build/config.yml` (52 lines removed) although the phase 5 replacement
+manifest itself declares "deleted: none in Phase 5" and lists the file
+as committed Wails source. The deletion was accidental, not intentional.
+
+## Additional accidental deletions discovered in the same commit
+
+The same commit also deleted four INTERNAL PACKAGES that the surviving
+code still imports — the tree at eedb766 did not compile at all (CI
+never reached a Go step to expose it):
+
+- `internal/sessions`  (imported by runtime, api, recall, continuum, cmd)
+- `internal/sandbox`   (imported by runtime, cmd/stress)
+- `internal/attachments` (imported by runtime, api)
+- `internal/memory`    (imported by runtime, multiagent, cmd)
+
+All four were restored byte-identical from the Phase 4 baseline
+(84324b8) — exactly what the phase 5 manifest's "unchanged" status
+promised. After restoration the tree builds and all packages test green
+again.
+
+## Real defects found and fixed during continued validation
+
+1. **Misleading engine state when the native backend serves**: the
+   `/api/engine` top-level `state` (the single UI badge source) always
+   reported the llama.cpp state machine, so a user with
+   `engineBackend: native` whose llama.cpp fallback could not start
+   (offline / no binary) saw "failed" while native generation actually
+   worked. Fix: when the effective serving backend is native (same
+   selection policy that routes generation), state/detail/pid/
+   loadedPath/logs come from the native engine. Purely local reads; the
+   llama path is byte-unchanged.
+2. **Run gate required llama.cpp even when native serves**:
+   `EnsureLLM`/`EnsureLLMContext` always gated runs on
+   `Llama.Start()`, so native-only deployments could never execute a
+   run. Fix: the same native-serving early exit (selected + actually
+   generation-capable). The fallback gate still applies whenever native
+   is not serving.
+3. **CI never executed the Go↔C++ integration tests**: the C++ engine
+   was built only in the audit job (no Go steps); build-linux/build-windows
+   re-checkout fresh trees without `native/engine/build`, so every
+   `TestRealCppHost*` test SKIPPED in all Go jobs. Fix: build-linux now
+   builds + ctests the C++ engine before `go test`, so the real-host
+   e2e suites actually run in CI.
+4. **Flaky unload-guard test** (`native/engine/tests/test_generate.cpp`,
+   "model unload during active generation → rejected"): the sequencer
+   thread polls `active_requests > 0` then asserts unload is rejected
+   — but the generation used temperature 1.1 sampling, with which the
+   toy model can emit EOS within the first few tokens, completing the
+   generation before the sequencer's unload lands (observed ~2/8 runs
+   failing under load, zero engine defect behind it — the test's own
+   "deterministic order — no race" comment was wrong). Fixed by
+   switching the sub-test to greedy decode, which on this fixture
+   deterministically runs to max_tokens (verified: finish reason
+   "length", 200/200 tokens). Post-fix: 10/10 ctest runs green.
+5. **Stale Phase-1/Phase-4 documentation contradicting the live
+   implementation** (the §25 audit): README claimed native inference
+   "NOT implemented — every generation request therefore runs on
+   llama.cpp" and "NO forward pass yet"; config.go / engine.go /
+   runtime.go carried Phase-1 "generation is NOT implemented yet"
+   comments. All updated to the verified Phase 5 truth (implemented +
+   narrow + honest limits).
+
+## Runtime verification performed (this repair)
+
+- `node scripts/release-version.mjs --check` — all four surfaces
+  consistent at 1.1.5-zeta (build/config.yml restored).
+- `go build -tags headless ./...` PASS; `go vet -tags headless ./...` PASS.
+- `go test -tags headless ./internal/... -count=1` — 27 packages PASS
+  (including the restored sessions/attachments/memory and the
+  releasegate critical-package gate).
+- `go test -race -tags headless` on agent/llm/api/native-engine — PASS.
+- C++: cmake configure + build + `ctest` — 12/12 suites PASS
+  (engine, protocol, host, gguf, model, tokenizer, kv_cache,
+  scheduler, sampler, tensor, forward, generate).
+- Real-host Go integration tests re-run WITH the built host present:
+  10/10 `TestRealCppHost*` PASS (lifecycle, model, tokenizer, KV,
+  scheduler, phase5 generation/cancel/context-overflow/unsupported/
+  backend contract).
+- Stress suite: 30 pass / 0 fail.
+- Frontend: npm ci, typecheck, lint (0 warnings), build, sync into
+  web/static; `web/static/index.html` contains the root div and
+  `diff -r dist web/static` is empty.
+- **Real application smoke test (headless build, real C++ host, real
+  GGUF fixture)**: launch → native engine ready (honest state after the
+  fix) → model visible with real GGUF metadata → native load with
+  capability verdict → prompt submitted → REAL native generation
+  streamed over the WebSocket (3 coalesced response frames; perf
+  activity reports measured 493.7 tok/s, 1.2 s TTFT) → assistant
+  message persisted → abort mid-run ("Aborted by user", engine
+  recovered to ready) → next request succeeds → SIGTERM shutdown clean
+  (host subprocess reaped). The context-overflow REJECT policy was also
+  exercised for real (over-long prompt → explicit engine-side rejection
+  → logged fallback attempt).
+
+## Environment-verified vs unverified (honest list)
+
+- Verified here (Linux, Go 1.26.0, Node 24, CMake 4.4.3, g++ 14): all
+  of the above.
+- NOT verifiable in this environment: the Wails/GTK GUI desktop build
+  (no GTK4/WebKitGTK-6.0 dev libraries, no root) — the Windows CI job's
+  CGO-free cross-compile remains the verification path, unchanged.
+- Windows runtime execution: unverified here (Linux-only environment);
+  CI covers build + console probe + package integrity.
+
+---
+
 # v1.1.5Z Phase 5 Implementation Log (2026-09-11)
 
 ## What was implemented (REAL native transformer inference + generation)

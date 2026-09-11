@@ -393,8 +393,20 @@ int main() {
               SHTN_OK);
 
         auto o = base_opts("hello", 200);
-        o.temperature = 1.1f;
-        o.seed = 9;
+        // Greedy (NOT temperature 1.1 sampling): the unload guard below
+        // needs the generation to still be ACTIVE when the sequencer
+        // thread unloads. With sampling, the toy model can emit EOS
+        // within the first few tokens, completing the generation before
+        // the sequencer's unload lands — an intermittent test failure
+        // with no engine defect behind it (observed ~25% of runs under
+        // load). Greedy decode on this fixture deterministically runs
+        // to max_tokens (finish reason "length", no early EOS — pinned
+        // by the greedy-determinism test above), so the 200-token
+        // generation stays active for the whole poll window and the
+        // sequencer reliably observes active_requests > 0 before it
+        // attempts the unload.
+        o.temperature = 0.0f;
+        o.seed = 0;
         o.request_id = "unload-guard";
 
         // One sequencer thread: while the generation is active, an unload

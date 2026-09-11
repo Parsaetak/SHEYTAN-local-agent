@@ -646,6 +646,23 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: true
 
+      # v1.1.5Z Phase 5 repair: build the C++ engine BEFORE the Go tests
+      # so the Go↔C++ integration suites (internal/native/engine
+      # TestRealCppHost*) run against the REAL shtn-engine-host binary
+      # instead of skipping. The audit job builds and ctests the engine,
+      # but on its own runner/workspace — without this step the boundary
+      # tests never actually executed in any Go job.
+      - name: Native engine (C++) build for Go integration tests
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cmake -S native/engine -B native/engine/build
+          cmake --build native/engine/build
+          ctest --test-dir native/engine/build --output-on-failure
+
+          test -x native/engine/build/shtn-engine-host
+
       - name: Go verification
         shell: bash
         env:

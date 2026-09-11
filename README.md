@@ -57,22 +57,23 @@ The model is never the authority on whether an engineering task succeeded — ob
 ┌───────────────────┐   ┌───────────────────────────────┐
 │  llama.cpp server │   │  SHEYTAN Native Engine (new)  │
 │  local inference  │   │  C++ core + supervised host   │
-│  (fallback path   │   │  (Phase 4: lifecycle, health,│
-│   and default     │   │  hardware, metrics, GGUF model│
-│   engine today)   │   │  loading, real tokenizer, KV │
-│                   │   │  cache, scheduler, sampler — │
-│                   │   │  NO forward pass yet)        │
+│  (fallback and    │   │  (Phase 5: lifecycle, health,│
+│   default engine  │   │   hardware, metrics, GGUF     │
+│   for unsupported │   │   model loading, tokenizer, KV│
+│   cases)          │   │   cache, scheduler, REAL      │
+│                   │   │   llama-arch generation with  │
+│                   │   │   streaming + cancellation)   │
 └───────────────────┘   └───────────────────────────────┘
 ```
 
 Critical execution logic belongs to Go. Presentation and interaction logic belong to React. The production desktop app embeds the built frontend (`web/static/`) via `go:embed` — no separate frontend server is needed.
 
-## SHEYTAN Native AI Engine (v1.1.5Z, Phase 4 — foundation primitives)
+## SHEYTAN Native AI Engine (v1.1.5Z, Phase 5 — REAL native inference)
 
 v1.1.5Z establishes the **SHEYTAN Native AI Engine architecture**: Go
-remains the main application/runtime engine, and a new C++ native engine
-(`native/engine/`) becomes the future heavy-compute/AI execution engine
-behind a narrow C ABI, supervised by Go as a subprocess
+remains the main application/runtime engine, and a C++ native engine
+(`native/engine/`) performs **real transformer inference** for the llama
+architecture behind a narrow C ABI, supervised by Go as a subprocess
 (`shtn-engine-host`) over a length-prefixed JSON IPC protocol.
 
 **Status — read this literally:**
@@ -98,8 +99,8 @@ behind a narrow C ABI, supervised by Go as a subprocess
   with merges, special tokens, BOS/EOS/UNK — materialized by re-walking
   the memory map on demand), a real KV-cache data structure (sized from
   real model dims, GQA-aware, contiguous K+V allocation, capacity/usage/
-  used-positions measured honestly — `used_positions` stays 0 until a
-  forward pass exists), a real bounded scheduler (single-slot, FIFO,
+  used-positions measured honestly — since Phase 5 populated by the real
+  forward pass), a real bounded scheduler (single-slot, FIFO,
   queue cap, cancel, drain, no busy poll), real sampling primitives
   (greedy/temperature/top-k/top-p/repetition penalty/seedable RNG —
   deterministic), streaming UI coalescing (rAF-boundary batching of token
@@ -108,14 +109,33 @@ behind a narrow C ABI, supervised by Go as a subprocess
   rate; reports `optimized for high-refresh displays / frame-budget
   aware / 120 Hz-capable presentation where hardware permits` — never a
   guaranteed-120-FPS claim).
-- **NOT implemented (future phases)**: native inference. The native
-  engine's Generate/StreamGenerate return "not implemented" — honestly —
-  and every generation request therefore runs on llama.cpp.
+- **IMPLEMENTED (Phase 5 — REAL native inference)**: in addition to the
+  foundation above, the real llama-architecture forward pass
+  (embeddings → per-layer RMSNorm → Q/K/V matvec → RoPE → causal GQA
+  attention over a true fp16 KV cache → SwiGLU FFN → final norm →
+  logits), a tensor access layer with row dequantization for
+  F32/F16/Q4_0/Q4_1/Q5_0/Q5_1/Q8_0 (anything else fails explicitly),
+  load-time llama-graph validation (`GenerationCapable()` = alive +
+  loaded + validated — never blindly true), REAL token-by-token
+  generation with streamed chunks, cooperative cancellation
+  (per-token observation), measured generation metrics (TTFT / tok/s /
+  KV positions from the monotonic clock), and the generation router:
+  native when selected AND capable AND plain-text, llama.cpp otherwise
+  with a logged, inspectable reason.
+- **Narrow, honest native support**: llama architecture ONLY;
+  F32/F16/Q4_0/Q4_1/Q5_0/Q5_1/Q8_0 tensors ONLY; rope.freq_scale 1.0
+  ONLY; a plain role-labeled prompt format (no chat-template
+  interpretation); tools/images requests stay on llama.cpp. Measured on
+  the test fixtures the portable scalar C++ forward pass is SLOWER than
+  llama.cpp (see `worklog.md` Phase 5 numbers) — no native-speed claim is
+  made; numerical correctness is pinned against an independent Python
+  reference.
 - **llama.cpp remains fully functional as the fallback** (and the
   default engine). Nothing about v1.1.4Z runtime behavior changes unless
   you explicitly opt in via `engineBackend: "native"` in `config.json`
   (or `SHEYTAN_ENGINE_BACKEND=native`), which additionally requires
-  building the host binary from `native/engine/` with CMake/Make.
+  building the host binary from `native/engine/` with CMake/Make (the
+  host binary is not shipped/auto-downloaded yet).
 
 The Go↔C++ boundary decision (supervised subprocess + IPC instead of
 cgo) and the full rationale are documented in
@@ -276,9 +296,9 @@ After any frontend change, `npm run build` must be run so `web/static` (the embe
 
 # Testing
 
-- **19+ Go test packages** — engine lifecycle (real process spawn/kill via a fake llama.cpp re-exec), agent loop (fake SSE engine: streaming, tool calls, abort, error propagation), API surface (HTTP-level session/attachment/config/feedback contracts), attachments, chunking, context cache, context plan, continuum, lab (policy, repair loop, verification), memory, recall, research (SSRF/alias contracts), sessions (concurrency, sidecar bounds), termshell, tools, vision, releasegate, plus v1.1.4Z regression tests for the config source race, sampling wire format, GGUF parser, stream stall watchdog, zip-slip and escape tokens.
+- **27 Go test packages** — engine lifecycle (real process spawn/kill via a fake llama.cpp re-exec), agent loop (fake SSE engine: streaming, tool calls, abort, error propagation; generation-router seam), API surface (HTTP-level session/attachment/config/feedback contracts), attachments, chunking, context cache, context plan, continuum, lab (policy, repair loop, verification), memory, recall, research (SSRF/alias contracts), sessions (concurrency, sidecar bounds), termshell, tools, vision, releasegate, runtime, native engine (real C++ host e2e: generation, cancellation, KV/scheduler accounting, fallback signals), plus v1.1.4Z regression tests for the config source race, sampling wire format, GGUF parser, stream stall watchdog, zip-slip and escape tokens.
 - **Stress suite** — 30 scenarios (hostile prompts, garbage tool args, shell injection, memory/session contracts, release-surface pinning) run in CI and as a release gate.
-- **CI** (`.github/workflows/build-desktop.yml`) — audit job (version sync + frontend verify), Windows job (tests + GUI exe + console probe + package + zip verification), Linux job (tests + stress suite + package), release job (version-agnostic tag gate, integrity-checked publication: ZIP CRC test plus entry-contract verification on both platform ZIPs).
+- **CI** (`.github/workflows/build-desktop.yml`) — audit job (version sync + frontend verify + C++ engine build/ctest), Windows job (tests + GUI exe + console probe + package + zip verification), Linux job (C++ engine build so the Go↔C++ integration tests run for real + tests + stress suite + package), release job (version-agnostic tag gate, integrity-checked publication: ZIP CRC test plus entry-contract verification on both platform ZIPs).
 
 # Development direction (planned — NOT implemented today)
 

@@ -11,10 +11,15 @@ package api
 //
 // v1.1.5Z Phase 1: the snapshot additionally reports WHICH backend serves
 // generation (backend) and the supervised native engine's own status
-// (native) when the native path is enabled. The llama.cpp engine state
-// remains the authoritative `state` for the UI badge — generation runs on
-// llama.cpp in Phase 1 by design, and native transitions reach the
-// activity feed as "Native engine …" captions without touching the badge.
+// (native) when the native path is enabled. Since Phase 5 the native
+// backend can genuinely serve generation: when it is the SELECTED backend
+// and it is actually generation-capable, its state is the authoritative
+// `state` for the UI badge (the llama.cpp fallback stays prewarmed in the
+// background but must not own the badge while native serves). When the
+// native engine is not serving (not selected, or not capable), the
+// llama.cpp engine state remains authoritative exactly as before, and
+// native transitions reach the activity feed as "Native engine …" captions
+// without touching the badge.
 
 import (
         "encoding/json"
@@ -87,6 +92,21 @@ func (s *Server) engineSnapshot() engineSnapshot {
                 snap.Backend = s.stack.Engine().Name()
         }
 
+        // Phase 5 repair: when the native engine is the backend actually
+        // serving generation (selected AND generation-capable — the same
+        // policy that routed generation), the badge state, detail, pid,
+        // loaded model and logs must come from THAT engine. Otherwise a
+        // user with engineBackend=native whose llama.cpp fallback cannot
+        // start (offline, no binary) sees "failed" while generation
+        // actually works — the exact misleading-state defect this fixes.
+        if snap.Backend == "native" && s.native != nil {
+                snap.State = s.native.State()
+                snap.Detail = s.native.Detail()
+                snap.Pid = s.native.Pid()
+                snap.LoadedPath = s.native.NativeModelPath()
+                snap.Logs = tailStrings(s.native.Logs(), 24)
+        }
+
         if s.src.Load().IsRemote() {
                 snap.Provider = "remote"
                 snap.Model = s.src.Load().EffectiveModel()
@@ -103,9 +123,15 @@ func (s *Server) engineSnapshot() engineSnapshot {
 
         snap.Provider = "local"
         snap.Model = s.src.Load().DisplayModel()
-        snap.LoadedPath = s.llama.LoadedModel()
         snap.Vision = s.llama.VisionActive()
-        snap.Logs = tailStrings(s.llama.Logs(), 24)
+
+        // When native serves, LoadedPath/Logs were already sourced from
+        // the native engine above; only the llama fallback path (and the
+        // pre-native v1.1.4Z contract) populates them from llama.cpp.
+        if snap.Backend != "native" {
+                snap.LoadedPath = s.llama.LoadedModel()
+                snap.Logs = tailStrings(s.llama.Logs(), 24)
+        }
 
         // v1.1.5Z: native engine status block (local reads only).
         if s.native != nil {

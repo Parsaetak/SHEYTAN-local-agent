@@ -6,7 +6,9 @@ Repository: https://github.com/Parsaetak/SHEYTAN-local-agent
 
 Branch: `main`
 
-Current release: `v1.1.5Z` (SHEYTAN Native AI Engine — Phase 5: REAL native transformer inference + generation + streaming + cancellation + measured metrics for the llama architecture; llama.cpp remains the fallback — see `worklog.md` for the full Phase 1 + 2 + 4 + 5 logs).
+Current release: `v1.1.5Z` (SHEYTAN Native AI Engine — Phase 5: REAL native transformer inference + generation + streaming + cancellation + measured metrics for the llama architecture; llama.cpp remains the fallback — see `worklog.md` for the full Phase 1 + 2 + 4 + 5 logs and the post-phase5 REPAIR log).
+
+**Phase 5 repair (2026-09-11)**: the phase5 commit had accidentally deleted `build/config.yml` and four internal packages (`sessions`, `sandbox`, `attachments`, `memory`) that live code still imports — the tree did not compile and CI failed at the release gate. All were restored byte-identical from the Phase 4 baseline; two real native-path defects (misleading engine badge state; run gate requiring llama.cpp when native serves) and one CI gap (Go↔C++ integration tests never executed in any job) were fixed. Evidence in `worklog.md` — "v1.1.5Z Phase 5 Repair Log".
 
 **Read `worklog.md` before working.** It records the audit findings and the fixes this release shipped, including which subsystems were previously unwired and why.
 
