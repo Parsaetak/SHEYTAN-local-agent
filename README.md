@@ -195,7 +195,7 @@ SHEYTAN-Local-Agent/
 └── config.json
 ```
 
-The engine binary downloads automatically when the machine is online; drop a prebuilt `llama-server(.exe)` into `bin/` for offline installs.
+The engine binary downloads automatically when the machine is online; drop a prebuilt `llama-server(.exe)` into `bin/` for offline installs. NOTE (v1.1.5Z): llama.cpp stopped publishing prebuilt LINUX binaries — on Linux the automatic download therefore cannot succeed any more; build `llama-server` from source and set `llamaBinPath`, or select the native engine (`engineBackend: "native"`). The engine still scans recent upstream releases and self-heals automatically if prebuilt Linux binaries return.
 
 # Configuration
 
@@ -204,7 +204,7 @@ Settings are edited in the UI (`Settings` view) or by patching `config.json` (th
 | Key | Default | Meaning |
 |---|---|---|
 | `provider` | `local` | `local` (managed llama.cpp) or `remote` (OpenAI-compatible endpoint) |
-| `engineBackend` | `llama` | v1.1.5Z: `llama` (default, full engine) or `native` (opt-in: supervised native engine runs alongside; generation still served by llama.cpp until later phases) |
+| `engineBackend` | `llama` | v1.1.5Z: `llama` (default, full engine) or `native` (opt-in — since Phase 5 the native engine performs REAL llama-architecture generation and serves plain-text runs when selected AND capable; llama.cpp serves everything else: tools, images, non-llama architectures, unsupported tensors, and the fallback) |
 | `nativeEnginePath` | (auto) | v1.1.5Z: override for the `shtn-engine-host` binary location (default `{dataDir}/bin/`) |
 | `model` | first `.gguf` | active local model |
 | `llamaPort` | 8080 | managed engine port |

@@ -736,10 +736,98 @@ func (s *Stack) NativeBackend() llm.Backend {
         return s.nativeBackend
 }
 
-// prewarmNative starts the native engine in the background when enabled.
-// Best-effort by design: native engine failures NEVER block or fail the
-// llama.cpp path (Phase 1 fallback contract) — they surface in the native
-// engine state and logs instead.
+// EnsureNativeReady brings the native engine to a USABLE state synchronously:
+// start the host (idempotent — an already-started engine returns nil) and
+// load the selected model natively with the load-time capability verdict.
+//
+// v1.1.5Z repair: this was previously reachable ONLY through the launch
+// prewarm (prewarmNative). The engine toggle started the host but never
+// loaded a model, so a native-selected user who disabled auto-start and
+// pressed "engine start" got an alive-but-incapable engine whose runs
+// still gated on llama.cpp — the exact "control without a real path"
+// defect class this repository forbids. The toggle now calls this same
+// bounded seam, so there is ONE start+load implementation for both entry
+// points.
+//
+// The returned error covers the ENGINE start only. Model-load outcomes
+// (unresolvable path, load failure, incapable model) are logged and
+// reflected in GenerationCapable() — llama.cpp keeps serving those, so
+// they are fallback conditions, not engine-start failures.
+func (s *Stack) EnsureNativeReady(ctx context.Context) error {
+        if s.Native == nil {
+                return fmt.Errorf("native engine path not enabled (engineBackend != \"native\")")
+        }
+
+        if !s.Native.IsAlive() {
+                if err := s.Native.Start(ctx); err != nil {
+                        logging.Default().Warn(
+                                "native-engine",
+                                "native engine did not start (llama.cpp remains the engine): %v",
+                                err,
+                        )
+                        return err
+                }
+        }
+
+        logging.Default().Info(
+                "native-engine",
+                "native engine host ready",
+        )
+
+        // Phase 5: load the selected model NATIVELY so generation can
+        // actually flow through the native path (validate → map →
+        // metadata → llama-graph verdict). A model that does not
+        // validate stays loaded-but-incapable: generation keeps flowing
+        // to llama.cpp with the reason recorded here (inspectable).
+        cfg := s.Src.Load()
+        if cfg.IsRemote() || cfg.Model == "" {
+                return nil
+        }
+
+        resolved, rerr := llm.ResolveModelPath(cfg.ModelsDir, cfg.Model)
+        if rerr != nil {
+                logging.Default().Info(
+                        "native-engine",
+                        "native model load skipped (model %q not resolvable): %v",
+                        cfg.Model,
+                        rerr,
+                )
+                return nil
+        }
+
+        spec := llm.ModelSpec{Path: resolved}
+        if err := s.NativeBackend().LoadModel(ctx, spec); err != nil {
+                logging.Default().Warn(
+                        "native-engine",
+                        "native model load failed (%s) — llama.cpp serves generation: %v",
+                        resolved,
+                        err,
+                )
+                return nil
+        }
+
+        if gc, ok := s.NativeBackend().(llm.GenerationCapable); ok && gc.GenerationCapable() {
+                logging.Default().Info(
+                        "native-engine",
+                        "native generation ACTIVE for %s (llama architecture validated; llama.cpp remains the fallback)",
+                        filepath.Base(resolved),
+                )
+        } else {
+                logging.Default().Info(
+                        "native-engine",
+                        "native model loaded but NOT generation-capable (%s) — llama.cpp serves generation; reason: %s",
+                        filepath.Base(resolved),
+                        s.Native.NativeGenerationReason(),
+                )
+        }
+
+        return nil
+}
+
+// prewarmNative runs the native start+load sequence in the background
+// (launch prewarm). Best-effort by design: native engine failures NEVER
+// block or fail the llama.cpp path — they surface in the native engine
+// state and logs instead.
 func (s *Stack) prewarmNative() {
         if s.Native == nil {
                 return
@@ -752,65 +840,8 @@ func (s *Stack) prewarmNative() {
                 )
                 defer cancel()
 
-                if err := s.Native.Start(ctx); err != nil {
-                        logging.Default().Warn(
-                                "native-engine",
-                                "native engine did not start (llama.cpp remains the engine): %v",
-                                err,
-                        )
-                        return
-                }
-
-                logging.Default().Info(
-                        "native-engine",
-                        "native engine host ready",
-                )
-
-                // Phase 5: load the selected model NATIVELY so generation can
-                // actually flow through the native path (validate → map →
-                // metadata → llama-graph verdict). A model that does not
-                // validate stays loaded-but-incapable: generation keeps flowing
-                // to llama.cpp with the reason recorded here (inspectable).
-                cfg := s.Src.Load()
-                if cfg.IsRemote() || cfg.Model == "" {
-                        return
-                }
-
-                resolved, rerr := llm.ResolveModelPath(cfg.ModelsDir, cfg.Model)
-                if rerr != nil {
-                        logging.Default().Info(
-                                "native-engine",
-                                "native model load skipped (model %q not resolvable): %v",
-                                cfg.Model,
-                                rerr,
-                        )
-                        return
-                }
-
-                spec := llm.ModelSpec{Path: resolved}
-                if err := s.NativeBackend().LoadModel(ctx, spec); err != nil {
-                        logging.Default().Warn(
-                                "native-engine",
-                                "native model load failed (%s) — llama.cpp serves generation: %v",
-                                resolved,
-                                err,
-                        )
-                        return
-                }
-
-                if gc, ok := s.NativeBackend().(llm.GenerationCapable); ok && gc.GenerationCapable() {
-                        logging.Default().Info(
-                                "native-engine",
-                                "native generation ACTIVE for %s (llama architecture validated; llama.cpp remains the fallback)",
-                                filepath.Base(resolved),
-                        )
-                } else {
-                        logging.Default().Info(
-                                "native-engine",
-                                "native model loaded but NOT generation-capable (%s) — llama.cpp serves generation; reason: %s",
-                                filepath.Base(resolved),
-                                s.Native.NativeGenerationReason(),
-                        )
+                if err := s.EnsureNativeReady(ctx); err != nil {
+                        return // already logged by EnsureNativeReady
                 }
         }()
 }

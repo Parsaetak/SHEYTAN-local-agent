@@ -1,10 +1,12 @@
-# SHEYTAN-Local-Agent Phase 5 REPAIR replacement manifest
+# SHEYTAN-Local-Agent v1.1.5Z Phase 5 replacement manifest
 #
 # A COMPLETE replacement archive of the final repository state
-# (baseline for status classification: the phase5 commit being repaired,
-#  eedb766 — the commit whose CI run 34546418321 failed).
+# (baseline for status classification: live main HEAD ad34c74 —
+#  the state being replaced; the archive also carries the 2026-09-11
+#  repair content, so it reconstructs the full final state from any
+#  phase-5-era checkout).
 # Status vocabulary:
-#   new       — absent from the baseline (files the repair restored or added)
+#   new       — absent from the baseline (added by this repair)
 #   modified  — changed relative to the baseline
 #   unchanged — identical to the baseline; included so the
 #               archive reconstructs the full repository state
@@ -12,24 +14,24 @@
 #
 # Excluded by policy: .git/ node_modules/ dist/ build artifacts
 # (native/engine/build) runtime dirs (models/ sessions/ logs/
-# caches/ tmp/ secrets) and built binaries.
+# caches/ tmp/ secrets) and machine-specific files.
 #
-# files included: 292  (new: 13, modified: 12,
-# unchanged: 267)
+# files included: 295  (new: 1, modified: 11,
+# unchanged: 283)
 
-.github/workflows/build-desktop.yml	modified	CI workflow — repaired: build-linux now builds the C++ engine before Go tests so the Go↔C++ integration suites actually run
+.github/workflows/build-desktop.yml	unchanged	repository source (required for complete replacement state)
 .gitignore	unchanged	repository source (required for complete replacement state)
 .oxlintrc.json	unchanged	repository source (required for complete replacement state)
 .prettierignore	unchanged	repository source (required for complete replacement state)
-ARCHITECTURE.md	modified	architecture truth table — Phase-1 stale selection note corrected to the Phase 5 routing reality
+ARCHITECTURE.md	unchanged	repository source (required for complete replacement state)
 FIX-README.md	unchanged	repository source (required for complete replacement state)
 LICENSE	unchanged	repository source (required for complete replacement state)
-README.md	modified	project overview — stale Phase-4 'native inference NOT implemented' / 'NO forward pass yet' claims replaced with the verified Phase 5 status (implemented, narrow, honest limits)
-REPLACEMENT-MANIFEST.txt	modified	repository source (required for complete replacement state)
-REPLACEMENT-SHA256.txt	modified	repository source (required for complete replacement state)
+README.md	modified	documentation truth: engineBackend row updated to the Phase 5 routing reality (stale Phase-1 text removed) and the llama.cpp Linux download reality documented
+REPLACEMENT-MANIFEST.txt	unchanged	replacement manifest (this file) — regenerated for the current archive
+REPLACEMENT-SHA256.txt	unchanged	SHA-256 for every file in the replacement archive — regenerated
 SIGNATURE	unchanged	repository source (required for complete replacement state)
-agent.md	modified	engineering handoff context — phase5-repair summary added (root cause, restored packages, fixed defects, evidence pointer)
-build/config.yml	new	RESTORED Wails build metadata (accidentally deleted by the phase5 commit; required by release-version.mjs, CI grep, releasegate walk)
+agent.md	modified	agent handoff updated with the 2026-09-12 validation pass (defects fixed, evidence pointer)
+build/config.yml	unchanged	repository source (required for complete replacement state)
 cmd/ask.go	unchanged	repository source (required for complete replacement state)
 cmd/context.go	unchanged	repository source (required for complete replacement state)
 cmd/diagnostics.go	unchanged	repository source (required for complete replacement state)
@@ -50,20 +52,20 @@ internal/aicontext/AI-CONTEXT.md	unchanged	repository source (required for compl
 internal/aicontext/aicontext.go	unchanged	repository source (required for complete replacement state)
 internal/aicontext/aicontext_test.go	unchanged	repository source (required for complete replacement state)
 internal/api/attachments.go	unchanged	repository source (required for complete replacement state)
-internal/api/engine.go	modified	REPAIRED engine snapshot — when the native backend serves generation, the authoritative UI state/detail/pid/loadedPath/logs come from the native engine (was: always llama.cpp, showing 'failed' while native worked)
+internal/api/engine.go	unchanged	repository source (required for complete replacement state)
 internal/api/lab.go	unchanged	repository source (required for complete replacement state)
 internal/api/lifecycle.go	unchanged	repository source (required for complete replacement state)
 internal/api/research.go	unchanged	repository source (required for complete replacement state)
-internal/api/server.go	unchanged	repository source (required for complete replacement state)
-internal/api/server_native_test.go	unchanged	repository source (required for complete replacement state)
+internal/api/server.go	modified	engine toggle start repaired: calls Stack.EnsureNativeReady (start + native model load + capability verdict) and keeps the llama result authoritative only when native is not actually serving — a failed llama fallback no longer fails the toggle on native-serving deployments
+internal/api/server_native_test.go	modified	added TestEngineToggleNativeServesGeneration — HTTP-level regression pinning the toggle repair end-to-end (toggle 200 on native-only deployment, honest native badge, REAL native generation persisted)
 internal/api/server_test.go	unchanged	repository source (required for complete replacement state)
 internal/api/server_v114_test.go	unchanged	repository source (required for complete replacement state)
 internal/api/timeout_test.go	unchanged	repository source (required for complete replacement state)
 internal/api/ws.go	unchanged	repository source (required for complete replacement state)
 internal/artifacts/artifacts.go	unchanged	repository source (required for complete replacement state)
-internal/attachments/attachments.go	new	RESTORED package accidentally deleted by the phase5 commit (byte-identical to the Phase 4 baseline 84324b8; still imported by runtime/api/recall/continuum/multiagent/cmd — the phase5 tree did not compile without it)
-internal/attachments/attachments_phase3_test.go	new	RESTORED package accidentally deleted by the phase5 commit (byte-identical to the Phase 4 baseline 84324b8; still imported by runtime/api/recall/continuum/multiagent/cmd — the phase5 tree did not compile without it)
-internal/attachments/attachments_test.go	new	RESTORED package accidentally deleted by the phase5 commit (byte-identical to the Phase 4 baseline 84324b8; still imported by runtime/api/recall/continuum/multiagent/cmd — the phase5 tree did not compile without it)
+internal/attachments/attachments.go	unchanged	repository source (required for complete replacement state)
+internal/attachments/attachments_phase3_test.go	unchanged	repository source (required for complete replacement state)
+internal/attachments/attachments_test.go	unchanged	repository source (required for complete replacement state)
 internal/brand/brand.go	unchanged	repository source (required for complete replacement state)
 internal/browser/browser.go	unchanged	repository source (required for complete replacement state)
 internal/chunking/bench_compare_test.go	unchanged	repository source (required for complete replacement state)
@@ -71,7 +73,7 @@ internal/chunking/chunker.go	unchanged	repository source (required for complete 
 internal/chunking/chunker_test.go	unchanged	repository source (required for complete replacement state)
 internal/chunking/chunking.go	unchanged	repository source (required for complete replacement state)
 internal/chunking/chunking_test.go	unchanged	repository source (required for complete replacement state)
-internal/config/config.go	modified	stale Phase-1 'generation is NOT implemented yet' comment corrected (release metadata bytes unchanged)
+internal/config/config.go	unchanged	repository source (required for complete replacement state)
 internal/config/source.go	unchanged	repository source (required for complete replacement state)
 internal/config/source_test.go	unchanged	repository source (required for complete replacement state)
 internal/contextcache/contextcache.go	unchanged	repository source (required for complete replacement state)
@@ -106,17 +108,17 @@ internal/llm/client.go	unchanged	repository source (required for complete replac
 internal/llm/client_response_test.go	unchanged	repository source (required for complete replacement state)
 internal/llm/client_v114_test.go	unchanged	repository source (required for complete replacement state)
 internal/llm/gguf.go	unchanged	repository source (required for complete replacement state)
-internal/llm/llama.go	unchanged	repository source (required for complete replacement state)
+internal/llm/llama.go	modified	llamaDownloadURL repaired: llama.cpp removed upstream Linux prebuilt binaries so the pinned b10642 URL 404s forever on Linux — now probes the pinned tag, scans recent releases (bounded) for the platform asset, records the ACTUAL source tag, and fails with an honest actionable error when none exists
 internal/llm/llama_test.go	unchanged	repository source (required for complete replacement state)
 internal/llm/llamabackend.go	unchanged	repository source (required for complete replacement state)
 internal/llm/models.go	unchanged	repository source (required for complete replacement state)
 internal/llm/presets.go	unchanged	repository source (required for complete replacement state)
 internal/llm/speed.go	unchanged	repository source (required for complete replacement state)
 internal/logging/logging.go	unchanged	repository source (required for complete replacement state)
-internal/memory/memory.go	new	RESTORED package accidentally deleted by the phase5 commit (byte-identical to the Phase 4 baseline 84324b8; still imported by runtime/api/recall/continuum/multiagent/cmd — the phase5 tree did not compile without it)
-internal/memory/memory_phase3_test.go	new	RESTORED package accidentally deleted by the phase5 commit (byte-identical to the Phase 4 baseline 84324b8; still imported by runtime/api/recall/continuum/multiagent/cmd — the phase5 tree did not compile without it)
-internal/memory/memory_test.go	new	RESTORED package accidentally deleted by the phase5 commit (byte-identical to the Phase 4 baseline 84324b8; still imported by runtime/api/recall/continuum/multiagent/cmd — the phase5 tree did not compile without it)
-internal/memory/trust_test.go	new	RESTORED package accidentally deleted by the phase5 commit (byte-identical to the Phase 4 baseline 84324b8; still imported by runtime/api/recall/continuum/multiagent/cmd — the phase5 tree did not compile without it)
+internal/memory/memory.go	unchanged	repository source (required for complete replacement state)
+internal/memory/memory_phase3_test.go	unchanged	repository source (required for complete replacement state)
+internal/memory/memory_test.go	unchanged	repository source (required for complete replacement state)
+internal/memory/trust_test.go	unchanged	repository source (required for complete replacement state)
 internal/multiagent/multiagent.go	unchanged	repository source (required for complete replacement state)
 internal/native/engine/backend.go	unchanged	repository source (required for complete replacement state)
 internal/native/engine/cpp_integration_test.go	unchanged	repository source (required for complete replacement state)
@@ -126,7 +128,7 @@ internal/native/engine/generation.go	unchanged	repository source (required for c
 internal/native/engine/kv.go	unchanged	repository source (required for complete replacement state)
 internal/native/engine/memory.go	unchanged	repository source (required for complete replacement state)
 internal/native/engine/metrics.go	unchanged	repository source (required for complete replacement state)
-internal/native/engine/model.go	modified	adds NativeModelPath() — pure local read of the loaded model path for the /api/engine snapshot (no IPC on the poll path)
+internal/native/engine/model.go	unchanged	repository source (required for complete replacement state)
 internal/native/engine/model_test.go	unchanged	repository source (required for complete replacement state)
 internal/native/engine/phase4_integration_test.go	unchanged	repository source (required for complete replacement state)
 internal/native/engine/phase5_bench_test.go	unchanged	repository source (required for complete replacement state)
@@ -168,15 +170,15 @@ internal/resources/resources.go	unchanged	repository source (required for comple
 internal/resources/resources_other.go	unchanged	repository source (required for complete replacement state)
 internal/resources/resources_test.go	unchanged	repository source (required for complete replacement state)
 internal/resources/resources_windows.go	unchanged	repository source (required for complete replacement state)
-internal/runtime/runtime.go	modified	REPAIRED run gate — EnsureLLM/EnsureLLMContext no longer require llama.cpp when the native backend is the selected, generation-capable serving engine; stale Phase-1 comments corrected
+internal/runtime/runtime.go	modified	extracted Stack.EnsureNativeReady(ctx) — the single bounded start+load+verdict seam now shared by the launch prewarm and the engine toggle; prewarmNative is a thin async wrapper
 internal/runtime/runtime_test.go	unchanged	repository source (required for complete replacement state)
-internal/sandbox/sandbox.go	new	RESTORED package accidentally deleted by the phase5 commit (byte-identical to the Phase 4 baseline 84324b8; still imported by runtime/api/recall/continuum/multiagent/cmd — the phase5 tree did not compile without it)
-internal/sandbox/sandbox_other.go	new	RESTORED package accidentally deleted by the phase5 commit (byte-identical to the Phase 4 baseline 84324b8; still imported by runtime/api/recall/continuum/multiagent/cmd — the phase5 tree did not compile without it)
-internal/sandbox/sandbox_windows.go	new	RESTORED package accidentally deleted by the phase5 commit (byte-identical to the Phase 4 baseline 84324b8; still imported by runtime/api/recall/continuum/multiagent/cmd — the phase5 tree did not compile without it)
+internal/sandbox/sandbox.go	unchanged	repository source (required for complete replacement state)
+internal/sandbox/sandbox_other.go	unchanged	repository source (required for complete replacement state)
+internal/sandbox/sandbox_windows.go	unchanged	repository source (required for complete replacement state)
 internal/screen/screen_other.go	unchanged	repository source (required for complete replacement state)
 internal/screen/screen_windows.go	unchanged	repository source (required for complete replacement state)
-internal/sessions/sessions.go	new	RESTORED package accidentally deleted by the phase5 commit (byte-identical to the Phase 4 baseline 84324b8; still imported by runtime/api/recall/continuum/multiagent/cmd — the phase5 tree did not compile without it)
-internal/sessions/sessions_test.go	new	RESTORED package accidentally deleted by the phase5 commit (byte-identical to the Phase 4 baseline 84324b8; still imported by runtime/api/recall/continuum/multiagent/cmd — the phase5 tree did not compile without it)
+internal/sessions/sessions.go	unchanged	repository source (required for complete replacement state)
+internal/sessions/sessions_test.go	unchanged	repository source (required for complete replacement state)
 internal/sysinfo/sysinfo.go	unchanged	repository source (required for complete replacement state)
 internal/termshell/termshell.go	unchanged	repository source (required for complete replacement state)
 internal/termshell/termshell_test.go	unchanged	repository source (required for complete replacement state)
@@ -195,7 +197,7 @@ internal/tools/parse_test.go	unchanged	repository source (required for complete 
 internal/tools/screenshot.go	unchanged	repository source (required for complete replacement state)
 internal/tools/testhooks.go	unchanged	repository source (required for complete replacement state)
 internal/tools/tools.go	unchanged	repository source (required for complete replacement state)
-internal/updater/updater.go	unchanged	repository source (required for complete replacement state)
+internal/updater/updater.go	modified	exported updater.AssetExists (probe seam used by the repaired engine download path; scan machinery LatestTag already existed)
 internal/updater/zipsafe_test.go	unchanged	repository source (required for complete replacement state)
 internal/vision/vision.go	unchanged	repository source (required for complete replacement state)
 internal/vision/vision_test.go	unchanged	repository source (required for complete replacement state)
@@ -240,15 +242,16 @@ native/engine/src/tensor.h	unchanged	repository source (required for complete re
 native/engine/src/tokenizer.cpp	unchanged	repository source (required for complete replacement state)
 native/engine/src/tokenizer.h	unchanged	repository source (required for complete replacement state)
 native/engine/src/util.h	unchanged	repository source (required for complete replacement state)
+native/engine/tests/fixtures/tiny-llama-app.gguf	new	new test fixture generated by make_fixture.py: F32 fixture dims (greedy decode runs to max_tokens) with a 2048-token context so a real application prompt fits the native engine's honest context-reject bound
 native/engine/tests/fixtures/tiny-llama-f32.gguf	unchanged	repository source (required for complete replacement state)
 native/engine/tests/fixtures/tiny-llama-ref.json	unchanged	repository source (required for complete replacement state)
 native/engine/tests/fixtures/tiny-llama-ref.txt	unchanged	repository source (required for complete replacement state)
 native/engine/tests/fixtures/tiny-llama-slow.gguf	unchanged	repository source (required for complete replacement state)
 native/engine/tests/gguf_writer.h	unchanged	repository source (required for complete replacement state)
-native/engine/tests/reference/make_fixture.py	unchanged	repository source (required for complete replacement state)
+native/engine/tests/reference/make_fixture.py	modified	fixture generator extended with the deterministic app-fixture block (F32 dims, ctx=2048) used by the new HTTP-level native e2e regression test
 native/engine/tests/test_engine.cpp	unchanged	repository source (required for complete replacement state)
 native/engine/tests/test_forward.cpp	unchanged	repository source (required for complete replacement state)
-native/engine/tests/test_generate.cpp	modified	repository source (required for complete replacement state)
+native/engine/tests/test_generate.cpp	unchanged	repository source (required for complete replacement state)
 native/engine/tests/test_gguf.cpp	unchanged	repository source (required for complete replacement state)
 native/engine/tests/test_host.cpp	unchanged	repository source (required for complete replacement state)
 native/engine/tests/test_kv_cache.cpp	unchanged	repository source (required for complete replacement state)
@@ -308,4 +311,6 @@ web/static/assets/SettingsPanel-C5Hpkvys.js	unchanged	repository source (require
 web/static/assets/index-C1xyllm1.js	unchanged	repository source (required for complete replacement state)
 web/static/assets/index-n0UF0DI4.css	unchanged	repository source (required for complete replacement state)
 web/static/index.html	unchanged	repository source (required for complete replacement state)
-worklog.md	modified	work log — 'v1.1.5Z Phase 5 Repair Log' prepended (root failure, additional deletions, 5 defects fixed, full validation evidence)
+worklog.md	modified	v1.1.5Z Validation & Repair Log (2026-09-12) added — independent re-verification of all repair claims plus the new defect fixes and measured evidence
+REPLACEMENT-MANIFEST.txt	modified	replacement manifest (this file) — regenerated for the current archive
+REPLACEMENT-SHA256.txt	modified	SHA-256 for every file in the replacement archive — regenerated

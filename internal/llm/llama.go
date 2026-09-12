@@ -318,7 +318,7 @@ func (s *LlamaServer) ensureBinary(cfg *config.Config) (string, error) {
 
         s.setState(StateDownloading)
 
-        url, err := llamaDownloadURL()
+        url, tag, err := llamaDownloadURL()
         if err != nil {
                 return "", err
         }
@@ -341,7 +341,7 @@ func (s *LlamaServer) ensureBinary(cfg *config.Config) (string, error) {
                 // the permission bit is meaningless but log the failure.
                 s.logf("chmod engine binary: %v", err)
         }
-        updater.RecordEngineTag(cfg, updater.DefaultEngineTag)
+        updater.RecordEngineTag(cfg, tag)
 
         return binPath, nil
 }
@@ -1991,20 +1991,51 @@ func llamaBinaryName() string {
         }
 }
 
-func llamaDownloadURL() (string, error) {
-        tag := updater.DefaultEngineTag
-        url := updater.AssetURL(tag)
+func llamaDownloadURL() (string, string, error) {
+        // v1.1.5Z repair: llama.cpp removed its prebuilt LINUX binaries
+        // upstream (b10642 still ships the Windows asset but no ubuntu zip any
+        // more), so the pinned-tag URL 404s forever on Linux. Follow the
+        // updater's existing design instead of hardcoding the pinned tag:
+        //   1. pinned tag, when this platform's asset actually exists;
+        //   2. newest release that carries this platform's asset (bounded scan);
+        //   3. otherwise an honest error that says what to do — never a bare
+        //      HTTP 404 from a URL that can never succeed again.
+        // Returns (url, resolvedTag, error) so the caller records the ACTUAL
+        // source tag the binary came from.
+        if url := updater.AssetURL(updater.DefaultEngineTag); url != "" {
+                probeCtx, probeCancel := context.WithTimeout(
+                        context.Background(),
+                        30*time.Second,
+                )
 
-        if url == "" {
-                return "",
-                        fmt.Errorf(
-                                "no prebuilt llama.cpp asset for %s/%s",
-                                runtime.GOOS,
-                                runtime.GOARCH,
-                        )
+                if updater.AssetExists(probeCtx, updater.DefaultEngineTag) {
+                        probeCancel()
+                        return url, updater.DefaultEngineTag, nil
+                }
+
+                probeCancel()
         }
 
-        return url, nil
+        scanCtx, scanCancel := context.WithTimeout(
+                context.Background(),
+                60*time.Second,
+        )
+
+        if tag, err := updater.LatestTag(scanCtx); err == nil && tag != "" {
+                if url := updater.AssetURL(tag); url != "" {
+                        scanCancel()
+                        return url, tag, nil
+                }
+        }
+
+        scanCancel()
+
+        return "", "",
+                fmt.Errorf(
+                        "no prebuilt llama.cpp server asset for %s/%s (upstream no longer publishes Linux binaries) — build llama-server from source and set llamaBinPath, or select the native engine (engineBackend \"native\")",
+                        runtime.GOOS,
+                        runtime.GOARCH,
+                )
 }
 
 func ListLocalModels(dir string) []string {

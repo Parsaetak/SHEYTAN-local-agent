@@ -536,6 +536,16 @@ def main():
     print(f"wrote {txt_path}")
     print(f"argmax token: {ref['argmax_token']} ({ref['argmax_token_text']!r})")
 
+    # App fixture (v1.1.5Z repair): the F32 fixture dims (greedy decode
+    # deterministically runs to max_tokens — pinned by test_generate) but
+    # with a 2048-token context so a REAL application prompt (system
+    # briefing + user turn) fits the native engine's honest
+    # context-reject bound. Used by the HTTP-level native end-to-end
+    # regression test (internal/api TestEngineToggleNativeServesGeneration).
+    app_path = os.path.join(FIXTURES, "tiny-llama-app.gguf")
+    size = write_gguf(app_path, ctx=2048)
+    print(f"wrote {app_path} ({size} bytes)")
+
 
 if __name__ == "__main__":
     sys.exit(main())
